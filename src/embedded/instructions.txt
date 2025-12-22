@@ -1,0 +1,7 @@
+install your own libraries:
+
+.venv\Scripts\python.exe -m pip install <package>
+.venv\Scripts\python.exe -m pip freeze > requirements.txt
+
+install requirements update:
+.venv\Scripts\python.exe -m pip install -r requirements.txt
