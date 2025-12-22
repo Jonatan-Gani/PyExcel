@@ -1,10 +1,10 @@
-**Version:** 20251222_155035
+**Version:** 20251222_171618
 
 ---
 
 # PyExcel
 
-PyExcel is a powerful Excel Add-in that bridges the gap between Microsoft Excel and Python. It enables users to leverage Python's robust data analysis and visualization libraries (like Pandas, NumPy, and Plotly) directly within their Excel workflows.
+PyExcel is an Excel Add-in that bridges the gap between Microsoft Excel and Python. It enables users to leverage Python's robust data analysis and visualization libraries (like Pandas, NumPy, and Plotly) directly within their Excel workflows.
 
 ## Features
 
@@ -16,35 +16,51 @@ PyExcel is a powerful Excel Add-in that bridges the gap between Microsoft Excel 
 ## Prerequisites & Setup
 
 ### 1. Python Environment
-Ensure you have **Python 3.7+** installed. The project uses a virtual environment located in `Python/.venv`.
+Ensure you have **Python 3.7+** installed. 
 
-To install dependencies:
+#### We use a Virtual Environment
+PyExcel uses a **Virtual Environment (venv)** located in `Python/.venv`. 
+*   **Isolation**: It ensures that libraries installed for PyExcel don't interfere with other Python projects on your computer, and vice versa.
+*   **Stability**: It guarantees that the exact versions of tools (like Pandas or Plotly) needed by PyExcel are always available, regardless of what else you install on your system.
+*   **Portability**: It makes it easier to update or move the project without breaking your global Python setup.
+
+#### Installing Libraries
+Because of this isolation, if you want to install a new library to use in your scripts, you must install it to Virtual Environment by using the specific path to the project's Python:
+
 ```bash
 # From the project root
-Python/.venv/Scripts/python.exe -m pip install -r Python/requirements.txt
+Python/.venv/Scripts/python.exe -m pip install {LibraryName}
 ```
+*(See `Python/requirements.txt` first to see what's already included)*
 
-### 2. Excel Configuration
-To ensure the Add-in functions correctly, you must configure Excel security settings:
 
-1.  **Enable Trust Access**:
-    *   Navigate to: File > Options > Trust Center > Trust Center Settings > Macro Settings.
-    *   Check: **Trust access to the VBA project object model**.
-2.  **Unblock the Add-in**:
-    *   Navigate to the `AddIn/` folder.
-    *   Right-click `PyExcel.xlam` (or `PyExcel_Dev.xlam`) and select **Properties**.
-    *   Under the "Security" section, check **Unblock** and click **Apply**.
+### 2. Installation
 
-*(Optional for Developers)*: If you are editing the VBA code, ensure the **Microsoft Visual Basic for Applications Extensibility 5.3** reference is enabled in the VBA Editor (Tools > References).
+1.  **Security Configuration**:
+    *   **Trust Center**: Go to *File > Options > Trust Center > Trust Center Settings > Macro Settings* and check **Trust access to the VBA project object model**.
+    *   **Unblock File**: Navigate to the `AddIn/` folder, right-click `PyExcel.xlam`, select **Properties**, check **Unblock**, and click **Apply**.
+
+2.  **Activation**:
+    *   Open Excel and go to *File > Options > Add-ins*.
+    *   At the bottom, manage **Excel Add-ins** and click **Go**.
+    *   Click **Browse**, select `AddIn/PyExcel.xlam`, and ensure it is checked in the list.
+
+3.  **Initialization**:
+    *   Once loaded, click the **Enable** button on the ribbon.
+    *   This triggers the **Setup Wizard**, which will:
+        *   Ask you to select a location for your project files.
+        *   Create the necessary folder structure (`Python/`, `userScripts/`, etc.).
+        *   Set up the isolated Python virtual environment.
+        *   Install required libraries automatically.
 
 ## Update Process
 
-The add-in includes a built-in update manager.
+To update PyExcel to a newer version:
 
-1.  **Automatic Check**: When you open your workbook, the add-in compares its version with the installed version. If a newer version is available, you will be prompted to update.
-2.  **Manual Update**: You can manually trigger an update by running the `RunUpdateFromExternalFile` macro.
-    *   This will ask you to select the new `.xlam` file.
-    *   The system will automatically clean old files, extract new resources, and update Python dependencies.
+1.  **Overwrite**: Simply replace your existing `PyExcel.xlam` file with the new version.
+2.  **Automatic Self-Update**:
+    *   The next time you open Excel, the Add-in will detect the version change.
+    *   It will automatically clean old files, extract new resources, and synchronize Python dependencies from the internal `requirements.txt`.
 
 ## Usage
 
@@ -54,7 +70,7 @@ The system parses input ranges provided from Excel. You can select ranges or pas
 *   **Variable Naming**: Use `{name}=Range` syntax to assign specific names to your inputs.
     *   Example: `{Sales}=Sheet1!A1:C10; {TaxRate}=Sheet1!E1; {Months}=Sheet1!A1:A12`
 
-#### 📥 Input Type Mapping
+#### Input Type Mapping
 
 | Excel Range Shape | Detected Type | Python Type | Description |
 | :--- | :--- | :--- | :--- |
@@ -67,7 +83,7 @@ The system parses input ranges provided from Excel. You can select ranges or pas
 ---
 
 ### 2. Writing Python Scripts
-Create your Python scripts in the `userScripts/` directory. A script must define a `transform` function that acts as the entry point.
+Add your Python scripts in the `userScripts/` directory. A script must define a `transform` function that acts as the entry point and import the tools package already included in this addin.
 
 **Function Signature:**
 ```python
@@ -81,7 +97,7 @@ def transform(inputs: Dict[str, Any]) -> Dict[str, Any]:
     return { "ResultTable": df_result }
 ```
 
-#### 📤 Output Type Mapping
+#### Output Type Mapping
 
 | Python Return Object | Excel Output | Description |
 | :--- | :--- | :--- |
@@ -148,8 +164,5 @@ if __name__ == "__main__":
 
 For support, feature requests, or bug reports, please contact:
 
-*   **Email**: email@example.com
-*   **Git Repository**: https://github.com/username/repo
-
----
-Generated for the PyExcel Project.
+*   **Email**: JonatanGani@protonmail.com
+*   **Git Repository**: [github.com/username/repo]https://(https://github.com/Jonatan-Gani/PyExcel)
