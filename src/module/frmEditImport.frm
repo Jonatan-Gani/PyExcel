@@ -2,9 +2,9 @@ VERSION 5.00
 Begin {C62A69F0-16DC-11CE-9E98-00AA00574A4F} frmEditImport 
    Caption         =   "Edit Import"
    ClientHeight    =   3592
-   ClientLeft      =   90
-   ClientTop       =   420
-   ClientWidth     =   3570
+   ClientLeft      =   96
+   ClientTop       =   416
+   ClientWidth     =   3568
    OleObjectBlob   =   "frmEditImport.frx":0000
    StartUpPosition =   1  'CenterOwner
 End

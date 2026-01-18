@@ -398,78 +398,78 @@ class PlotlyToExcelXMLConverter:
         }
         return mapping.get(plotly_shape.lower(), "xlMarkerStyleCircle")
 
-    def build_xml_tree(self) -> LET.etree.ElementTree:
-        root = LET.etree.Element("plotly_excel_chart", version=self.SCHEMA_VERSION)
+    def build_xml_tree(self) -> LET.ElementTree:
+        root = LET.Element("plotly_excel_chart", version=self.SCHEMA_VERSION)
         self._build_chart_meta(root)
         self._build_traces(root)
         self._build_extras(root)
-        return LET.etree.ElementTree(root)
+        return LET.ElementTree(root)
 
     def _build_chart_meta(self, root):
         layout = self.figure.layout
-        chart_meta = LET.etree.SubElement(root, "chart_meta")
+        chart_meta = LET.SubElement(root, "chart_meta")
 
         if len(self.figure.data) == 0:
             chart_type_value = "xy"
         else:
             first_type = self.figure.data[0].type
             chart_type_value = self._map_plotly_type_to_chart_type(first_type)
-        LET.etree.SubElement(chart_meta, "chart_type").text = chart_type_value
+        LET.SubElement(chart_meta, "chart_type").text = chart_type_value
 
-        LET.etree.SubElement(chart_meta, "title").text = self._safe_text(
+        LET.SubElement(chart_meta, "title").text = self._safe_text(
             layout.title.text if layout.title else ""
         )
 
-        x_axis = LET.etree.SubElement(chart_meta, "x_axis")
-        LET.etree.SubElement(x_axis, "title").text = self._safe_text(
+        x_axis = LET.SubElement(chart_meta, "x_axis")
+        LET.SubElement(x_axis, "title").text = self._safe_text(
             layout.xaxis.title.text if layout.xaxis.title else ""
         )
-        LET.etree.SubElement(x_axis, "min").text = self._safe_text(
+        LET.SubElement(x_axis, "min").text = self._safe_text(
             layout.xaxis.range[0] if layout.xaxis.range else ""
         )
-        LET.etree.SubElement(x_axis, "max").text = self._safe_text(
+        LET.SubElement(x_axis, "max").text = self._safe_text(
             layout.xaxis.range[1] if layout.xaxis.range else ""
         )
-        LET.etree.SubElement(x_axis, "log_scale").text = (
+        LET.SubElement(x_axis, "log_scale").text = (
             "true" if layout.xaxis.type == "log" else "false"
         )
 
-        y_axis = LET.etree.SubElement(chart_meta, "y_axis")
-        LET.etree.SubElement(y_axis, "title").text = self._safe_text(
+        y_axis = LET.SubElement(chart_meta, "y_axis")
+        LET.SubElement(y_axis, "title").text = self._safe_text(
             layout.yaxis.title.text if layout.yaxis.title else ""
         )
-        LET.etree.SubElement(y_axis, "min").text = self._safe_text(
+        LET.SubElement(y_axis, "min").text = self._safe_text(
             layout.yaxis.range[0] if layout.yaxis.range else ""
         )
-        LET.etree.SubElement(y_axis, "max").text = self._safe_text(
+        LET.SubElement(y_axis, "max").text = self._safe_text(
             layout.yaxis.range[1] if layout.yaxis.range else ""
         )
-        LET.etree.SubElement(y_axis, "log_scale").text = (
+        LET.SubElement(y_axis, "log_scale").text = (
             "true" if layout.yaxis.type == "log" else "false"
         )
 
-        legend = LET.etree.SubElement(chart_meta, "legend")
+        legend = LET.SubElement(chart_meta, "legend")
         legend_visible = getattr(layout.legend, "visible", True)
         legend_orientation = getattr(layout.legend, "orientation", "v")
-        LET.etree.SubElement(legend, "visible").text = (
+        LET.SubElement(legend, "visible").text = (
             "true" if bool(legend_visible) else "false"
         )
-        LET.etree.SubElement(legend, "position").text = (
+        LET.SubElement(legend, "position").text = (
             "right" if legend_orientation == "v" else "bottom"
         )
 
         # NEW: barmode for stacked/grouped
-        LET.etree.SubElement(chart_meta, "barmode").text = getattr(layout, "barmode", "group")
+        LET.SubElement(chart_meta, "barmode").text = getattr(layout, "barmode", "group")
 
         timestamp = dt.datetime.utcnow().isoformat(timespec="microseconds") + "+00:00"
-        LET.etree.SubElement(chart_meta, "export_timestamp").text = timestamp
+        LET.SubElement(chart_meta, "export_timestamp").text = timestamp
 
     def _build_traces(self, root):
-        traces_el = LET.etree.SubElement(root, "traces")
+        traces_el = LET.SubElement(root, "traces")
 
         for idx, trace in enumerate(self.figure.data, start=1):
-            trace_el = LET.etree.SubElement(traces_el, "trace", id=str(idx))
-            data_el = LET.etree.SubElement(trace_el, "data")
+            trace_el = LET.SubElement(traces_el, "trace", id=str(idx))
+            data_el = LET.SubElement(trace_el, "data")
 
             if trace.type == "histogram":
                 if hasattr(trace, "xbins") and trace.xbins.start is not None and trace.xbins.end is not None and trace.xbins.size is not None:
@@ -491,20 +491,20 @@ class PlotlyToExcelXMLConverter:
                         for i in range(len(bin_edges) - 1)
                     ]
 
-                LET.etree.SubElement(data_el, "x").text = self._comma_join(bin_midpoints)
-                LET.etree.SubElement(data_el, "y").text = self._comma_join(counts)
-                LET.etree.SubElement(data_el, "text").text = self._comma_join(bin_labels)
+                LET.SubElement(data_el, "x").text = self._comma_join(bin_midpoints)
+                LET.SubElement(data_el, "y").text = self._comma_join(counts)
+                LET.SubElement(data_el, "text").text = self._comma_join(bin_labels)
 
             elif trace.type == "bar" and (not hasattr(trace, "y") or trace.y is None or len(trace.y) == 0):
                 counts, bin_edges = np.histogram(trace.x, bins="auto")
                 x_labels = [f"{bin_edges[i]}-{bin_edges[i+1]}" for i in range(len(bin_edges)-1)]
-                LET.etree.SubElement(data_el, "x").text = self._comma_join(x_labels)
-                LET.etree.SubElement(data_el, "y").text = self._comma_join(counts)
+                LET.SubElement(data_el, "x").text = self._comma_join(x_labels)
+                LET.SubElement(data_el, "y").text = self._comma_join(counts)
 
             else:
-                LET.etree.SubElement(data_el, "x").text = self._comma_join(getattr(trace, "x", []))
-                LET.etree.SubElement(data_el, "y").text = self._comma_join(getattr(trace, "y", []))
-                LET.etree.SubElement(data_el, "z").text = self._comma_join(getattr(trace, "z", []))
+                LET.SubElement(data_el, "x").text = self._comma_join(getattr(trace, "x", []))
+                LET.SubElement(data_el, "y").text = self._comma_join(getattr(trace, "y", []))
+                LET.SubElement(data_el, "z").text = self._comma_join(getattr(trace, "z", []))
 
                 marker_size_values = getattr(trace.marker, "size", None) if hasattr(trace, "marker") else None
                 if isinstance(marker_size_values, (list, tuple)):
@@ -513,26 +513,26 @@ class PlotlyToExcelXMLConverter:
                     marker_size_str = str(marker_size_values)
                 else:
                     marker_size_str = ""
-                LET.etree.SubElement(data_el, "size").text = marker_size_str
+                LET.SubElement(data_el, "size").text = marker_size_str
 
-                LET.etree.SubElement(data_el, "text").text = self._comma_join(getattr(trace, "text", []))
+                LET.SubElement(data_el, "text").text = self._comma_join(getattr(trace, "text", []))
 
                 # NEW: marker.opacity array support
                 marker_opacity = getattr(trace.marker, "opacity", None) if hasattr(trace, "marker") else None
                 if isinstance(marker_opacity, (list, tuple)):
-                    LET.etree.SubElement(data_el, "opacity").text = self._comma_join(marker_opacity)
+                    LET.SubElement(data_el, "opacity").text = self._comma_join(marker_opacity)
                 elif marker_opacity is not None:
-                    LET.etree.SubElement(data_el, "opacity").text = str(marker_opacity)
+                    LET.SubElement(data_el, "opacity").text = str(marker_opacity)
 
-            style_el = LET.etree.SubElement(trace_el, "style")
-            LET.etree.SubElement(style_el, "series_type").text = self._map_plotly_type_to_series_type(trace)
-            LET.etree.SubElement(style_el, "name").text = self._safe_text(getattr(trace, "name", f"Series {idx}"))
+            style_el = LET.SubElement(trace_el, "style")
+            LET.SubElement(style_el, "series_type").text = self._map_plotly_type_to_series_type(trace)
+            LET.SubElement(style_el, "name").text = self._safe_text(getattr(trace, "name", f"Series {idx}"))
 
             # NEW: secondary axis support
             axis_group = "secondary" if getattr(trace, "yaxis", "y") != "y" else "primary"
-            LET.etree.SubElement(style_el, "axis_group").text = axis_group
+            LET.SubElement(style_el, "axis_group").text = axis_group
 
-            LET.etree.SubElement(style_el, "visibility").text = "true"
+            LET.SubElement(style_el, "visibility").text = "true"
 
             line_color = "#000000"
             line_style = "solid"
@@ -544,12 +544,12 @@ class PlotlyToExcelXMLConverter:
                     line_style = str(trace.line.dash)
                 if trace.line.width is not None:
                     line_width = str(trace.line.width)
-            LET.etree.SubElement(style_el, "line_color").text = line_color
-            LET.etree.SubElement(style_el, "line_style").text = line_style
+            LET.SubElement(style_el, "line_color").text = line_color
+            LET.SubElement(style_el, "line_style").text = line_style
             if line_width is not None:
-                LET.etree.SubElement(style_el, "line_width").text = line_width
+                LET.SubElement(style_el, "line_width").text = line_width
 
-            marker_el = LET.etree.SubElement(style_el, "marker")
+            marker_el = LET.SubElement(style_el, "marker")
             marker_size = "6"
             marker_color = "#000000"
             marker_shape = "xlMarkerStyleCircle"
@@ -571,30 +571,30 @@ class PlotlyToExcelXMLConverter:
 
                 # NEW: marker.line handling
                 if hasattr(trace.marker, "line") and trace.marker.line:
-                    LET.etree.SubElement(marker_el, "line_color").text = str(trace.marker.line.color or "")
-                    LET.etree.SubElement(marker_el, "line_width").text = str(trace.marker.line.width or "")
+                    LET.SubElement(marker_el, "line_color").text = str(trace.marker.line.color or "")
+                    LET.SubElement(marker_el, "line_width").text = str(trace.marker.line.width or "")
 
-            LET.etree.SubElement(marker_el, "size").text = marker_size
-            LET.etree.SubElement(marker_el, "color").text = marker_color
-            LET.etree.SubElement(marker_el, "shape").text = marker_shape
+            LET.SubElement(marker_el, "size").text = marker_size
+            LET.SubElement(marker_el, "color").text = marker_color
+            LET.SubElement(marker_el, "shape").text = marker_shape
 
-            LET.etree.SubElement(style_el, "fill_color").text = self._safe_text(getattr(trace, "fillcolor", ""))
-            LET.etree.SubElement(style_el, "fill_opacity").text = self._safe_text(getattr(trace, "opacity", ""))
+            LET.SubElement(style_el, "fill_color").text = self._safe_text(getattr(trace, "fillcolor", ""))
+            LET.SubElement(style_el, "fill_opacity").text = self._safe_text(getattr(trace, "opacity", ""))
 
             # NEW: error bars
             for axis in ["x", "y"]:
                 err_attr = f"error_{axis}"
                 if hasattr(trace, err_attr) and getattr(trace, err_attr).visible:
                     err = getattr(trace, err_attr)
-                    err_el = LET.etree.SubElement(trace_el, f"error_{axis}")
-                    LET.etree.SubElement(err_el, "type").text = getattr(err, "type", "data")
-                    LET.etree.SubElement(err_el, "symmetric").text = str(getattr(err, "symmetric", True)).lower()
-                    LET.etree.SubElement(err_el, "array").text = self._comma_join(getattr(err, "array", []))
+                    err_el = LET.SubElement(trace_el, f"error_{axis}")
+                    LET.SubElement(err_el, "type").text = getattr(err, "type", "data")
+                    LET.SubElement(err_el, "symmetric").text = str(getattr(err, "symmetric", True)).lower()
+                    LET.SubElement(err_el, "array").text = self._comma_join(getattr(err, "array", []))
                     if hasattr(err, "arrayminus"):
-                        LET.etree.SubElement(err_el, "arrayminus").text = self._comma_join(getattr(err, "arrayminus", []))
+                        LET.SubElement(err_el, "arrayminus").text = self._comma_join(getattr(err, "arrayminus", []))
 
     def _build_extras(self, root):
-        extras_el = LET.etree.SubElement(root, "extras")
+        extras_el = LET.SubElement(root, "extras")
 
         if hasattr(self.figure.layout, "shapes") and self.figure.layout.shapes:
             for idx, shape in enumerate(self.figure.layout.shapes, start=1):
@@ -622,22 +622,22 @@ class PlotlyToExcelXMLConverter:
                 if not ann_type:
                     continue
 
-                ann_el = LET.etree.SubElement(extras_el, "annotation", id=str(idx), type=ann_type)
-                LET.etree.SubElement(ann_el, "axis").text = axis
-                LET.etree.SubElement(ann_el, "value").text = value
-                span_el = LET.etree.SubElement(ann_el, "span", axis=span_axis)
+                ann_el = LET.SubElement(extras_el, "annotation", id=str(idx), type=ann_type)
+                LET.SubElement(ann_el, "axis").text = axis
+                LET.SubElement(ann_el, "value").text = value
+                span_el = LET.SubElement(ann_el, "span", axis=span_axis)
                 span_el.set("mode", span_mode)
 
-                style_el = LET.etree.SubElement(ann_el, "style")
+                style_el = LET.SubElement(ann_el, "style")
                 if hasattr(shape, "line") and shape.line:
-                    LET.etree.SubElement(style_el, "color").text = self._safe_text(shape.line.color)
-                    LET.etree.SubElement(style_el, "width").text = self._safe_text(shape.line.width)
-                    LET.etree.SubElement(style_el, "dash").text = self._safe_text(getattr(shape.line, "dash", "solid"))
+                    LET.SubElement(style_el, "color").text = self._safe_text(shape.line.color)
+                    LET.SubElement(style_el, "width").text = self._safe_text(shape.line.width)
+                    LET.SubElement(style_el, "dash").text = self._safe_text(getattr(shape.line, "dash", "solid"))
                 if hasattr(shape, "opacity"):
-                    LET.etree.SubElement(style_el, "opacity").text = self._safe_text(shape.opacity)
+                    LET.SubElement(style_el, "opacity").text = self._safe_text(shape.opacity)
 
                 if hasattr(shape, "name"):
-                    LET.etree.SubElement(ann_el, "label").text = self._safe_text(shape.name)
+                    LET.SubElement(ann_el, "label").text = self._safe_text(shape.name)
 
     def save_to_file(self, output_path: str):
         tree = self.build_xml_tree()

@@ -489,10 +489,14 @@ def run_script(
     except Exception as e:
         duration = time.time() - start_time
         heartbeat_stop.set()
+        
+        # Format exception to include type, e.g. "KeyError: 'col'" instead of just "'col'"
+        msg_str = f"{type(e).__name__}: {str(e)}"
+        
         write_answer(
             path=meta_file,
             status="error",
-            message=str(e),
+            message=msg_str,
             duration=duration,
             stderr=traceback.format_exc(),
             run_id=run_id,

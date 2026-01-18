@@ -256,6 +256,11 @@ Public Function Py(scriptName As String, srcRangeRef As String, dstRangeRef As S
         Dim msg As String
         msg = "Python script failed."
         If meta.Exists("message") Then msg = msg & vbCrLf & "Message: " & CStr(meta("message"))
+        
+        If meta.Exists("stderr") And Len(CStr(meta("stderr"))) > 0 Then
+            msg = msg & vbCrLf & "--- Traceback ---" & vbCrLf & Left$(CStr(meta("stderr")), 800)
+        End If
+        
         If meta.Exists("stderr_log") Then msg = msg & vbCrLf & "Error log: " & CStr(meta("stderr_log"))
         If meta.Exists("stdout_log") Then msg = msg & vbCrLf & "Output log: " & CStr(meta("stdout_log"))
         Debug.Print "t+", Format(Timer - tStart, "0.000"), " Python script reported failure."
@@ -609,5 +614,7 @@ Fail:
     MsgBox failMsg, vbCritical, "RunPythonJob Error"
     Set RunPythonJob = Nothing
 End Function
+
+
 
 

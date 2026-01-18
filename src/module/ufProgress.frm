@@ -1,9 +1,9 @@
 VERSION 5.00
 Begin {C62A69F0-16DC-11CE-9E98-00AA00574A4F} ufProgress 
    Caption         =   "PyExcel Installation"
-   ClientHeight    =   1410
-   ClientLeft      =   180
-   ClientTop       =   765
+   ClientHeight    =   1416
+   ClientLeft      =   184
+   ClientTop       =   768
    ClientWidth     =   15960
    OleObjectBlob   =   "ufProgress.frx":0000
    StartUpPosition =   1  'CenterOwner

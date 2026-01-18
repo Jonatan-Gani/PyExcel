@@ -2,9 +2,9 @@ VERSION 5.00
 Begin {C62A69F0-16DC-11CE-9E98-00AA00574A4F} frmExportWizard 
    Caption         =   "frmExportWizard"
    ClientHeight    =   5376
-   ClientLeft      =   180
-   ClientTop       =   735
-   ClientWidth     =   4965
+   ClientLeft      =   184
+   ClientTop       =   736
+   ClientWidth     =   4968
    OleObjectBlob   =   "frmExportWizard.frx":0000
    StartUpPosition =   1  'CenterOwner
 End

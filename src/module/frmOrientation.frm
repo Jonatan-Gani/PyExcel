@@ -3,7 +3,7 @@ Begin {C62A69F0-16DC-11CE-9E98-00AA00574A4F} frmOrientation
    Caption         =   "List direction"
    ClientHeight    =   1488
    ClientLeft      =   120
-   ClientTop       =   465
+   ClientTop       =   472
    ClientWidth     =   4440
    OleObjectBlob   =   "frmOrientation.frx":0000
    StartUpPosition =   1  'CenterOwner

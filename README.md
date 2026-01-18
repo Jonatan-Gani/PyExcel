@@ -1,4 +1,4 @@
-**Version:** 20251222_171618
+**Version:** 20260118_194607
 
 ---
 
@@ -165,4 +165,4 @@ if __name__ == "__main__":
 For support, feature requests, or bug reports, please contact:
 
 *   **Email**: JonatanGani@protonmail.com
-*   **Git Repository**: [github.com/username/repo]https://(https://github.com/Jonatan-Gani/PyExcel)
+*   **Git Repository**: [https://github.com/username/repo](https://github.com/Jonatan-Gani/PyExcel)

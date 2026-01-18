@@ -110,7 +110,7 @@ On Error GoTo EH
     currentSheetName = ws.name
 
     ' ============================================================
-    ' LOAD RIBBON ENABLE STATE — DEFAULT = DISABLED
+    ' LOAD RIBBON ENABLE STATE � DEFAULT = DISABLED
     ' ============================================================
     tmp = GetWorkbookValue(wb, "PyExcelEnabled")
 
@@ -170,7 +170,7 @@ End Sub
 
 
 ' ==============================================================
-' SHEET VALUE HELPERS — with detailed debugging
+' SHEET VALUE HELPERS � with detailed debugging
 ' ==============================================================
 
 Public Function GetSheetValue(wb As Workbook, sheetName As String, ctrlId As String) As String
@@ -274,7 +274,7 @@ Public Sub SaveSheetValue(wb As Workbook, sheetName As String, ctrlId As String,
         ws.Names.Add name:=ctrlId, RefersTo:="=""" & Replace(val, """", """""") & """"
         Debug.Print "[SaveSheetValue] Saved '" & ctrlId & "' = '" & val & "' to sheet '" & sheetName & "'."
     Else
-        Debug.Print "[SaveSheetValue] Value empty — nothing saved for '" & ctrlId & "'."
+        Debug.Print "[SaveSheetValue] Value empty � nothing saved for '" & ctrlId & "'."
     End If
 
     Exit Sub
@@ -285,6 +285,40 @@ EH:
 End Sub
 
 
+
+' ==============================================================
+' ENABLE BUTTON DYNAMIC STATE (For Update Indicator)
+' ==============================================================
+
+' Dynamic label: "Enable PyExcel" / "Update Available" / "PyExcel Enabled"
+Public Sub GetEnableLabel(control As IRibbonControl, ByRef returnedVal)
+    If Not RibbonIsEnabled Then
+        returnedVal = "Enable PyExcel"
+    ElseIf UpdateAvailable Then
+        returnedVal = "Update Available"
+    Else
+        returnedVal = "PyExcel Enabled"
+    End If
+End Sub
+
+' Dynamic enabled state: disabled only when enabled AND up-to-date
+Public Sub GetEnableEnabled(control As IRibbonControl, ByRef returnedVal)
+    ' Button is disabled ONLY when PyExcel is enabled AND no update available
+    If RibbonIsEnabled And Not UpdateAvailable Then
+        returnedVal = False
+    Else
+        returnedVal = True
+    End If
+End Sub
+
+' Dynamic image: change icon when update available
+Public Sub GetEnableImage(control As IRibbonControl, ByRef returnedVal)
+    If RibbonIsEnabled And UpdateAvailable Then
+        returnedVal = "RefreshAlert"
+    Else
+        returnedVal = "FileSaveAs"
+    End If
+End Sub
 
 ' ==============================================================
 ' MAIN BUTTONS
@@ -304,11 +338,66 @@ End Sub
 '    End If
 '
 '    '------------------------------------------------------------
-'    ' If currently disabled → attempt setup before enabling
+'    ' If currently disabled ? attempt setup before enabling
 '    '------------------------------------------------------------
 '    If RibbonIsEnabled = False Then
 '        ' Run the installation logic
 '        If PyExcelSetup() = False Then
+'            ' Setup failed, stay disabled
+'            RibbonIsEnabled = False
+'            ' Save state (will save disabled)
+'            SaveRibbonState
+'            If Not rib Is Nothing Then rib.Invalidate
+'            Exit Sub
+'        End If
+'
+'        ' Setup succeeded ? enable
+'        RibbonIsEnabled = True
+'    Else
+'        ' Currently enabled ? toggle OFF
+'        RibbonIsEnabled = False
+'    End If
+'
+'    '------------------------------------------------------------
+'    ' Save this state per workbook
+'    '------------------------------------------------------------
+'    SaveRibbonState
+'
+'    '------------------------------------------------------------
+'    ' Refresh ALL ribbon controls
+'    '------------------------------------------------------------
+'    If Not rib Is Nothing Then rib.Invalidate
+'
+'    Exit Sub
+'
+'EH:
+'    Debug.Print "OnEnablePyExcel error: " & Err.Description
+'End Sub
+
+
+'Public Sub OnEnablePyExcel(control As IRibbonControl)
+'    On Error GoTo EH
+'
+'    Dim wb As Workbook
+'    Dim ws As Worksheet
+'
+'    Set wb = HostManager_GetCurrentWorkbook()
+'    Set ws = HostManager_GetCurrentSheet()
+'
+'    If wb Is Nothing Then
+'        MsgBox "No active workbook context.", vbExclamation
+'        Exit Sub
+'    End If
+'
+'    '------------------------------------------------------------
+'    ' If currently disabled → attempt setup before enabling
+'    '------------------------------------------------------------
+'    If RibbonIsEnabled = False Then
+'        ' Run the installation logic
+'        Dim setupResult As Boolean
+'        setupResult = PyExcelSetup()
+'        If setupResult = False Then
+'            Debug.Print "[OnEnablePyExcel] Setup failed: " & PyExcelSetup_LastMessage
 '            ' Setup failed, stay disabled
 '            RibbonIsEnabled = False
 '            ' Save state (will save disabled)
@@ -341,99 +430,52 @@ End Sub
 'End Sub
 
 
-'Public Sub OnEnablePyExcel(control As IRibbonControl)
-'    On Error GoTo EH
-'
-'    Dim wb As Workbook
-'    Dim ws As Worksheet
-'
-'    Set wb = HostManager_GetCurrentWorkbook()
-'    Set ws = HostManager_GetCurrentSheet()
-'
-'    If wb Is Nothing Then
-'        MsgBox "No active workbook context.", vbExclamation
-'        Exit Sub
-'    End If
-'
-'    '------------------------------------------------------------
-'    ' If currently disabled â†’ attempt setup before enabling
-'    '------------------------------------------------------------
-'    If RibbonIsEnabled = False Then
-'        ' Run the installation logic
-'        Dim setupResult As Boolean
-'        setupResult = PyExcelSetup()
-'        If setupResult = False Then
-'            Debug.Print "[OnEnablePyExcel] Setup failed: " & PyExcelSetup_LastMessage
-'            ' Setup failed, stay disabled
-'            RibbonIsEnabled = False
-'            ' Save state (will save disabled)
-'            SaveRibbonState
-'            If Not rib Is Nothing Then rib.Invalidate
-'            Exit Sub
-'        End If
-'
-'        ' Setup succeeded â†’ enable
-'        RibbonIsEnabled = True
-'    Else
-'        ' Currently enabled â†’ toggle OFF
-'        RibbonIsEnabled = False
-'    End If
-'
-'    '------------------------------------------------------------
-'    ' Save this state per workbook
-'    '------------------------------------------------------------
-'    SaveRibbonState
-'
-'    '------------------------------------------------------------
-'    ' Refresh ALL ribbon controls
-'    '------------------------------------------------------------
-'    If Not rib Is Nothing Then rib.Invalidate
-'
-'    Exit Sub
-'
-'EH:
-'    Debug.Print "OnEnablePyExcel error: " & Err.Description
-'End Sub
-
-
 
 Public Sub OnEnablePyExcel(control As IRibbonControl)
     On Error GoTo EH
 
     Dim wb As Workbook
     Set wb = HostManager_GetCurrentWorkbook()
-    
+
     ' 1. Validate Context
     If wb Is Nothing Then
         MsgBox "No active workbook context.", vbExclamation
         Exit Sub
     End If
-    
-    ' 2. Determine Action based on current state
+
+    ' Case 1: PyExcel is disabled - run setup to enable
     If RibbonIsEnabled = False Then
-        ' Attempting to ENABLE
         Dim setupResult As Boolean
         setupResult = PyExcelSetup()
-        
+
         If setupResult = False Then
-            ' Setup failed: Notify user and remain disabled
             MsgBox "Unable to enable PyExcel. Setup failed: " & vbNewLine & _
                    PyExcelSetup_LastMessage, vbCritical, "Setup Error"
             RibbonIsEnabled = False
         Else
-            ' Setup succeeded: Enable
             RibbonIsEnabled = True
         End If
-    Else
-        ' Currently enabled: Toggle OFF
-        RibbonIsEnabled = False
+
+        SaveRibbonState
+        If Not rib Is Nothing Then rib.Invalidate
+        Exit Sub
     End If
 
-    ' 3. Centralized State Saving and UI Refresh
-    SaveRibbonState
-    
-    If Not rib Is Nothing Then rib.Invalidate
+    ' Case 2: PyExcel is enabled AND update available - prompt for update
+    If RibbonIsEnabled And UpdateAvailable Then
+        Dim result As VbMsgBoxResult
+        result = MsgBox("Update available: " & AvailableVersion & vbCrLf & vbCrLf & _
+                       "Update now?" & vbCrLf & "Click No to dismiss this update.", _
+                       vbYesNoCancel + vbQuestion, "PyExcel Update")
+        Select Case result
+            Case vbYes: RunManualUpdate
+            Case vbNo: DismissUpdate
+            ' Cancel: do nothing, keep indicator visible
+        End Select
+        Exit Sub
+    End If
 
+    ' Case 3: Should not reach here (button disabled when enabled + up-to-date)
     Exit Sub
 
 EH:
@@ -490,7 +532,7 @@ Public Sub OnReadMe(control As IRibbonControl)
 
     folderPath = ResolveProjectPath()
     If Len(folderPath) = 0 Then
-        Debug.Print "[OnReadMe] Workbook not saved — cannot resolve path."
+        Debug.Print "[OnReadMe] Workbook not saved � cannot resolve path."
         MsgBox "Workbook not saved. Save it first to create a folder path.", vbExclamation
         Exit Sub
     End If
@@ -1376,7 +1418,7 @@ End Sub
 
 
 ' ==============================================================
-' ACTION COMBO BOX — context-safe
+' ACTION COMBO BOX � context-safe
 ' ==============================================================
 
 Private Function GetActionList() As Collection
@@ -1446,7 +1488,7 @@ End Sub
 
 
 ' ==============================================================
-' ACTION COMBO BOX — Get/Change/Delete/Update
+' ACTION COMBO BOX � Get/Change/Delete/Update
 ' ==============================================================
 
 Public Sub GetActionText(control As IRibbonControl, ByRef returnedVal)
@@ -1469,7 +1511,7 @@ Public Sub GetActionText(control As IRibbonControl, ByRef returnedVal)
     Else
         Debug.Print "wb: " & wb.name
     End If
-    
+
     If ws Is Nothing Then
         Debug.Print "ws: Nothing"
     Else
