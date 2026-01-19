@@ -817,20 +817,27 @@ Private Function InstallPipPackages(targetPath As String) As Boolean
     End If
     LogMessage "INFO", "Pip Install", "Requirements file encoding verified/fixed"
 
-    ' Log file for pip output
+    ' Log file for pip output - ensure Temp folder exists
     Dim pipLogFile As String
-    pipLogFile = JoinPath(targetPath, "Temp\pip_install.log")
+    Dim tempFolder As String
+    tempFolder = JoinPath(targetPath, "Temp")
+    Call EnsureFolderExists(tempFolder)
+    pipLogFile = JoinPath(tempFolder, "pip_install.log")
+
+    LogMessage "INFO", "Pip Install", "Pip log file: " & pipLogFile
 
     ' Upgrade pip first
     LogMessage "INFO", "Pip Install", "Upgrading pip..."
-    cmd = "cmd /c """ & venvPy & """ -m pip install --upgrade pip --no-input > """ & pipLogFile & """ 2>&1"
+    cmd = "cmd /c """"" & venvPy & """ -m pip install --upgrade pip --no-input"" > """ & pipLogFile & """ 2>&1"
+    LogMessage "DEBUG", "Pip Install", "Command: " & cmd
     Set sh = CreateObject("WScript.Shell")
     exitCode = sh.Run(cmd, 0, True)
     LogMessage "INFO", "Pip Install", "Pip upgrade exit code: " & exitCode
 
     ' Install packages from fixed requirements (append to log)
     LogMessage "INFO", "Pip Install", "Installing packages from requirements..."
-    cmd = "cmd /c """ & venvPy & """ -m pip install -r """ & fixedReqFile & """ --no-input >> """ & pipLogFile & """ 2>&1"
+    cmd = "cmd /c """"" & venvPy & """ -m pip install -r """ & fixedReqFile & """ --no-input"" >> """ & pipLogFile & """ 2>&1"
+    LogMessage "DEBUG", "Pip Install", "Command: " & cmd
     exitCode = sh.Run(cmd, 0, True)
 
     LogMessage "INFO", "Pip Install", "Pip install exit code: " & exitCode
