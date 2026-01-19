@@ -646,10 +646,11 @@ Private Function ExtractEmbeddedStoreUnified(wsStore As Worksheet, outRoot As St
         calcPct = startPct + ((currentFile / totalFiles) * (endPct - startPct))
         UpdateProgress calcPct, "Extracting: " & parts(1)
 
-        ' Assemble chunks in order (matches Update.bas logic)
+        ' Assemble chunks (1-based to match Embedder)
         Set chunksDict = fileMap(k)
         bigB64 = ""
-        For i = 0 To chunksDict.count - 1
+        
+        For i = 1 To chunksDict.count
             If chunksDict.Exists(CLng(i)) Then
                 bigB64 = bigB64 & chunksDict(i)
             End If
@@ -1133,6 +1134,11 @@ Private Sub SortVariantNumeric(ByRef a As Variant)
 End Sub
 
 Private Function Base64ToBinary(b64 As String) As Byte()
+    If Len(b64) = 0 Then
+        Base64ToBinary = StrConv("", vbFromUnicode)
+        Exit Function
+    End If
+
     Dim xml As Object: Set xml = CreateObject("MSXML2.DOMDocument.6.0")
     Dim node As Object: Set node = xml.createElement("b64")
     node.DataType = "bin.base64"

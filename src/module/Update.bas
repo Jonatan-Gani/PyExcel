@@ -329,7 +329,15 @@ Private Function LoadManifest(wb As Workbook) As Object
     
     Dim key As String
     For r = 1 To UBound(arr, 1)
-        key = BuildPathKey(CStr(arr(r, COL_RELPATH)), CStr(arr(r, COL_FILENAME)))
+        ' Trust RelPath (Col 4) as the unique key, ignoring potentially bad FileName (Col 1)
+        key = UCase(CStr(arr(r, COL_RELPATH)))
+        
+        ' Ensure standard path separators
+        key = Replace(key, "/", "\")
+        
+        ' Remove leading backslash if present (RelPath should be clean)
+        If Left(key, 1) = "\" Then key = Mid(key, 2)
+        
         d(key) = True
     Next r
     Set LoadManifest = d
@@ -374,8 +382,8 @@ Public Sub ExtractResources(fso As Object, rootPath As String, wbSource As Workb
         
         Set chunks = fileMap(k)
         bigB64 = ""
-        ' Assemble chunks
-        For i = 0 To chunks.count - 1
+        ' Assemble chunks (1-based to match Embedder)
+        For i = 1 To chunks.count
             If chunks.Exists(CLng(i)) Then bigB64 = bigB64 & chunks(i)
         Next i
         
@@ -659,6 +667,11 @@ Private Sub WriteBinaryFile(pth As String, dat() As Byte)
 End Sub
 
 Private Function Base64ToBinary(s As String) As Byte()
+    If Len(s) = 0 Then
+        Base64ToBinary = StrConv("", vbFromUnicode)
+        Exit Function
+    End If
+
     Dim xml As Object: Set xml = CreateObject("MSXML2.DOMDocument")
     Dim el As Object: Set el = xml.createElement("b64")
     el.DataType = "bin.base64": el.text = s
@@ -690,5 +703,6 @@ End Function
 Private Sub RunShellWait(cmd As String)
     CreateObject("WScript.Shell").Run cmd, 0, True
 End Sub
+
 
 
