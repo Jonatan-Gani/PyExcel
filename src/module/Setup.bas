@@ -655,52 +655,38 @@ Private Function ExtractEmbeddedStoreUnified(wsStore As Worksheet, outRoot As St
             End If
         Next i
 
-        ' Build full path (UNIFIED with Update.bas: rootPath\relPath\fileName)
-        ' Handle case where relPath might already contain the filename
-        If Len(parts(1)) > 0 Then
-            If InStr(parts(0), parts(1)) > 0 Then
-                ' RelPath contains filename, use it directly
-                fullPath = outRoot & parts(0)
-            Else
-                ' RelPath is folder only, append filename
-                fullPath = outRoot & parts(0) & "\" & parts(1)
-            End If
-            fullPath = Replace(fullPath, "\\", "\")
+        ' Build full path (Simplified: Trust RelPath)
+        ' parts(0) = relPath (The correct relative path, e.g., "Python\tools.py")
+        ' parts(1) = fName (Ignored for path construction to avoid "Bad Packer" absolute path bugs)
+        
+        fullPath = outRoot & parts(0)
+        fullPath = Replace(fullPath, "\\", "\")
 
-            ' Ensure parent folder exists
-            folderPath = fso.GetParentFolderName(fullPath)
-            If Len(folderPath) > 0 And Not fso.FolderExists(folderPath) Then
-                CreateFoldersRecursive folderPath
-            End If
+        ' Ensure parent folder exists
+        folderPath = fso.GetParentFolderName(fullPath)
+        If Len(folderPath) > 0 And Not fso.FolderExists(folderPath) Then
+            CreateFoldersRecursive folderPath
+        End If
 
-            ' Decode and write
-            On Error Resume Next
-            bytes = Base64ToBinary(bigB64)
+        ' Decode and write
+        On Error Resume Next
+        bytes = Base64ToBinary(bigB64)
+        If Err.Number = 0 Then
+            WriteBinaryFile fullPath, bytes
             If Err.Number = 0 Then
-                WriteBinaryFile fullPath, bytes
-                If Err.Number = 0 Then
-                    extractedCount = extractedCount + 1
-                    LogMessage "INFO", "Extract", "OK: " & fullPath
-                Else
-                    LogMessage "ERROR", "Extract", "Write failed: " & fullPath & " - " & Err.Description
-                    SetupStats("FilesFailed") = SetupStats("FilesFailed") + 1
-                    Err.Clear
-                End If
+                extractedCount = extractedCount + 1
+                LogMessage "INFO", "Extract", "OK: " & fullPath
             Else
-                LogMessage "ERROR", "Extract", "Decode failed: " & fullPath & " - " & Err.Description
+                LogMessage "ERROR", "Extract", "Write failed: " & fullPath & " - " & Err.Description
                 SetupStats("FilesFailed") = SetupStats("FilesFailed") + 1
                 Err.Clear
             End If
-            On Error GoTo 0
         Else
-            ' No filename provided - treat as folder-only entry
-            fullPath = outRoot & parts(0)
-            fullPath = Replace(fullPath, "\\", "\")
-            If Not fso.FolderExists(fullPath) Then
-                CreateFoldersRecursive fullPath
-                LogMessage "INFO", "Extract", "Folder created: " & fullPath
-            End If
+            LogMessage "ERROR", "Extract", "Decode failed: " & fullPath & " - " & Err.Description
+            SetupStats("FilesFailed") = SetupStats("FilesFailed") + 1
+            Err.Clear
         End If
+        On Error GoTo 0
     Next k
 
     ExtractEmbeddedStoreUnified = extractedCount

@@ -364,33 +364,23 @@ Public Sub ExtractResources(fso As Object, rootPath As String, wbSource As Workb
     
     For Each k In fileMap.keys
         parts = Split(k, "|")
+        ' parts(0) = relPath (The correct relative path)
+        ' parts(1) = fName (Ignored)
         
-        If Len(parts(1)) > 0 Then
-            ' File entry
-            fullPath = rootPath & "\" & parts(0) & "\" & parts(1)
-            fullPath = Replace(fullPath, "\\", "\")
-            
-            EnsureFolderExists fso, fullPath
-            
-            Set chunks = fileMap(k)
-            bigB64 = ""
-            ' Assemble chunks
-            For i = 0 To chunks.count - 1
-                If chunks.Exists(CLng(i)) Then bigB64 = bigB64 & chunks(i)
-            Next i
-            
-            bytes = Base64ToBinary(bigB64)
-            WriteBinaryFile fullPath, bytes
-        Else
-            ' Folder-only entry
-            fullPath = rootPath & "\" & parts(0)
-            fullPath = Replace(fullPath, "\\", "\")
-            
-            ' Ensure the folder exists
-            If Not fso.FolderExists(fullPath) Then
-                CreateFoldersRecursive fso, fullPath
-            End If
-        End If
+        fullPath = rootPath & "\" & parts(0)
+        fullPath = Replace(fullPath, "\\", "\")
+        
+        EnsureFolderExists fso, fullPath
+        
+        Set chunks = fileMap(k)
+        bigB64 = ""
+        ' Assemble chunks
+        For i = 0 To chunks.count - 1
+            If chunks.Exists(CLng(i)) Then bigB64 = bigB64 & chunks(i)
+        Next i
+        
+        bytes = Base64ToBinary(bigB64)
+        WriteBinaryFile fullPath, bytes
     Next k
 End Sub
 
@@ -700,6 +690,5 @@ End Function
 Private Sub RunShellWait(cmd As String)
     CreateObject("WScript.Shell").Run cmd, 0, True
 End Sub
-
 
 
