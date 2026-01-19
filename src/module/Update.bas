@@ -1,1176 +1,1512 @@
 Attribute VB_Name = "Update"
 'Option Explicit
 '
-'' ==============================================================================
-'' CONFIGURATION & CONSTANTS
-'' ==============================================================================
+'' Constant for the Workbook-level Named Range used to store the project root path.
+'Private Const WORKBOOK_PATH_NAME As String = "ProjectRootPath"
 '
-'' STORAGE SETTINGS
 'Private Const EMBED_SHEET_NAME As String = "EmbeddedStore"
-'Private Const WORKBOOK_VERSION_TAG As String = "PyExcel_ProjectVersion"
-'Private Const PROPERTY_VERSION_TAG As String = "PyExcel_Version"
-'
-'' FOLDER NAMES (SAFETY ZONES)
-'Private Const FOLDER_PYTHON As String = "Python"
-'Private Const FOLDER_VENV As String = ".venv"
-'Private Const FOLDER_USER_SCRIPTS As String = "userScripts"
-'
-'' COLUMN MAPPING (In EmbeddedStore)
 'Private Const COL_FILENAME As Long = 1
 'Private Const COL_CHUNKINDEX As Long = 2
 'Private Const COL_BASE64 As Long = 3
 'Private Const COL_RELPATH As Long = 4
 '
-'' PROGRESS BAR GLOBAL
-'Public CurrentProgressForm As Object
 '
-'' ==============================================================================
-'' PART 1: ENTRY POINTS (VERSION CHECK & UPDATE TRIGGER)
-'' ==============================================================================
+'' ==============================================================
+'' PROJECT PATH HELPERS
+'' ==============================================================
 '
-'' ENTRY 1: AUTOMATIC CHECK (Call this on Workbook Open)
-'Public Sub VerifyProjectVersion()
+'Public Sub SaveProjectPath(wb As Workbook, path As String)
+'    On Error GoTo EH
+'    Debug.Print "[SaveProjectPath] Saving path '" & path & "' to Workbook name: " & WORKBOOK_PATH_NAME
+'    modRibbon.SaveWorkbookValue wb, WORKBOOK_PATH_NAME, path
+'    Exit Sub
+'EH:
+'    Debug.Print "[SaveProjectPath][ERROR] " & Err.Description
+'End Sub
+'
+'
+'' ==============================================================
+'' CORE INSTALLATION LOGIC (WITH REAL STEP 5 IMPLEMENTATION)
+'' ==============================================================
+'
+'Public Function PyExcelSetup() As Boolean
+'    On Error GoTo EH
+'
 '    Dim wb As Workbook
-'    Dim projectVersion As String
-'    Dim myVersion As String
-'    Dim statusMsg As String
+'    Dim fso As Object
+'    Dim hostPath As String
 '
+'    Debug.Print "============================================================"
+'    Debug.Print "[PyExcelSetup] Initialization started."
+'
+'    Set wb = HostManager_GetCurrentWorkbook()
+'    If wb Is Nothing Then GoTo Failed
+'
+'    Set fso = CreateObject("Scripting.FileSystemObject")
+'
+'    ' 1. Set main path
+'    hostPath = SelectAndSetupRootPath(wb, fso)
+'    If Len(hostPath) = 0 Then GoTo Failed
+'
+'    ' 2. Build project folder tree
+'    BuildProjectDirectories fso, hostPath
+'
+'    ' 3. Save workbook as XLSM
+'    SaveHostAsXLSM wb, hostPath
+'
+'    ' 4. Python VENV
+'    If Not CreatePythonVenv(fso, hostPath) Then GoTo Failed
+'
+'    ' 5. EXTRACT EMBEDDED RESOURCES (IMPLEMENTED)
+'    ExtractResources fso, hostPath
+'
+'    ' 6 + 7 placeholders
+'    install_pip_Packages
+''    PyExcelSetup_Step7_SaveVersionID wb
+'
+'    Debug.Print "[PyExcelSetup] Installation finished."
+'    Debug.Print "============================================================"
+'
+'    PyExcelSetup = True
+'    Exit Function
+'
+'Failed:
+'    Debug.Print "[PyExcelSetup] Installation terminated due to error/cancellation."
+'    PyExcelSetup = False
+'    Exit Function
+'
+'EH:
+'    Debug.Print "[PyExcelSetup][FATAL ERROR] " & Err.Description
+'    Resume Failed
+'End Function
+'
+'
+'' ==============================================================
+'' STEP 1 – PATH SELECTOR
+'' ==============================================================
+'
+'Public Function SelectAndSetupRootPath(wb As Workbook, fso As Object) As String
+'    On Error GoTo EH
+'
+'    Dim fldr As Object
+'    Dim defaultPath As String
+'    Dim pathChosen As String
+'
+'    If Len(wb.path) > 0 Then
+'        defaultPath = wb.path
+'    Else
+'        defaultPath = Environ("USERPROFILE")
+'    End If
+'
+'    Set fldr = Application.FileDialog(msoFileDialogFolderPicker)
+'    With fldr
+'        .Title = "Select Project Root Folder"
+'        .InitialFileName = defaultPath
+'        If .Show <> -1 Then Exit Function
+'        pathChosen = .SelectedItems(1)
+'    End With
+'
+'    Dim projectName As String
+'    projectName = Left$(wb.name, InStrRev(wb.name, ".") - 1)
+'
+'    Dim finalPath As String
+'    finalPath = pathChosen & Application.PathSeparator & projectName
+'
+'    If Not fso.FolderExists(finalPath) Then fso.CreateFolder finalPath
+'
+'    SaveProjectPath wb, finalPath
+'    SelectAndSetupRootPath = finalPath
+'    Exit Function
+'
+'EH:
+'    Debug.Print "[SelectRootPath][ERROR] " & Err.Description
+'End Function
+'
+'
+'' ==============================================================
+'' STEP 2 – BUILD FOLDER TREE
+'' ==============================================================
+'
+'Public Sub BuildProjectDirectories(fso As Object, rootPath As String)
+'    On Error GoTo EH
+'
+'    Dim folder As Variant
+'    Dim subFolders As Variant: subFolders = Array("AddIn", "Archive", "Python", "Temp", "userScripts")
+'
+'    For Each folder In subFolders
+'        Dim full As String: full = rootPath & Application.PathSeparator & folder
+'        If Not fso.FolderExists(full) Then fso.CreateFolder full
+'    Next folder
+'
+'    Dim venvPath As String
+'    venvPath = rootPath & "\Python\.venv"
+'    If Not fso.FolderExists(venvPath) Then fso.CreateFolder venvPath
+'
+'    Dim subSub As Variant
+'    Dim subSubFolders As Variant: subSubFolders = Array("assets", "lists", "tables", "values")
+'
+'    For Each subSub In subSubFolders
+'        Dim path2 As String
+'        path2 = rootPath & "\Temp\" & subSub
+'        If Not fso.FolderExists(path2) Then fso.CreateFolder path2
+'    Next subSub
+'
+'    Exit Sub
+'
+'EH:
+'    Debug.Print "[BuildDirs][ERROR] " & Err.Description
+'End Sub
+'
+'
+'' ==============================================================
+'' STEP 3 – SAVE HOST AS XLSM
+'' ==============================================================
+'
+'Public Sub SaveHostAsXLSM(wb As Workbook, rootPath As String)
+'    On Error Resume Next
+'
+'    Dim targetPath As String
+'    targetPath = rootPath & "\" & Left$(wb.name, InStrRev(wb.name, ".") - 1) & ".xlsm"
+'
+'    If wb.path = rootPath And LCase$(right$(wb.name, 4)) = "xlsm" Then Exit Sub
+'
+'    Application.DisplayAlerts = False
+'    wb.SaveAs fileName:=targetPath, FileFormat:=xlOpenXMLWorkbookMacroEnabled
+'    Application.DisplayAlerts = True
+'End Sub
+'
+'
+'' ==============================================================
+'' STEP 4 – PYTHON VENV
+'' ==============================================================
+'
+'Public Function CreatePythonVenv(fso As Object, rootPath As String) As Boolean
+'    On Error GoTo EH
+'
+'    Dim venvPath As String
+'    venvPath = rootPath & "\Python\.venv"
+'
+'    Dim cmd As String
+'    cmd = "python.exe -m venv """ & venvPath & """"
+'
+'    Dim sh As Object: Set sh = CreateObject("WScript.Shell")
+'    sh.Run "cmd /c " & cmd, 0, True
+'
+'    CreatePythonVenv = fso.FolderExists(venvPath & "\Lib")
+'    Exit Function
+'
+'EH:
+'    CreatePythonVenv = False
+'End Function
+'
+'
+'' ==============================================================
+'' STEP 5 – REAL RESOURCE EXTRACTION
+'' ==============================================================
+'
+'Public Sub ExtractResources(fso As Object, rootPath As String)
+'    On Error GoTo EH
+'
+'    Dim wb As Workbook
 '    Set wb = HostManager_GetCurrentWorkbook()
 '    If wb Is Nothing Then Exit Sub
 '
-'    ' 1. Get Versions
-'    projectVersion = GetStoredProjectVersion(wb) ' From User Workbook
-'    myVersion = GetAddinVersion()                ' From This XLAM Metadata
-'
-'    ' 2. Compare
-'    If projectVersion = myVersion Then Exit Sub
-'
-'    ' 3. Determine Message
-'    If projectVersion = "" Then
-'        statusMsg = "This workbook needs to be initialized with PyExcel tools."
-'    ElseIf VersionToNumber(myVersion) > VersionToNumber(projectVersion) Then
-'        statusMsg = "A new update is available for this project!" & vbCrLf & _
-'                    "Current Project: " & projectVersion & vbCrLf & _
-'                    "New Tool Version: " & myVersion
-'    Else
-'        Exit Sub ' Downgrade or equal
-'    End If
-'
-'    ' 4. Prompt User
-'    If MsgBox(statusMsg & vbCrLf & vbCrLf & "Do you want to update the project files now?", _
-'              vbQuestion + vbYesNo, "Update Manager") = vbYes Then
-'        RunUpdateFromExternalFile
-'    End If
-'End Sub
-'
-'' ENTRY 2: MANUAL UPDATE (Call this from Ribbon)
-'Public Sub RunUpdateFromExternalFile()
+'    Dim wsStore As Worksheet
+'    On Error Resume Next
+'    Set wsStore = wb.Worksheets(EMBED_SHEET_NAME)
 '    On Error GoTo EH
 '
-'    Dim wbCurrent As Workbook: Set wbCurrent = ThisWorkbook
-'    Dim wbNew As Workbook
-'    Dim fso As Object
-'    Dim targetPath As String
-'    Dim newXlamPath As String
-'    Dim fd As FileDialog
-'
-'    ' 1. VALIDATE CONTEXT
-'    Dim wbHost As Workbook
-'    Set wbHost = HostManager_GetCurrentWorkbook()
-'    If wbHost Is Nothing Then
-'        MsgBox "Please open your project workbook first.", vbExclamation
-'        Exit Sub
-'    End If
-'    targetPath = wbHost.path
-'
-'    ' 2. SELECT UPDATE FILE
-'    Set fd = Application.FileDialog(msoFileDialogFilePicker)
-'    With fd
-'        .Title = "Select the NEW version of the Add-in (XLAM)"
-'        .Filters.Clear
-'        .Filters.Add "Excel Add-in", "*.xlam"
-'        .AllowMultiSelect = False
-'        If .Show <> -1 Then Exit Sub
-'        newXlamPath = .SelectedItems(1)
-'    End With
-'
-'    ' Safety: Prevent circular update
-'    If LCase(newXlamPath) = LCase(wbCurrent.FullName) Then
-'        MsgBox "You selected the currently installed file. Please select the downloaded update file.", vbExclamation
+'    If wsStore Is Nothing Then
+'        Debug.Print "[Step5] No EmbeddedStore sheet found. Nothing to extract."
 '        Exit Sub
 '    End If
 '
-'    ' 3. EXECUTE UPDATE
-'    InitProgressBar
-'    Set fso = CreateObject("Scripting.FileSystemObject")
+'    Debug.Print "[Step5] Extracting Embedded Resources..."
 '
-'    UpdateProgress 0.1, "Analyzing new version..."
-'    Application.ScreenUpdating = False
+'    Dim outFolder As String
+'    outFolder = rootPath & "\AddIn"
+'    If Not fso.FolderExists(outFolder) Then fso.CreateFolder outFolder
 '
-'    ' Open source file Read-Only
-'    Set wbNew = Workbooks.Open(fileName:=newXlamPath, ReadOnly:=True)
+'    ExtractEmbeddedStoreSheet wsStore, outFolder
 '
-'    ' A. RUN SMART CLEANER (Deletes obsolete files safely)
-'    UpdateProgress 0.2, "Cleaning obsolete files..."
-'    SmartCleanFolder fso, targetPath, wbNew
+'    DeleteExtractedResources rootPath
 '
-'    ' B. EXTRACT RESOURCES
-'    UpdateProgress 0.4, "Installing new files..."
-'    ExtractResources fso, targetPath, wbNew
-'
-'    ' Close the source file immediately
-'    Dim newVer As String
-'    newVer = GetAddinVersionFromFile(wbNew) ' Grab version before closing
-'    wbNew.Close SaveChanges:=False
-'    Application.ScreenUpdating = True
-'
-'    ' C. UPDATE PYTHON (Pip Install + Freeze)
-'    UpdateProgress 0.7, "Updating Python libraries..."
-'    UpdatePythonDependencies targetPath
-'
-'    ' D. UPDATE PROJECT TAG
-'    SetStoredProjectVersion wbHost, newVer
-'
-'    UpdateProgress 1#, "Update Complete!"
-'    Application.Wait Now + TimeValue("0:00:01")
-'    CloseProgressBar
-'
-'    MsgBox "Project successfully updated to version " & newVer, vbInformation
+'    Debug.Print "[Step5] Extraction completed into: " & outFolder
 '    Exit Sub
 '
 'EH:
-'    Application.ScreenUpdating = True
-'    If Not wbNew Is Nothing Then wbNew.Close SaveChanges:=False
-'    CloseProgressBar
-'    MsgBox "Update Failed: " & Err.Description, vbCritical
+'    Debug.Print "[Step5][ERROR] " & Err.Description
 'End Sub
 '
 '
-'' ==============================================================================
-'' PART 2: SMART CLEANER (SAFETY LOGIC)
-'' ==============================================================================
 '
-'Private Sub SmartCleanFolder(fso As Object, rootPath As String, wbSource As Workbook)
-'    ' Only target the Python folder to prevent root accidents
-'    Dim pythonPath As String
-'    pythonPath = rootPath & "\" & FOLDER_PYTHON
+'' ==============================================================
+'' EMBEDDED STORE EXTRACTOR (FULL WORKING VERSION)
+'' ==============================================================
 '
-'    If Not fso.FolderExists(pythonPath) Then Exit Sub
+'Private Sub ExtractEmbeddedStoreSheet(wsStore As Worksheet, outRoot As String)
+'    Dim lastRow As Long
+'    lastRow = wsStore.Cells(wsStore.rows.count, "A").End(xlUp).Row
+'    If lastRow < 2 Then Exit Sub
 '
-'    ' Get Manifest from New XLAM
-'    Dim manifest As Object
-'    Set manifest = LoadManifest(wbSource)
+'    Dim fileMap As Object
+'    Set fileMap = CreateObject("Scripting.Dictionary")
 '
-'    ' Recursively clean
-'    CleanRecursive fso, fso.GetFolder(pythonPath), rootPath, manifest
-'End Sub
+'    Dim r As Long
+'    For r = 2 To lastRow
+'        Dim fname As String: fname = CStr(wsStore.Cells(r, COL_FILENAME).value)
+'        Dim rel As String: rel = CStr(wsStore.Cells(r, COL_RELPATH).value)
+'        Dim key As String: key = rel & "|" & fname
+'        Dim idx As Long: idx = CLng(wsStore.Cells(r, COL_CHUNKINDEX).value)
+'        Dim b64 As String: b64 = CStr(wsStore.Cells(r, COL_BASE64).value)
 '
-'Private Sub CleanRecursive(fso As Object, fldr As Object, rootPath As String, manifest As Object)
-'    Dim file As Object
-'    Dim subFldr As Object
-'    Dim fName As String
-'    Dim relPath As String
-'
-'    ' A. CHECK FILES
-'    For Each file In fldr.files
-'        relPath = GetRelativePath(file.path, rootPath)
-'
-'        ' IF not in Manifest AND not in Safe Zone -> DELETE
-'        If Not manifest.Exists(relPath) Then
-'             ' Double check we are deep enough (paranoid safety)
-'             If InStr(relPath, "\") > 0 Then
-'                Debug.Print "[Cleaner] Deleting Zombie: " & relPath
-'                On Error Resume Next
-'                file.Delete True
-'                On Error GoTo 0
-'             End If
+'        If Not fileMap.Exists(key) Then
+'            fileMap.Add key, CreateObject("Scripting.Dictionary")
 '        End If
-'    Next file
 '
-'    ' B. RECURSE SUBFOLDERS
-'    For Each subFldr In fldr.subFolders
-'        fName = UCase(subFldr.name)
-'
-'        ' SAFETY: DO NOT ENTER THESE FOLDERS
-'        If fName = UCase(FOLDER_VENV) Then
-'            ' Skip .venv
-'        ElseIf fName = UCase(FOLDER_USER_SCRIPTS) Then
-'            ' Skip userScripts
-'        ElseIf fName = "__PYCACHE__" Then
-'            ' Nuke Pycache
-'            On Error Resume Next
-'            subFldr.Delete True
-'            On Error GoTo 0
-'        Else
-'            ' Recurse
-'            CleanRecursive fso, subFldr, rootPath, manifest
-'
-'            ' Optional: Remove empty folders
-'            If subFldr.files.count = 0 And subFldr.subFolders.count = 0 Then
-'                On Error Resume Next
-'                subFldr.Delete True
-'                On Error GoTo 0
-'            End If
-'        End If
-'    Next subFldr
-'End Sub
-'
-'Private Function LoadManifest(wb As Workbook) As Object
-'    Dim d As Object: Set d = CreateObject("Scripting.Dictionary")
-'    Dim ws As Worksheet
-'    On Error Resume Next
-'    Set ws = wb.Worksheets(EMBED_SHEET_NAME)
-'    On Error GoTo 0
-'
-'    If ws Is Nothing Then Set LoadManifest = d: Exit Function
-'
-'    Dim arr As Variant
-'    Dim r As Long, lastRow As Long
-'    lastRow = ws.Cells(ws.rows.count, COL_FILENAME).End(xlUp).Row
-'    If lastRow < 2 Then Set LoadManifest = d: Exit Function
-'
-'    arr = ws.Range(ws.Cells(2, 1), ws.Cells(lastRow, 4)).value
-'
-'    Dim key As String
-'    For r = 1 To UBound(arr, 1)
-'        key = BuildPathKey(CStr(arr(r, COL_RELPATH)), CStr(arr(r, COL_FILENAME)))
-'        d(key) = True
-'    Next r
-'    Set LoadManifest = d
-'End Function
-'
-'' ==============================================================================
-'' PART 3: EXTRACTION LOGIC
-'' ==============================================================================
-'
-'Public Sub ExtractResources(fso As Object, rootPath As String, wbSource As Workbook)
-'    Dim wsStore As Worksheet
-'    Set wsStore = wbSource.Worksheets(EMBED_SHEET_NAME)
-'
-'    ' 1. BUILD MAP
-'    Dim fileMap As Object: Set fileMap = CreateObject("Scripting.Dictionary")
-'    Dim lastRow As Long: lastRow = wsStore.Cells(wsStore.rows.count, COL_FILENAME).End(xlUp).Row
-'    Dim arr As Variant: arr = wsStore.Range(wsStore.Cells(2, 1), wsStore.Cells(lastRow, 4)).value
-'
-'    Dim r As Long, key As String, b64 As String, chunkIdx As Long
-'
-'    For r = 1 To UBound(arr, 1)
-'        key = arr(r, COL_RELPATH) & "|" & arr(r, COL_FILENAME)
-'        If Not fileMap.Exists(key) Then fileMap.Add key, CreateObject("Scripting.Dictionary")
-'        chunkIdx = CLng(arr(r, COL_CHUNKINDEX))
-'        b64 = CStr(arr(r, COL_BASE64))
-'        fileMap(key)(chunkIdx) = b64
+'        fileMap(key)(idx) = b64
 '    Next r
 '
-'    ' 2. WRITE FILES
-'    Dim k As Variant, parts() As String, fullPath As String
-'    Dim i As Long, bigB64 As String, bytes() As Byte, chunks As Object
-'
+'    Dim k As Variant
 '    For Each k In fileMap.keys
-'        parts = Split(k, "|")
-'        fullPath = rootPath & "\" & parts(0) & "\" & parts(1)
-'        fullPath = Replace(fullPath, "\\", "\")
+'        Dim parts() As String: parts = Split(k, "|")
+'        Dim relPath As String: relPath = parts(0)
+'        Dim fileName As String: fileName = parts(1)
 '
-'        EnsureFolderExists fso, fullPath
+'        Dim chunks As Object: Set chunks = fileMap(k)
+'        Dim chunkKeys As Variant: chunkKeys = chunks.keys
 '
-'        Set chunks = fileMap(k)
-'        bigB64 = ""
-'        ' Assemble chunks
-'        For i = 0 To chunks.count - 1
-'            If chunks.Exists(CLng(i)) Then bigB64 = bigB64 & chunks(i)
+'        SortVariantNumeric chunkKeys
+'
+'        Dim bigB64 As String: bigB64 = ""
+'        Dim i As Long
+'        For i = LBound(chunkKeys) To UBound(chunkKeys)
+'            bigB64 = bigB64 & chunks(chunkKeys(i))
 '        Next i
 '
+'        Dim bytes() As Byte
 '        bytes = Base64ToBinary(bigB64)
-'        WriteBinaryFile fullPath, bytes
+'
+'        Dim fullOut As String
+'        fullOut = outRoot & "\" & relPath
+'
+'        EnsureFolderExists fullOut
+'        WriteBinaryFile fullOut, bytes
 '    Next k
 'End Sub
 '
-'' ==============================================================================
-'' PART 4: PYTHON DEPENDENCY MANAGER
-'' ==============================================================================
 '
-'Public Sub UpdatePythonDependencies(rootPath As String)
-'    On Error GoTo EH
-'    Dim venvPy As String, reqFile As String, uninstallFile As String
-'    Dim snapFile As String, cmd As String
+'Private Sub SortVariantNumeric(ByRef a As Variant)
+'    Dim i As Long, j As Long, tmp As Variant
+'    If IsEmpty(a) Then Exit Sub
+'    For i = LBound(a) To UBound(a) - 1
+'        For j = i + 1 To UBound(a)
+'            If CLng(a(j)) < CLng(a(i)) Then
+'                tmp = a(i): a(i) = a(j): a(j) = tmp
+'            End If
+'        Next j
+'    Next i
+'End Sub
+'
+'
+'Private Sub EnsureFolderExists(fullPath As String)
+'    Dim folder As String
+'    folder = Left$(fullPath, InStrRev(fullPath, "\") - 1)
+'    If Len(folder) = 0 Then Exit Sub
+'
+'    If Len(Dir(folder, vbDirectory)) = 0 Then CreateFoldersRecursive folder
+'End Sub
+'
+'Private Sub CreateFoldersRecursive(folderPath As String)
+'    Dim parts As Variant: parts = Split(folderPath, "\")
+'    Dim build As String: build = parts(0) & "\"
+'    Dim i As Long
+'    For i = 1 To UBound(parts)
+'        build = build & parts(i) & "\"
+'        If Len(Dir(build, vbDirectory)) = 0 Then MkDir build
+'    Next i
+'End Sub
+'
+'
+'Private Sub WriteBinaryFile(path As String, bytes() As Byte)
+'    Dim stm As Object
+'    Set stm = CreateObject("ADODB.Stream")
+'    stm.Type = 1
+'    stm.Open
+'    stm.Write bytes
+'    stm.SaveToFile path, 2
+'    stm.Close
+'End Sub
+'
+'Private Function Base64ToBinary(b64 As String) As Byte()
+'    Dim xml As Object: Set xml = CreateObject("MSXML2.DOMDocument.6.0")
+'    Dim node As Object: Set node = xml.createElement("b64")
+'    node.DataType = "bin.base64"
+'    node.text = b64
+'    Base64ToBinary = node.nodeTypedValue
+'End Function
+'
+'
+'Public Sub DeleteExtractedResources(rootPath As String)
+'    On Error Resume Next
+'
 '    Dim fso As Object
+'    Set fso = CreateObject("Scripting.FileSystemObject")
+'
+'    Dim target As String
+'    target = rootPath & "\AddIn"
+'
+'    If Not fso.FolderExists(target) Then Exit Sub
+'
+'    DeleteRecursiveFilesOnly fso.GetFolder(target)
+'End Sub
+'
+'Private Sub DeleteRecursiveFilesOnly(folder As Object)
+'    Dim f As Object
+'    For Each f In folder.files
+'        On Error Resume Next
+'        f.Delete True
+'    Next f
+'
+'    Dim subf As Object
+'    For Each subf In folder.subFolders
+'        DeleteRecursiveFilesOnly subf
+'    Next subf
+'End Sub
+'
+'
+'' ==============================================================
+'' PLACEHOLDERS 6 + 7
+'' ==============================================================
+'' --- Run pip install ONLY inside local venv ---
+'Private Sub install_pip_Packages()
+'    Dim venvPy As String
+'
+'    Dim wb As Workbook
+'    Set wb = HostManager_GetCurrentWorkbook()
+'
+'    venvPy = JoinPath(wb.path, "Python\.venv\Scripts\python.exe")
+'
+'    Dim reqFile As String
+'    reqFile = JoinPath(wb.path, "Python\Requirements.txt")
+'
+'    If Len(Dir$(venvPy, vbNormal)) <> 0 And Len(Dir$(reqFile, vbNormal)) <> 0 Then
+'        Dim cmd As String
+'        cmd = """" & venvPy & """ -m pip install -r """ & reqFile & """"
+'
+'        Dim sh As Object
+'        Set sh = CreateObject("WScript.Shell")
+'        sh.Run cmd, 0, True
+'    End If
+'End Sub
+'
+'
+''Public Sub PyExcelSetup_Step7_SaveVersionID(wb As Workbook)
+''    Debug.Print "[Step 7] Saving XLAM Version (Placeholder)."
+''End Sub
+'
+'
+'' ==============================================================
+'' UTILITY
+'' ==============================================================
+'
+'Public Sub SaveTextFile(filePath As String, fileContent As String)
+'    On Error GoTo EH
+'    Dim n As Integer: n = FreeFile
+'    Open filePath For Output As #n
+'    Print #n, fileContent
+'    Close #n
+'    Exit Sub
+'EH:
+'    If n <> 0 Then Close #n
+'    MsgBox "Error writing file: " & Err.Description, vbCritical
+'End Sub
+'
+'
+'Private Function JoinPath(base As String, leaf As String) As String
+'    If right$(base, 1) = "\" Then
+'        JoinPath = base & leaf
+'    Else
+'        JoinPath = base & "\" & leaf
+'    End If
+'End Function
+''
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+'Option Explicit
+'
+'' STATUS MESSAGE STORAGE
+'Public PyExcelSetup_LastMessage As String
+'
+'' CONSTANTS
+'Private Const WORKBOOK_PATH_NAME As String = "ProjectRootPath"
+'Private Const EMBED_SHEET_NAME As String = "EmbeddedStore"
+'
+'' COLUMNS IN EMBEDDED STORE
+'Private Const COL_FILENAME As Long = 1
+'Private Const COL_CHUNKINDEX As Long = 2
+'Private Const COL_BASE64 As Long = 3
+'Private Const COL_RELPATH As Long = 4
+'
+'' ==============================================================
+'' CORE INSTALLATION LOGIC
+'' ==============================================================
+'
+'Public Function PyExcelSetup() As Boolean
+'    On Error GoTo EH
+'
+'    Dim wb As Workbook
+'    Dim fso As Object
+'    Dim hostPath As String
+'
+'    Debug.Print "============================================================"
+'    Debug.Print "[PyExcelSetup] Initialization started."
+'
+'    ' Target Workbook (The one being set up)
+'    Set wb = HostManager_GetCurrentWorkbook()
+'    If wb Is Nothing Then
+'        PyExcelSetup_LastMessage = "Failure in Step 0: No active workbook context."
+'        GoTo Failed
+'    End If
 '
 '    Set fso = CreateObject("Scripting.FileSystemObject")
 '
-'    ' Define Paths
-'    venvPy = Quote(rootPath & "\Python\.venv\Scripts\python.exe")
-'    reqFile = Quote(rootPath & "\Python\Requirements.txt")
-'    uninstallFile = rootPath & "\Python\Uninstall.txt" ' Keep unquoted for FSO check
-'    snapFile = Quote(rootPath & "\Python\User_Environment_Snapshot.txt")
-'
-'    ' ---------------------------------------------------------
-'    ' STEP 0: EXPLICIT UNINSTALL (The Cleanup Phase)
-'    ' ---------------------------------------------------------
-'    ' Only run if file exists AND has content (> 0 bytes)
-'    If fso.FileExists(uninstallFile) Then
-'        If fso.GetFile(uninstallFile).Size > 0 Then
-'            UpdateProgress 0.65, "Removing deprecated libraries..."
-'            cmd = "cmd /c " & venvPy & " -m pip uninstall -r " & Quote(uninstallFile) & " -y"
-'            RunShellWait cmd
-'        End If
-'
-'        ' Optional: Delete it afterwards regardless of size
-'        ' On Error Resume Next
-'        ' fso.DeleteFile uninstallFile
-'        ' On Error GoTo EH
+'    ' 1. Set main path
+'    hostPath = SelectAndSetupRootPath(wb, fso)
+'    If Len(hostPath) = 0 Then
+'        PyExcelSetup_LastMessage = "Failure in Step 1: Path selection cancelled or invalid."
+'        GoTo Failed
 '    End If
 '
-'    ' ---------------------------------------------------------
-'    ' STEP 1: PIP INSTALL (The Upgrade Phase)
-'    ' ---------------------------------------------------------
-'    If fso.FileExists(rootPath & "\Python\Requirements.txt") Then
-'        ' Note: We run this AFTER uninstalling to ensure if a package
-'        ' is re-required by a dependency, it gets pulled back in.
-'        cmd = "cmd /c " & venvPy & " -m pip install -r " & reqFile & " --upgrade --no-input"
-'        RunShellWait cmd
+'    ' 2. Build project folder tree
+'    BuildProjectDirectories fso, hostPath
+'
+'    ' 3. Save workbook as XLSM
+'    If Not SaveHostAsXLSM(wb, hostPath) Then
+'        PyExcelSetup_LastMessage = "Failure in Step 3: Could not save workbook as XLSM."
+'        GoTo Failed
 '    End If
 '
-'    ' ---------------------------------------------------------
-'    ' STEP 2: PIP FREEZE (Snapshot)
-'    ' ---------------------------------------------------------
-'    cmd = "cmd /c " & venvPy & " -m pip freeze > " & snapFile
-'    RunShellWait cmd
+'    ' 4. Python VENV
+'    If Not CreatePythonVenv(fso, hostPath) Then
+'        PyExcelSetup_LastMessage = "Failure in Step 4: Python venv creation did not complete. Ensure 'python' is in your system PATH."
+'        GoTo Failed
+'    End If
+'
+'    ' 5. EXTRACT EMBEDDED RESOURCES
+'    ' This extracts FROM ThisWorkbook (Addin) INTO the hostPath
+'    ExtractResources fso, hostPath
+'
+'    ' 6. PIP INSTALL
+'    install_pip_Packages hostPath
+'
+'    PyExcelSetup_LastMessage = "Installation completed successfully."
+'    Debug.Print "[PyExcelSetup] Installation finished."
+'    Debug.Print "============================================================"
+'
+'    PyExcelSetup = True
+'    Exit Function
+'
+'Failed:
+'    If PyExcelSetup_LastMessage = "" Then
+'        PyExcelSetup_LastMessage = "Installation terminated due to error/cancellation."
+'    End If
+'    Debug.Print "[PyExcelSetup] " & PyExcelSetup_LastMessage
+'    PyExcelSetup = False
+'    Exit Function
+'
+'EH:
+'    PyExcelSetup_LastMessage = "Fatal error in PyExcelSetup: " & Err.Description
+'    Debug.Print "[PyExcelSetup][FATAL ERROR] " & Err.Description
+'    Resume Failed
+'End Function
+'
+'
+'' ==============================================================
+'' STEP 1 - PATH SELECTOR
+'' ==============================================================
+'
+'Public Function SelectAndSetupRootPath(wb As Workbook, fso As Object) As String
+'    On Error GoTo EH
+'
+'    Dim fldr As Object
+'    Dim defaultPath As String
+'    Dim pathChosen As String
+'
+'    If Len(wb.path) > 0 Then
+'        defaultPath = wb.path
+'    Else
+'        defaultPath = Environ("USERPROFILE")
+'    End If
+'
+'    Set fldr = Application.FileDialog(msoFileDialogFolderPicker)
+'    With fldr
+'        .Title = "Select Project Root Folder"
+'        .InitialFileName = defaultPath
+'        If .Show <> -1 Then Exit Function
+'        pathChosen = .SelectedItems(1)
+'    End With
+'
+'    ' Handle Unsaved workbooks safely (Book1, etc.)
+'    Dim projectName As String
+'    Dim dotIndex As Long
+'    dotIndex = InStrRev(wb.name, ".")
+'
+'    If dotIndex > 0 Then
+'        projectName = Left$(wb.name, dotIndex - 1)
+'    Else
+'        projectName = wb.name
+'    End If
+'
+'    Dim finalPath As String
+'    finalPath = pathChosen & Application.PathSeparator & projectName
+'
+'    If Not fso.FolderExists(finalPath) Then fso.CreateFolder finalPath
+'
+'    SaveProjectPath wb, finalPath
+'    SelectAndSetupRootPath = finalPath
+'    Exit Function
+'
+'EH:
+'    Debug.Print "[SelectRootPath][ERROR] " & Err.Description
+'End Function
+'
+'Public Sub SaveProjectPath(wb As Workbook, path As String)
+'    On Error GoTo EH
+'    ' Assumes modRibbon exists as per original code
+'    modRibbon.SaveWorkbookValue wb, WORKBOOK_PATH_NAME, path
+'    Exit Sub
+'EH:
+'    Debug.Print "[SaveProjectPath][ERROR] " & Err.Description
+'End Sub
+'
+'
+'' ==============================================================
+'' STEP 2 - BUILD FOLDER TREE
+'' ==============================================================
+'
+'Public Sub BuildProjectDirectories(fso As Object, rootPath As String)
+'    On Error GoTo EH
+'
+'    Dim folder As Variant
+'    Dim subFolders As Variant: subFolders = Array("AddIn", "Archive", "Python", "Temp", "userScripts")
+'
+'    For Each folder In subFolders
+'        Dim full As String: full = rootPath & Application.PathSeparator & folder
+'        If Not fso.FolderExists(full) Then fso.CreateFolder full
+'    Next folder
+'
+'    Dim venvPath As String
+'    venvPath = rootPath & "\Python\.venv"
+'    If Not fso.FolderExists(venvPath) Then fso.CreateFolder venvPath
+'
+'    Dim subSub As Variant
+'    Dim subSubFolders As Variant: subSubFolders = Array("assets", "lists", "tables", "values")
+'
+'    For Each subSub In subSubFolders
+'        Dim path2 As String
+'        path2 = rootPath & "\Temp\" & subSub
+'        If Not fso.FolderExists(path2) Then fso.CreateFolder path2
+'    Next subSub
+'
 '    Exit Sub
 '
 'EH:
-'    Debug.Print "Pip Error: " & Err.Description
+'    Debug.Print "[BuildDirs][ERROR] " & Err.Description
 'End Sub
 '
-'' ==============================================================================
-'' PART 5: VERSIONING HELPERS (METADATA)
-'' ==============================================================================
 '
-'' GETTER: Reads version from Document Properties (No hardcoded constant!)
-'Public Function GetAddinVersion() As String
-'    GetAddinVersion = GetAddinVersionFromFile(ThisWorkbook)
-'End Function
+'' ==============================================================
+'' STEP 3 - SAVE HOST AS XLSM
+'' ==============================================================
 '
-'Public Function GetAddinVersionFromFile(wb As Workbook) As String
-'    On Error Resume Next
-'    Dim v As String
-'    v = wb.CustomDocumentProperties(PROPERTY_VERSION_TAG).value
-'    If v = "" Then v = "0.0.0"
-'    GetAddinVersionFromFile = v
-'    On Error GoTo 0
-'End Function
+'Public Function SaveHostAsXLSM(wb As Workbook, rootPath As String) As Boolean
+'    On Error GoTo EH
 '
-'' SETTER: Run this manually (Immediate Window) to stamp a new version
-'Public Sub SetAddinVersion(NewVersion As String)
-'    Dim props As DocumentProperties
-'    Set props = ThisWorkbook.CustomDocumentProperties
-'    On Error Resume Next
-'    props(PROPERTY_VERSION_TAG).value = NewVersion
-'    If Err.Number <> 0 Then
-'        props.Add name:=PROPERTY_VERSION_TAG, LinkToContent:=False, _
-'                  Type:=msoPropertyTypeString, value:=NewVersion
-'    End If
-'    If Not ThisWorkbook.ReadOnly Then ThisWorkbook.Save
-'    Debug.Print "Version Stamped: " & NewVersion
-'End Sub
+'    ' Handle unsaved workbook names
+'    Dim baseName As String
+'    Dim dotIndex As Long
+'    dotIndex = InStrRev(wb.name, ".")
 '
-'' READ/WRITE to User Workbook (Named Range)
-'Private Function GetStoredProjectVersion(wb As Workbook) As String
-'    On Error Resume Next
-'    Dim s As String
-'    s = wb.Names(WORKBOOK_VERSION_TAG).RefersTo
-'    s = Replace(Replace(s, "=", ""), """", "")
-'    GetStoredProjectVersion = s
-'End Function
-'
-'Private Sub SetStoredProjectVersion(wb As Workbook, ver As String)
-'    On Error Resume Next
-'    wb.Names(WORKBOOK_VERSION_TAG).Delete
-'    wb.Names.Add name:=WORKBOOK_VERSION_TAG, RefersTo:="=""" & ver & """"
-'End Sub
-'
-'' ==============================================================================
-'' PART 6: UTILITIES & UI
-'' ==============================================================================
-'
-'Private Function VersionToNumber(v As String) As Double
-'    Dim p() As String: p = Split(v, ".")
-'    Dim n As Double
-'    If UBound(p) >= 0 Then n = n + CDbl(p(0)) * 10000
-'    If UBound(p) >= 1 Then n = n + CDbl(p(1)) * 100
-'    If UBound(p) >= 2 Then n = n + CDbl(p(2))
-'    VersionToNumber = n
-'End Function
-'
-'Private Sub InitProgressBar()
-'    On Error Resume Next
-'    Set CurrentProgressForm = New ufProgress
-'    CurrentProgressForm.lblBar.Width = 0
-'    CurrentProgressForm.Show vbModeless
-'    DoEvents
-'End Sub
-'
-'Private Sub UpdateProgress(pct As Double, msg As String)
-'    If CurrentProgressForm Is Nothing Then Exit Sub
-'    CurrentProgressForm.lblStatus.Caption = msg
-'    Dim w As Double: w = CurrentProgressForm.fraBackground.InsideWidth
-'    If pct > 1 Then pct = 1
-'    CurrentProgressForm.lblBar.Width = w * pct
-'    CurrentProgressForm.Repaint
-'    DoEvents
-'End Sub
-'
-'Private Sub CloseProgressBar()
-'    On Error Resume Next
-'    Unload CurrentProgressForm
-'    Set CurrentProgressForm = Nothing
-'End Sub
-'
-'Private Sub EnsureFolderExists(fso As Object, filePath As String)
-'    Dim p As String: p = fso.GetParentFolderName(filePath)
-'    If Not fso.FolderExists(p) Then CreateFoldersRecursive fso, p
-'End Sub
-'
-'Private Sub CreateFoldersRecursive(fso As Object, folderPath As String)
-'    If Not fso.FolderExists(fso.GetParentFolderName(folderPath)) Then
-'        CreateFoldersRecursive fso, fso.GetParentFolderName(folderPath)
-'    End If
-'    If Not fso.FolderExists(folderPath) Then fso.CreateFolder folderPath
-'End Sub
-'
-'Private Sub WriteBinaryFile(pth As String, dat() As Byte)
-'    Dim s As Object: Set s = CreateObject("ADODB.Stream")
-'    s.Type = 1: s.Open: s.Write dat: s.SaveToFile pth, 2: s.Close
-'End Sub
-'
-'Private Function Base64ToBinary(s As String) As Byte()
-'    Dim xml As Object: Set xml = CreateObject("MSXML2.DOMDocument")
-'    Dim el As Object: Set el = xml.createElement("b64")
-'    el.DataType = "bin.base64": el.text = s
-'    Base64ToBinary = el.nodeTypedValue
-'End Function
-'
-'Private Function BuildPathKey(folderPart As String, filePart As String) As String
-'    Dim s As String: s = folderPart
-'    If right(s, 1) <> "\" And Len(s) > 0 Then s = s & "\"
-'    s = s & filePart
-'    BuildPathKey = UCase(s)
-'End Function
-'
-'Private Function GetRelativePath(fullPath As String, rootPath As String) As String
-'    If InStr(1, fullPath, rootPath, vbTextCompare) = 1 Then
-'        Dim s As String
-'        s = Mid(fullPath, Len(rootPath) + 1)
-'        If Left(s, 1) = "\" Then s = Mid(s, 2)
-'        GetRelativePath = UCase(s)
+'    If dotIndex > 0 Then
+'        baseName = Left$(wb.name, dotIndex - 1)
 '    Else
-'        GetRelativePath = ""
+'        baseName = wb.name
+'    End If
+'
+'    Dim targetPath As String
+'    targetPath = rootPath & "\" & baseName & ".xlsm"
+'
+'    ' Check if already saved in correct location
+'    If wb.path = rootPath And LCase$(right$(wb.name, 5)) = ".xlsm" Then
+'        SaveHostAsXLSM = True
+'        Exit Function
+'    End If
+'
+'    Application.DisplayAlerts = False
+'    wb.SaveAs fileName:=targetPath, FileFormat:=xlOpenXMLWorkbookMacroEnabled
+'    Application.DisplayAlerts = True
+'
+'    SaveHostAsXLSM = True
+'    Exit Function
+'EH:
+'    Application.DisplayAlerts = True
+'    Debug.Print "[SaveHostAsXLSM] Error: " & Err.Description
+'    SaveHostAsXLSM = False
+'End Function
+'
+'
+'' ==============================================================
+'' STEP 4 - PYTHON VENV
+'' ==============================================================
+'
+'Public Function CreatePythonVenv(fso As Object, rootPath As String) As Boolean
+'    On Error GoTo EH
+'
+'    Dim venvPath As String
+'    venvPath = rootPath & "\Python\.venv"
+'
+'    Dim cmd As String
+'    ' Note: Requires 'python' to be in system PATH.
+'    cmd = "python.exe -m venv """ & venvPath & """"
+'
+'    Dim sh As Object: Set sh = CreateObject("WScript.Shell")
+'    sh.Run "cmd /c " & cmd, 0, True
+'
+'    CreatePythonVenv = fso.FolderExists(venvPath & "\Lib")
+'    Exit Function
+'
+'EH:
+'    CreatePythonVenv = False
+'End Function
+'
+'
+'' ==============================================================
+'' STEP 5 - REAL RESOURCE EXTRACTION
+'' ==============================================================
+'
+'Public Sub ExtractResources(fso As Object, rootPath As String)
+'    On Error GoTo EH
+'
+'    ' -------------------------------------------------------------
+'    ' Source: ThisWorkbook (The AddIn containing the embedded files)
+'    ' -------------------------------------------------------------
+'    Dim wbSource As Workbook
+'    Set wbSource = ThisWorkbook
+'
+'    Dim wsStore As Worksheet
+'    On Error Resume Next
+'    Set wsStore = wbSource.Worksheets(EMBED_SHEET_NAME)
+'    On Error GoTo EH
+'
+'    If wsStore Is Nothing Then
+'        Debug.Print "[Step5] No EmbeddedStore sheet found in " & wbSource.name
+'        Exit Sub
+'    End If
+'
+'    Debug.Print "[Step5] Extracting Embedded Resources..."
+'
+'    ' CORRECTION 1: Extract to Root, not AddIn folder
+'    Dim outFolder As String
+'    outFolder = rootPath
+'
+'    ' Ensure trailing slash
+'    If right$(outFolder, 1) <> "\" Then outFolder = outFolder & "\"
+'
+'    ' CORRECTION 2: Removed DeleteExtractedResources
+'    ' Since we are extracting to Root, we rely on WriteBinaryFile's
+'    ' overwrite capability rather than wiping the folder.
+'
+'    ' 3. Extract using verified logic
+'    ExtractEmbeddedStoreSheet wsStore, outFolder
+'
+'    Debug.Print "[Step5] Extraction completed into: " & outFolder
+'    Exit Sub
+'
+'EH:
+'    Debug.Print "[Step5][ERROR] " & Err.Description
+'End Sub
+'
+'Private Sub ExtractEmbeddedStoreSheet(wsStore As Worksheet, outRoot As String)
+'    Dim lastRow As Long
+'    Dim r As Long
+'
+'    Dim fileMap As Object
+'    Dim fileKey As String
+'    Dim fname As String
+'    Dim rel As String
+'    Dim chunkIndex As Long
+'    Dim b64 As String
+'
+'    lastRow = wsStore.Cells(wsStore.rows.count, "A").End(xlUp).Row
+'    If lastRow < 2 Then Exit Sub
+'
+'    Set fileMap = CreateObject("Scripting.Dictionary")
+'
+'    ' --- PASS 1: MAP CHUNKS ---
+'    For r = 2 To lastRow
+'        fname = CStr(wsStore.Cells(r, COL_FILENAME).value)
+'        rel = CStr(wsStore.Cells(r, COL_RELPATH).value)
+'
+'        If Len(fname) > 0 Or Len(rel) > 0 Then
+'            fileKey = rel & "|" & fname
+'
+'            If Not fileMap.Exists(fileKey) Then
+'                fileMap.Add fileKey, CreateObject("Scripting.Dictionary")
+'            End If
+'
+'            chunkIndex = CLng(wsStore.Cells(r, COL_CHUNKINDEX).value)
+'            b64 = CStr(wsStore.Cells(r, COL_BASE64).value)
+'
+'            fileMap(fileKey)(chunkIndex) = b64
+'        End If
+'    Next r
+'
+'    ' --- PASS 2: REBUILD AND WRITE ---
+'    Dim k As Variant
+'    For Each k In fileMap.keys
+'        Dim parts() As String
+'        Dim relPath As String
+'        Dim chunksDict As Object
+'        Dim idxs As Variant
+'        Dim i As Long
+'        Dim bigB64 As String
+'        Dim bytes() As Byte
+'        Dim outPath As String
+'
+'        parts = Split(CStr(k), "|")
+'        relPath = parts(0)
+'
+'        Set chunksDict = fileMap(k)
+'        idxs = chunksDict.keys
+'
+'        ' Sort chunks numerically
+'        SortVariantNumeric idxs
+'
+'        bigB64 = ""
+'        For i = LBound(idxs) To UBound(idxs)
+'            bigB64 = bigB64 & chunksDict(idxs(i))
+'        Next i
+'
+'        ' Decode and Write
+'        bytes = Base64ToBinary(bigB64)
+'        outPath = outRoot & relPath
+'
+'        EnsureFolderExists outPath
+'        WriteBinaryFile outPath, bytes
+'    Next k
+'End Sub
+'
+'
+'' ==============================================================
+'' STEP 6 - PIP INSTALL (DEBUGGING MODE)
+'' ==============================================================
+'
+'Private Sub install_pip_Packages(targetPath As String)
+'    Dim venvPy As String
+'    Dim reqFile As String
+'    Dim cmd As String
+'    Dim sh As Object
+'
+'    ' REMOVED: Dependency on HostManager
+'    ' Dim wb As Workbook
+'    ' Set wb = HostManager_GetCurrentWorkbook()
+'
+'    ' LOGIC: Use the explicitly passed path (hostPath)
+'    ' This guarantees we install into the folder we just created/saved to.
+'
+'    ' Construct Paths using targetPath
+'    venvPy = JoinPath(targetPath, "Python\.venv\Scripts\python.exe")
+'    reqFile = JoinPath(targetPath, "Python\Requirements.txt")
+'
+'    ' Verify files exist before trying to run
+'    If Len(Dir$(venvPy, vbNormal)) = 0 Then
+'        Debug.Print "[Step 6] Error: Python executable not found at " & venvPy
+'        Exit Sub
+'    End If
+'    If Len(Dir$(reqFile, vbNormal)) = 0 Then
+'        Debug.Print "[Step 6] Error: Requirements file not found at " & reqFile
+'        Exit Sub
+'    End If
+'
+'    ' cmd /c closes the window when done (change to /k to keep open for debug)
+'    cmd = "cmd /c """"" & venvPy & """ -m pip install -r """ & reqFile & """ --no-input"""
+'
+'    Debug.Print "[Step 6] Running PIP Install..."
+'    Debug.Print "[Step 6] Target VENV: " & venvPy
+'
+'    Set sh = CreateObject("WScript.Shell")
+'    sh.Run cmd, 1, True
+'
+'    Debug.Print "[Step 6] PIP Install command returned."
+'End Sub
+'
+'' ==============================================================
+'' UTILITIES
+'' ==============================================================
+'
+'Private Sub SortVariantNumeric(ByRef a As Variant)
+'    Dim i As Long, j As Long, tmp As Variant
+'
+'    If IsEmpty(a) Then Exit Sub
+'    If UBound(a) <= LBound(a) Then Exit Sub
+'
+'    For i = LBound(a) To UBound(a) - 1
+'        For j = i + 1 To UBound(a)
+'            If CLng(a(j)) < CLng(a(i)) Then
+'                tmp = a(i): a(i) = a(j): a(j) = tmp
+'            End If
+'        Next j
+'    Next i
+'End Sub
+'
+'Private Function Base64ToBinary(b64 As String) As Byte()
+'    Dim xml As Object: Set xml = CreateObject("MSXML2.DOMDocument.6.0")
+'    Dim node As Object: Set node = xml.createElement("b64")
+'    node.DataType = "bin.base64"
+'    node.text = b64
+'    Base64ToBinary = node.nodeTypedValue
+'End Function
+'
+'Private Sub EnsureFolderExists(fullPath As String)
+'    Dim folder As String
+'    folder = Left$(fullPath, InStrRev(fullPath, "\") - 1)
+'    If Len(folder) = 0 Then Exit Sub
+'    If Len(Dir(folder, vbDirectory)) = 0 Then CreateFoldersRecursive folder
+'End Sub
+'
+'Private Sub CreateFoldersRecursive(folderPath As String)
+'    Dim parts As Variant: parts = Split(folderPath, "\")
+'    Dim build As String: build = parts(0) & "\"
+'    Dim i As Long
+'    For i = 1 To UBound(parts)
+'        build = build & parts(i) & "\"
+'        If Len(Dir(build, vbDirectory)) = 0 Then MkDir build
+'    Next i
+'End Sub
+'
+'Private Sub WriteBinaryFile(path As String, bytes() As Byte)
+'    Dim stm As Object
+'    Set stm = CreateObject("ADODB.Stream")
+'    stm.Type = 1 ' adTypeBinary
+'    stm.Open
+'    stm.Write bytes
+'    stm.SaveToFile path, 2 ' adSaveCreateOverWrite
+'    stm.Close
+'End Sub
+'
+''Private Sub DeleteRecursiveFilesOnly(folder As Object)
+''    Dim f As Object
+''    For Each f In folder.files
+''        On Error Resume Next
+''        f.Delete True
+''    Next f
+''    Dim subf As Object
+''    For Each subf In folder.subFolders
+''        DeleteRecursiveFilesOnly subf
+''    Next subf
+''End Sub
+'
+'Private Function JoinPath(base As String, leaf As String) As String
+'    If right$(base, 1) = "\" Then
+'        JoinPath = base & leaf
+'    Else
+'        JoinPath = base & "\" & leaf
 '    End If
 'End Function
 '
-'Private Function Quote(s As String) As String
-'    Quote = """" & s & """"
-'End Function
-'
-'Private Sub RunShellWait(cmd As String)
-'    CreateObject("WScript.Shell").Run cmd, 0, True
-'End Sub
-'
-'' Mock HostManager (Replace with actual)
-'Private Function HostManager_GetCurrentWorkbook() As Workbook
-'    Set HostManager_GetCurrentWorkbook = ActiveWorkbook
-'End Function
-'
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
 Option Explicit
 
-' ==============================================================================
-' CONFIGURATION & CONSTANTS
-' ==============================================================================
+' STATUS MESSAGE STORAGE
+Public PyExcelSetup_LastMessage As String
 
-' STORAGE SETTINGS
+' PROGRESS BAR GLOBAL
+Public CurrentProgressForm As Object
+
+' CONSTANTS
+Private Const WORKBOOK_PATH_NAME As String = "ProjectRootPath"
 Private Const EMBED_SHEET_NAME As String = "EmbeddedStore"
-Private Const WORKBOOK_VERSION_TAG As String = "PyExcel_ProjectVersion"
-Private Const WORKBOOK_DECLINED_TAG As String = "PyExcel_UpdateDeclined"
-Private Const PROPERTY_VERSION_TAG As String = "PyExcel_Version"
 
-' UPDATE STATE (Module-level flags for ribbon indicator)
-Public UpdateAvailable As Boolean
-Public AvailableVersion As String
-
-' FOLDER NAMES (SAFETY ZONES)
-Private Const FOLDER_PYTHON As String = "Python"
-Private Const FOLDER_VENV As String = ".venv"
-Private Const FOLDER_USER_SCRIPTS As String = "userScripts"
-
-' COLUMN MAPPING (In EmbeddedStore)
+' COLUMNS IN EMBEDDED STORE
 Private Const COL_FILENAME As Long = 1
 Private Const COL_CHUNKINDEX As Long = 2
 Private Const COL_BASE64 As Long = 3
 Private Const COL_RELPATH As Long = 4
 
-' PROGRESS BAR GLOBAL
-Public CurrentProgressForm As Object
-
-' SESSION FLAG (Prevent repeated version checks)
-Private VersionCheckedThisSession As Object
-
-' ==============================================================================
-' PART 1: ENTRY POINTS (VERSION CHECK & UPDATE TRIGGER)
-' ==============================================================================
-
-' ENTRY 1: AUTOMATIC CHECK (Call this on Workbook Open)
-' Now sets UpdateAvailable flag instead of showing blocking MsgBox
-Public Sub VerifyProjectVersion()
-    On Error GoTo EH
-
-    Dim wb As Workbook
-    Dim projectVersion As String
-    Dim addinVersion As String
-    Dim declinedVersion As String
-
-    Set wb = HostManager_GetCurrentWorkbook()
-    If wb Is Nothing Then Exit Sub
-
-    ' 0. Check if already verified this session (prevent repeated checks)
-    If WasVersionCheckedThisSession(wb) Then Exit Sub
-    MarkVersionCheckedThisSession wb
-
-    ' 1. Get Versions
-    projectVersion = GetStoredProjectVersion(wb)
-    addinVersion = GetAddinVersion()
-    declinedVersion = GetDeclinedVersion(wb)
-
-    ' 2. Up to date - nothing to do
-    If projectVersion = addinVersion Then
-        UpdateAvailable = False
-        AvailableVersion = ""
-        RefreshEnableButton
-        Exit Sub
-    End If
-
-    ' 3. Handle missing version (first time after enable)
-    If projectVersion = "" Then
-        SetStoredProjectVersion wb, addinVersion
-        Debug.Print "[VerifyProjectVersion] Auto-stamped version " & addinVersion & " for " & wb.name
-        UpdateAvailable = False
-        AvailableVersion = ""
-        RefreshEnableButton
-        Exit Sub
-    End If
-
-    ' 4. Check if update available (addin is newer than project)
-    If VersionToNumber(addinVersion) > VersionToNumber(projectVersion) Then
-        ' Check if user already declined THIS version
-        If declinedVersion = addinVersion Then
-            Debug.Print "[VerifyProjectVersion] User declined version " & addinVersion
-            UpdateAvailable = False
-            AvailableVersion = ""
-            RefreshEnableButton
-            Exit Sub
-        End If
-
-        ' Update is available! Set flag for ribbon indicator
-        UpdateAvailable = True
-        AvailableVersion = addinVersion
-        Debug.Print "[VerifyProjectVersion] Update available: " & projectVersion & " -> " & addinVersion
-        RefreshEnableButton
-    Else
-        ' Project version >= addin version (downgrade scenario), do nothing
-        UpdateAvailable = False
-        AvailableVersion = ""
-        RefreshEnableButton
-    End If
-    Exit Sub
-
-EH:
-    Debug.Print "[VerifyProjectVersion] ERROR: " & Err.Description
-End Sub
-
-' ENTRY 2: AUTOMATIC UPDATE (Uses currently loaded addin - ThisWorkbook)
-Public Sub RunUpdateFromCurrentAddin()
-    On Error GoTo EH
-
-    Dim fso As Object
-    Dim targetPath As String
-
-    ' 1. VALIDATE CONTEXT
-    Dim wbHost As Workbook
-    Set wbHost = HostManager_GetCurrentWorkbook()
-    If wbHost Is Nothing Then
-        MsgBox "Please open your project workbook first.", vbExclamation
-        Exit Sub
-    End If
-    targetPath = wbHost.path
-
-    ' 2. EXECUTE UPDATE FROM ThisWorkbook (the active addin)
-    InitProgressBar
-    Set fso = CreateObject("Scripting.FileSystemObject")
-
-    UpdateProgress 0.1, "Analyzing current addin..."
-    Application.ScreenUpdating = False
-
-    ' A. RUN SMART CLEANER (Deletes obsolete files safely)
-    UpdateProgress 0.2, "Cleaning obsolete files..."
-    SmartCleanFolder fso, targetPath, ThisWorkbook
-
-    ' B. EXTRACT RESOURCES FROM ThisWorkbook
-    UpdateProgress 0.4, "Installing new files..."
-    ExtractResources fso, targetPath, ThisWorkbook
-
-    Application.ScreenUpdating = True
-
-    ' C. UPDATE PYTHON (Pip Install + Freeze)
-    UpdateProgress 0.7, "Updating Python libraries..."
-    UpdatePythonDependencies targetPath
-
-    ' D. UPDATE PROJECT TAG
-    Dim newVer As String
-    newVer = GetAddinVersion() ' Get version from ThisWorkbook
-    SetStoredProjectVersion wbHost, newVer
-
-    UpdateProgress 1#, "Update Complete!"
-    Application.Wait Now + TimeValue("0:00:01")
-    CloseProgressBar
-
-    MsgBox "Project successfully updated to version " & newVer, vbInformation
-    Exit Sub
-
-EH:
-    Application.ScreenUpdating = True
-    CloseProgressBar
-    MsgBox "Update Failed: " & Err.Description, vbCritical
-End Sub
-
-' ENTRY 3: MANUAL UPDATE (Call this from Ribbon - prompts for external file)
-Public Sub RunUpdateFromExternalFile()
-    On Error GoTo EH
-    
-    Dim wbCurrent As Workbook: Set wbCurrent = ThisWorkbook
-    Dim wbNew As Workbook
-    Dim fso As Object
-    Dim targetPath As String
-    Dim newXlamPath As String
-    Dim fd As FileDialog
-    
-    ' 1. VALIDATE CONTEXT
-    Dim wbHost As Workbook
-    Set wbHost = HostManager_GetCurrentWorkbook()
-    If wbHost Is Nothing Then
-        MsgBox "Please open your project workbook first.", vbExclamation
-        Exit Sub
-    End If
-    targetPath = wbHost.path
-    
-    ' 2. SELECT UPDATE FILE
-    Set fd = Application.FileDialog(msoFileDialogFilePicker)
-    With fd
-        .Title = "Select the NEW version of the Add-in (XLAM)"
-        .Filters.Clear
-        .Filters.Add "Excel Add-in", "*.xlam"
-        .AllowMultiSelect = False
-        If .Show <> -1 Then Exit Sub
-        newXlamPath = .SelectedItems(1)
-    End With
-    
-    ' Safety: Prevent circular update
-    If LCase(newXlamPath) = LCase(wbCurrent.FullName) Then
-        MsgBox "You selected the currently installed file. Please select the downloaded update file.", vbExclamation
-        Exit Sub
-    End If
-
-    ' 3. EXECUTE UPDATE
-    InitProgressBar
-    Set fso = CreateObject("Scripting.FileSystemObject")
-    
-    UpdateProgress 0.1, "Analyzing new version..."
-    Application.ScreenUpdating = False
-    
-    ' Open source file Read-Only
-    Set wbNew = Workbooks.Open(fileName:=newXlamPath, ReadOnly:=True)
-    
-    ' A. RUN SMART CLEANER (Deletes obsolete files safely)
-    UpdateProgress 0.2, "Cleaning obsolete files..."
-    SmartCleanFolder fso, targetPath, wbNew
-    
-    ' B. EXTRACT RESOURCES
-    UpdateProgress 0.4, "Installing new files..."
-    ExtractResources fso, targetPath, wbNew
-    
-    ' Close the source file immediately
-    Dim newVer As String
-    newVer = GetAddinVersionFromFile(wbNew) ' Grab version before closing
-    wbNew.Close SaveChanges:=False
-    Application.ScreenUpdating = True
-    
-    ' C. UPDATE PYTHON (Pip Install + Freeze)
-    UpdateProgress 0.7, "Updating Python libraries..."
-    UpdatePythonDependencies targetPath
-    
-    ' D. UPDATE PROJECT TAG
-    SetStoredProjectVersion wbHost, newVer
-    
-    UpdateProgress 1#, "Update Complete!"
-    Application.Wait Now + TimeValue("0:00:01")
-    CloseProgressBar
-    
-    MsgBox "Project successfully updated to version " & newVer, vbInformation
-    Exit Sub
-
-EH:
-    Application.ScreenUpdating = True
-    If Not wbNew Is Nothing Then wbNew.Close SaveChanges:=False
-    CloseProgressBar
-    MsgBox "Update Failed: " & Err.Description, vbCritical
-End Sub
-
-
-' ==============================================================================
-' PART 2: SMART CLEANER (SAFETY LOGIC)
-' ==============================================================================
-
-Private Sub SmartCleanFolder(fso As Object, rootPath As String, wbSource As Workbook)
-    ' Only target the Python folder to prevent root accidents
-    Dim pythonPath As String
-    pythonPath = rootPath & "\" & FOLDER_PYTHON
-    
-    If Not fso.FolderExists(pythonPath) Then Exit Sub
-    
-    ' Get Manifest from New XLAM
-    Dim manifest As Object
-    Set manifest = LoadManifest(wbSource)
-    
-    ' Recursively clean
-    CleanRecursive fso, fso.GetFolder(pythonPath), rootPath, manifest
-End Sub
-
-Private Sub CleanRecursive(fso As Object, fldr As Object, rootPath As String, manifest As Object)
-    Dim file As Object
-    Dim subFldr As Object
-    Dim fName As String
-    Dim relPath As String
-    
-    ' A. CHECK FILES
-    For Each file In fldr.files
-        relPath = GetRelativePath(file.path, rootPath)
-        
-        ' IF not in Manifest AND not in Safe Zone -> DELETE
-        If Not manifest.Exists(relPath) Then
-             ' Double check we are deep enough (paranoid safety)
-             If InStr(relPath, "\") > 0 Then
-                Debug.Print "[Cleaner] Deleting Zombie: " & relPath
-                On Error Resume Next
-                file.Delete True
-                On Error GoTo 0
-             End If
-        End If
-    Next file
-    
-    ' B. RECURSE SUBFOLDERS
-    For Each subFldr In fldr.subFolders
-        fName = UCase(subFldr.name)
-        
-        ' SAFETY: DO NOT ENTER THESE FOLDERS
-        If fName = UCase(FOLDER_VENV) Then
-            ' Skip .venv
-        ElseIf fName = UCase(FOLDER_USER_SCRIPTS) Then
-            ' Skip userScripts
-        ElseIf fName = "__PYCACHE__" Then
-            ' Nuke Pycache
-            On Error Resume Next
-            subFldr.Delete True
-            On Error GoTo 0
-        Else
-            ' Recurse
-            CleanRecursive fso, subFldr, rootPath, manifest
-            
-            ' Optional: Remove empty folders
-            If subFldr.files.count = 0 And subFldr.subFolders.count = 0 Then
-                On Error Resume Next
-                subFldr.Delete True
-                On Error GoTo 0
-            End If
-        End If
-    Next subFldr
-End Sub
-
-Private Function LoadManifest(wb As Workbook) As Object
-    Dim d As Object: Set d = CreateObject("Scripting.Dictionary")
-    Dim ws As Worksheet
-    On Error Resume Next
-    Set ws = wb.Worksheets(EMBED_SHEET_NAME)
-    On Error GoTo 0
-    
-    If ws Is Nothing Then Set LoadManifest = d: Exit Function
-    
-    Dim arr As Variant
-    Dim r As Long, lastRow As Long
-    lastRow = ws.Cells(ws.rows.count, COL_FILENAME).End(xlUp).Row
-    If lastRow < 2 Then Set LoadManifest = d: Exit Function
-    
-    arr = ws.Range(ws.Cells(2, 1), ws.Cells(lastRow, 4)).value
-    
-    Dim key As String
-    For r = 1 To UBound(arr, 1)
-        key = BuildPathKey(CStr(arr(r, COL_RELPATH)), CStr(arr(r, COL_FILENAME)))
-        d(key) = True
-    Next r
-    Set LoadManifest = d
-End Function
-
-' ==============================================================================
-' PART 3: EXTRACTION LOGIC
-' ==============================================================================
-
-Public Sub ExtractResources(fso As Object, rootPath As String, wbSource As Workbook)
-    Dim wsStore As Worksheet
-    Set wsStore = wbSource.Worksheets(EMBED_SHEET_NAME)
-    
-    ' 1. BUILD MAP
-    Dim fileMap As Object: Set fileMap = CreateObject("Scripting.Dictionary")
-    Dim lastRow As Long: lastRow = wsStore.Cells(wsStore.rows.count, COL_FILENAME).End(xlUp).Row
-    Dim arr As Variant: arr = wsStore.Range(wsStore.Cells(2, 1), wsStore.Cells(lastRow, 4)).value
-    
-    Dim r As Long, key As String, b64 As String, chunkIdx As Long
-    
-    For r = 1 To UBound(arr, 1)
-        key = arr(r, COL_RELPATH) & "|" & arr(r, COL_FILENAME)
-        If Not fileMap.Exists(key) Then fileMap.Add key, CreateObject("Scripting.Dictionary")
-        chunkIdx = CLng(arr(r, COL_CHUNKINDEX))
-        b64 = CStr(arr(r, COL_BASE64))
-        fileMap(key)(chunkIdx) = b64
-    Next r
-    
-    ' 2. WRITE FILES
-    Dim k As Variant, parts() As String, fullPath As String
-    Dim i As Long, bigB64 As String, bytes() As Byte, chunks As Object
-    
-    For Each k In fileMap.keys
-        parts = Split(k, "|")
-        fullPath = rootPath & "\" & parts(0) & "\" & parts(1)
-        fullPath = Replace(fullPath, "\\", "\")
-        
-        EnsureFolderExists fso, fullPath
-        
-        Set chunks = fileMap(k)
-        bigB64 = ""
-        ' Assemble chunks
-        For i = 0 To chunks.count - 1
-            If chunks.Exists(CLng(i)) Then bigB64 = bigB64 & chunks(i)
-        Next i
-        
-        bytes = Base64ToBinary(bigB64)
-        WriteBinaryFile fullPath, bytes
-    Next k
-End Sub
-
-' ==============================================================================
-' PART 4: PYTHON DEPENDENCY MANAGER
-' ==============================================================================
-
-Public Sub UpdatePythonDependencies(rootPath As String)
-    On Error GoTo EH
-    Dim venvPy As String, reqFile As String, uninstallFile As String
-    Dim snapFile As String, cmd As String
-    Dim fso As Object
-    
-    Set fso = CreateObject("Scripting.FileSystemObject")
-    
-    ' Define Paths
-    venvPy = Quote(rootPath & "\Python\.venv\Scripts\python.exe")
-    reqFile = Quote(rootPath & "\Python\Requirements.txt")
-    uninstallFile = rootPath & "\Python\Uninstall.txt" ' Keep unquoted for FSO check
-    snapFile = Quote(rootPath & "\Python\User_Environment_Snapshot.txt")
-    
-    ' ---------------------------------------------------------
-    ' STEP 0: EXPLICIT UNINSTALL (The Cleanup Phase)
-    ' ---------------------------------------------------------
-    ' Only run if file exists AND has content (> 0 bytes)
-    If fso.FileExists(uninstallFile) Then
-        If fso.GetFile(uninstallFile).Size > 0 Then
-            UpdateProgress 0.65, "Removing deprecated libraries..."
-            cmd = "cmd /c " & venvPy & " -m pip uninstall -r " & Quote(uninstallFile) & " -y"
-            RunShellWait cmd
-        End If
-        
-        ' Optional: Delete it afterwards regardless of size
-        ' On Error Resume Next
-        ' fso.DeleteFile uninstallFile
-        ' On Error GoTo EH
-    End If
-
-    ' ---------------------------------------------------------
-    ' STEP 1: PIP INSTALL (The Upgrade Phase)
-    ' ---------------------------------------------------------
-    If fso.FileExists(rootPath & "\Python\Requirements.txt") Then
-        ' Note: We run this AFTER uninstalling to ensure if a package
-        ' is re-required by a dependency, it gets pulled back in.
-        cmd = "cmd /c " & venvPy & " -m pip install -r " & reqFile & " --upgrade --no-input"
-        RunShellWait cmd
-    End If
-    
-    ' ---------------------------------------------------------
-    ' STEP 2: PIP FREEZE (Snapshot)
-    ' ---------------------------------------------------------
-    cmd = "cmd /c " & venvPy & " -m pip freeze > " & snapFile
-    RunShellWait cmd
-    Exit Sub
-
-EH:
-    Debug.Print "Pip Error: " & Err.Description
-End Sub
-
-' ==============================================================================
-' PART 5: VERSIONING HELPERS (METADATA)
-' ==============================================================================
-
-' GETTER: Reads version from Document Properties (No hardcoded constant!)
-Public Function GetAddinVersion() As String
-    GetAddinVersion = GetAddinVersionFromFile(ThisWorkbook)
-End Function
-
-Public Function GetAddinVersionFromFile(wb As Workbook) As String
-    On Error Resume Next
-    Dim v As String
-    v = wb.CustomDocumentProperties(PROPERTY_VERSION_TAG).value
-    If v = "" Then v = "0.0.0"
-    GetAddinVersionFromFile = v
-    On Error GoTo 0
-End Function
-
-' SETTER: Run this manually (Immediate Window) to stamp a new version
-Public Sub SetAddinVersion(NewVersion As String)
-    Dim props As DocumentProperties
-    Set props = ThisWorkbook.CustomDocumentProperties
-    On Error Resume Next
-    props(PROPERTY_VERSION_TAG).value = NewVersion
-    If Err.Number <> 0 Then
-        props.Add name:=PROPERTY_VERSION_TAG, LinkToContent:=False, _
-                  Type:=msoPropertyTypeString, value:=NewVersion
-    End If
-    If Not ThisWorkbook.ReadOnly Then ThisWorkbook.Save
-    Debug.Print "Version Stamped: " & NewVersion
-End Sub
-
-' READ/WRITE to User Workbook (Named Range)
-Private Function GetStoredProjectVersion(wb As Workbook) As String
-    On Error Resume Next
-    Dim s As String
-    s = wb.Names(WORKBOOK_VERSION_TAG).RefersTo
-    s = Replace(Replace(s, "=", ""), """", "")
-    GetStoredProjectVersion = s
-End Function
-
-Public Sub SetStoredProjectVersion(wb As Workbook, ver As String)
-    On Error Resume Next
-    wb.Names(WORKBOOK_VERSION_TAG).Delete
-    wb.Names.Add name:=WORKBOOK_VERSION_TAG, RefersTo:="=""" & ver & """"
-
-    ' Save the workbook to persist the version tag
-    If Not wb.ReadOnly Then
-        wb.Save
-    End If
-End Sub
-
-' ==============================================================================
-' PART 5B: DECLINED VERSION HELPERS
-' ==============================================================================
-
-' Read the declined version from workbook Named Range
-Private Function GetDeclinedVersion(wb As Workbook) As String
-    On Error Resume Next
-    Dim s As String
-    s = wb.Names(WORKBOOK_DECLINED_TAG).RefersTo
-    s = Replace(Replace(s, "=", ""), """", "")
-    GetDeclinedVersion = s
-End Function
-
-' Write the declined version to workbook Named Range
-Public Sub SetDeclinedVersion(wb As Workbook, ver As String)
-    On Error Resume Next
-    wb.Names(WORKBOOK_DECLINED_TAG).Delete
-    If Len(ver) > 0 Then
-        wb.Names.Add name:=WORKBOOK_DECLINED_TAG, RefersTo:="=""" & ver & """"
-    End If
-    If Not wb.ReadOnly Then wb.Save
-End Sub
-
-' Clear the declined version (called when user manually triggers update)
-Public Sub ClearDeclinedVersion(wb As Workbook)
-    On Error Resume Next
-    wb.Names(WORKBOOK_DECLINED_TAG).Delete
-End Sub
-
-' Refresh the Enable button in ribbon to show update state
-Private Sub RefreshEnableButton()
-    On Error Resume Next
-    If Not rib Is Nothing Then rib.InvalidateControl "btnEnablePyExcel"
-End Sub
-
-' ==============================================================================
-' PART 5C: MANUAL UPDATE ENTRY POINTS (Called from Ribbon)
-' ==============================================================================
-
-' ENTRY 4: MANUAL UPDATE FROM RIBBON (User clicks Update Available button)
-Public Sub RunManualUpdate()
-    On Error GoTo EH
-
-    Dim wb As Workbook
-    Set wb = HostManager_GetCurrentWorkbook()
-    If wb Is Nothing Then
-        MsgBox "Please open your project workbook first.", vbExclamation
-        Exit Sub
-    End If
-
-    ' Clear declined flag when user manually requests update
-    ClearDeclinedVersion wb
-
-    ' Run the actual update
-    RunUpdateFromCurrentAddin
-
-    ' Clear update flag after successful update
-    UpdateAvailable = False
-    AvailableVersion = ""
-    RefreshEnableButton
-    Exit Sub
-
-EH:
-    MsgBox "Update failed: " & Err.Description, vbCritical
-End Sub
-
-' ENTRY 5: DISMISS UPDATE (User clicks No to dismiss update prompt)
-Public Sub DismissUpdate()
-    On Error GoTo EH
-
-    Dim wb As Workbook
-    Set wb = HostManager_GetCurrentWorkbook()
-    If wb Is Nothing Then Exit Sub
-
-    ' Store the declined version
-    SetDeclinedVersion wb, GetAddinVersion()
-
-    ' Clear the update flag
-    UpdateAvailable = False
-    AvailableVersion = ""
-    RefreshEnableButton
-
-    Debug.Print "[DismissUpdate] User declined version " & GetAddinVersion()
-    Exit Sub
-
-EH:
-    Debug.Print "[DismissUpdate] ERROR: " & Err.Description
-End Sub
-
-' ==============================================================================
-' PART 6: SESSION FLAG (PREVENT REPEATED CHECKS)
-' ==============================================================================
-
-Private Function GetCheckedSessionDict() As Object
-    If VersionCheckedThisSession Is Nothing Then
-        Set VersionCheckedThisSession = CreateObject("Scripting.Dictionary")
-    End If
-    Set GetCheckedSessionDict = VersionCheckedThisSession
-End Function
-
-Private Function WasVersionCheckedThisSession(wb As Workbook) As Boolean
-    Dim d As Object: Set d = GetCheckedSessionDict()
-    Dim key As String: key = wb.FullName
-    WasVersionCheckedThisSession = d.Exists(key)
-End Function
-
-Private Sub MarkVersionCheckedThisSession(wb As Workbook)
-    Dim d As Object: Set d = GetCheckedSessionDict()
-    Dim key As String: key = wb.FullName
-    If Not d.Exists(key) Then d.Add key, True
-End Sub
-
-' ==============================================================================
-' PART 7: UTILITIES & UI
-' ==============================================================================
-
-Private Function VersionToNumber(v As String) As Double
-    Dim p() As String: p = Split(v, ".")
-    Dim n As Double
-    If UBound(p) >= 0 Then n = n + CDbl(p(0)) * 10000
-    If UBound(p) >= 1 Then n = n + CDbl(p(1)) * 100
-    If UBound(p) >= 2 Then n = n + CDbl(p(2))
-    VersionToNumber = n
-End Function
-
-Private Sub InitProgressBar()
-    On Error Resume Next
+' ==============================================================
+' PROGRESS BAR UTILITIES
+' ==============================================================
+
+Public Sub InitProgressBar()
     Set CurrentProgressForm = New ufProgress
     CurrentProgressForm.lblBar.Width = 0
     CurrentProgressForm.Show vbModeless
     DoEvents
 End Sub
 
-Private Sub UpdateProgress(pct As Double, msg As String)
+Public Sub UpdateProgress(pct As Double, msg As String)
     If CurrentProgressForm Is Nothing Then Exit Sub
+    
+    ' Update Text
     CurrentProgressForm.lblStatus.Caption = msg
-    Dim w As Double: w = CurrentProgressForm.fraBackground.InsideWidth
+    
+    ' Update Bar Width
+    Dim maxWidth As Double
+    ' Use InsideWidth of the container frame
+    maxWidth = CurrentProgressForm.fraBackground.InsideWidth
+    
+    ' Safety cap at 100%
     If pct > 1 Then pct = 1
-    CurrentProgressForm.lblBar.Width = w * pct
+    
+    CurrentProgressForm.lblBar.Width = maxWidth * pct
+    
+    ' Force UI Update
     CurrentProgressForm.Repaint
     DoEvents
 End Sub
 
-Private Sub CloseProgressBar()
+Public Sub CloseProgressBar()
     On Error Resume Next
-    Unload CurrentProgressForm
-    Set CurrentProgressForm = Nothing
-End Sub
-
-Private Sub EnsureFolderExists(fso As Object, filePath As String)
-    Dim p As String: p = fso.GetParentFolderName(filePath)
-    If Not fso.FolderExists(p) Then CreateFoldersRecursive fso, p
-End Sub
-
-Private Sub CreateFoldersRecursive(fso As Object, folderPath As String)
-    If Not fso.FolderExists(fso.GetParentFolderName(folderPath)) Then
-        CreateFoldersRecursive fso, fso.GetParentFolderName(folderPath)
+    If Not CurrentProgressForm Is Nothing Then
+        Unload CurrentProgressForm
+        Set CurrentProgressForm = Nothing
     End If
-    If Not fso.FolderExists(folderPath) Then fso.CreateFolder folderPath
 End Sub
 
-Private Sub WriteBinaryFile(pth As String, dat() As Byte)
-    Dim s As Object: Set s = CreateObject("ADODB.Stream")
-    s.Type = 1: s.Open: s.Write dat: s.SaveToFile pth, 2: s.Close
-End Sub
+' ==============================================================
+' CORE INSTALLATION LOGIC
+' ==============================================================
 
-Private Function Base64ToBinary(s As String) As Byte()
-    Dim xml As Object: Set xml = CreateObject("MSXML2.DOMDocument")
-    Dim el As Object: Set el = xml.createElement("b64")
-    el.DataType = "bin.base64": el.text = s
-    Base64ToBinary = el.nodeTypedValue
+Public Function PyExcelSetup() As Boolean
+    On Error GoTo EH
+
+    Dim wb As Workbook
+    Dim fso As Object
+    Dim hostPath As String
+    Dim userChoice As VbMsgBoxResult
+    
+    Debug.Print "============================================================"
+    Debug.Print "[PyExcelSetup] Initialization started."
+
+    userChoice = MsgBox( _
+        "This installation may take several minutes and requires Python to be installed on this machine." & vbCrLf & vbCrLf & _
+        "Do you want to continue?", _
+        vbYesNo + vbQuestion, _
+        "Confirm Installation" _
+    )
+
+    If userChoice <> vbYes Then
+        PyExcelSetup_LastMessage = "Installation cancelled by user."
+        PyExcelSetup = False
+        Exit Function
+    End If
+
+    Set wb = HostManager_GetCurrentWorkbook()
+    If wb Is Nothing Then
+        PyExcelSetup_LastMessage = "Failure in Step 0: No active workbook context."
+        GoTo Failed
+    End If
+
+    Set fso = CreateObject("Scripting.FileSystemObject")
+
+    hostPath = SelectAndSetupRootPath(wb, fso)
+    If Len(hostPath) = 0 Then
+        PyExcelSetup_LastMessage = "Failure in Step 1: Path selection cancelled or invalid."
+        GoTo Failed
+    End If
+
+    InitProgressBar
+    UpdateProgress 0.1, "Initializing project folders..."
+
+    BuildProjectDirectories fso, hostPath
+    UpdateProgress 0.2, "Folders created."
+
+    UpdateProgress 0.25, "Saving workbook as XLSM..."
+    If Not SaveHostAsXLSM(wb, hostPath) Then
+        PyExcelSetup_LastMessage = "Failure in Step 3: Could not save workbook as XLSM."
+        GoTo Failed
+    End If
+    UpdateProgress 0.3, "Workbook saved."
+
+    UpdateProgress 0.35, "Creating Python Environment (Excel will pause)..."
+    If Not CreatePythonVenv(fso, hostPath) Then
+        PyExcelSetup_LastMessage = "Failure in Step 4: Python venv creation did not complete."
+        GoTo Failed
+    End If
+    UpdateProgress 0.5, "Python Environment Ready."
+
+    UpdateProgress 0.5, "Starting resource extraction..."
+    ExtractResources fso, hostPath
+    UpdateProgress 0.8, "Resources Extracted."
+
+    UpdateProgress 0.85, "Installing Python libraries (Excel will pause)..."
+    install_pip_Packages hostPath
+
+    ' Stamp the current addin version to the workbook
+    UpdateProgress 0.95, "Finalizing setup..."
+    Update.SetStoredProjectVersion wb, Update.GetAddinVersion()
+    Debug.Print "[PyExcelSetup] Version stamped: " & Update.GetAddinVersion()
+
+    UpdateProgress 1#, "Installation Completed!"
+    Application.Wait Now + TimeValue("0:00:01")
+
+    PyExcelSetup_LastMessage = "Installation completed successfully."
+    Debug.Print "[PyExcelSetup] Installation finished."
+    Debug.Print "============================================================"
+
+    CloseProgressBar
+    PyExcelSetup = True
+    Exit Function
+
+Failed:
+    CloseProgressBar
+    If PyExcelSetup_LastMessage = "" Then
+        PyExcelSetup_LastMessage = "Installation terminated due to error/cancellation."
+    End If
+    Debug.Print "[PyExcelSetup] " & PyExcelSetup_LastMessage
+    MsgBox "Setup Failed: " & PyExcelSetup_LastMessage, vbCritical
+    PyExcelSetup = False
+    Exit Function
+
+EH:
+    CloseProgressBar
+    PyExcelSetup_LastMessage = "Fatal error in PyExcelSetup: " & Err.Description
+    Debug.Print "[PyExcelSetup][FATAL ERROR] " & Err.Description
+    Resume Failed
 End Function
 
-Private Function BuildPathKey(folderPart As String, filePart As String) As String
-    Dim s As String: s = folderPart
-    If right(s, 1) <> "\" And Len(s) > 0 Then s = s & "\"
-    s = s & filePart
-    BuildPathKey = UCase(s)
-End Function
 
-Private Function GetRelativePath(fullPath As String, rootPath As String) As String
-    If InStr(1, fullPath, rootPath, vbTextCompare) = 1 Then
-        Dim s As String
-        s = Mid(fullPath, Len(rootPath) + 1)
-        If Left(s, 1) = "\" Then s = Mid(s, 2)
-        GetRelativePath = UCase(s)
+' ==============================================================
+' STEP 1 - PATH SELECTOR
+' ==============================================================
+
+Public Function SelectAndSetupRootPath(wb As Workbook, fso As Object) As String
+    On Error GoTo EH
+
+    Dim fldr As Object
+    Dim defaultPath As String
+    Dim pathChosen As String
+    Dim projectName As String
+    Dim dotIndex As Long
+    Dim finalPath As String
+
+    ' Set default path for folder picker
+    If Len(wb.path) > 0 Then
+        defaultPath = wb.path
     Else
-        GetRelativePath = ""
+        defaultPath = Environ$("USERPROFILE")
+    End If
+
+    ' Always show folder picker - user chooses location manually
+    Set fldr = Application.FileDialog(msoFileDialogFolderPicker)
+    With fldr
+        .Title = "Select Project Root Folder"
+        .InitialFileName = defaultPath
+        If .Show <> -1 Then Exit Function
+        pathChosen = .SelectedItems(1)
+    End With
+
+    ' Extract Project Name from Workbook
+    dotIndex = InStrRev(wb.name, ".")
+    If dotIndex > 0 Then
+        projectName = Left$(wb.name, dotIndex - 1)
+    Else
+        projectName = wb.name
+    End If
+
+    ' Combine paths
+    If right$(pathChosen, 1) <> "\" Then pathChosen = pathChosen & "\"
+    finalPath = pathChosen & projectName
+
+    ' Use PathUtils to create the folder (handles recursive creation safely)
+    Call EnsureFolderExists(finalPath)
+
+    SelectAndSetupRootPath = finalPath
+    Exit Function
+
+EH:
+    Debug.Print "[SelectAndSetupRootPath][ERROR] " & Err.Description
+    SelectAndSetupRootPath = ""
+End Function
+
+
+
+
+' ==============================================================
+' STEP 2 - BUILD FOLDER TREE (USING PATHUTILS)
+' ==============================================================
+
+Public Sub BuildProjectDirectories(fso As Object, rootPath As String)
+    On Error GoTo EH
+
+    ' Main structure - use PathUtils EnsureFolderPath for recursive creation
+    Call EnsureFolderPath(rootPath, "AddIn")
+    Call EnsureFolderPath(rootPath, "Archive")
+    Call EnsureFolderPath(rootPath, "Python")
+    Call EnsureFolderPath(rootPath, "userScripts")
+
+    ' Nested structures - venv path
+    Dim venvPath As String
+    venvPath = rootPath & "\Python\.venv"
+    Call EnsureFolderExists(venvPath)
+
+    ' Temp subfolders
+    Dim subSub As Variant
+    Dim subSubFolders As Variant: subSubFolders = Array("assets", "lists", "tables", "values")
+
+    For Each subSub In subSubFolders
+        ' Use PathUtils to handle the subfolder creation
+        Call EnsureFolderPath(rootPath & "\Temp", CStr(subSub))
+    Next subSub
+
+    Exit Sub
+
+EH:
+    Debug.Print "[BuildDirs][ERROR] " & Err.Description
+End Sub
+
+
+' ==============================================================
+' STEP 3 - SAVE HOST AS XLSM
+' ==============================================================
+
+Public Function SaveHostAsXLSM(wb As Workbook, rootPath As String) As Boolean
+    On Error GoTo EH
+    
+    ' Handle unsaved workbook names
+    Dim baseName As String
+    Dim dotIndex As Long
+    dotIndex = InStrRev(wb.name, ".")
+    
+    If dotIndex > 0 Then
+        baseName = Left$(wb.name, dotIndex - 1)
+    Else
+        baseName = wb.name
+    End If
+
+    Dim targetPath As String
+    targetPath = rootPath & "\" & baseName & ".xlsm"
+
+    ' Check if already saved in correct location
+    If wb.path = rootPath And LCase$(right$(wb.name, 5)) = ".xlsm" Then
+        SaveHostAsXLSM = True
+        Exit Function
+    End If
+
+    Application.DisplayAlerts = False
+    wb.SaveAs fileName:=targetPath, FileFormat:=xlOpenXMLWorkbookMacroEnabled
+    Application.DisplayAlerts = True
+    
+    SaveHostAsXLSM = True
+    Exit Function
+EH:
+    Application.DisplayAlerts = True
+    Debug.Print "[SaveHostAsXLSM] Error: " & Err.Description
+    SaveHostAsXLSM = False
+End Function
+
+
+' ==============================================================
+' STEP 4 - PYTHON VENV
+' ==============================================================
+
+Public Function CreatePythonVenv(fso As Object, rootPath As String) As Boolean
+    On Error GoTo EH
+    
+    Dim venvPath As String
+    venvPath = rootPath & "\Python\.venv"
+
+    Dim cmd As String
+    ' Note: Requires 'python' to be in system PATH.
+    cmd = "python.exe -m venv """ & venvPath & """"
+
+    Dim sh As Object: Set sh = CreateObject("WScript.Shell")
+    sh.Run "cmd /c " & cmd, 0, True
+
+    CreatePythonVenv = fso.FolderExists(venvPath & "\Lib")
+    Exit Function
+
+EH:
+    CreatePythonVenv = False
+End Function
+
+
+' ==============================================================
+' STEP 5 - REAL RESOURCE EXTRACTION
+' ==============================================================
+
+Public Sub ExtractResources(fso As Object, rootPath As String)
+    On Error GoTo EH
+
+    ' -------------------------------------------------------------
+    ' Source: ThisWorkbook (The AddIn containing the embedded files)
+    ' -------------------------------------------------------------
+    Dim wbSource As Workbook
+    Set wbSource = ThisWorkbook
+    
+    Dim wsStore As Worksheet
+    On Error Resume Next
+    Set wsStore = wbSource.Worksheets(EMBED_SHEET_NAME)
+    On Error GoTo EH
+
+    If wsStore Is Nothing Then
+        Debug.Print "[Step5] No EmbeddedStore sheet found in " & wbSource.name
+        Exit Sub
+    End If
+
+    Debug.Print "[Step5] Extracting Embedded Resources..."
+
+    ' CORRECTION 1: Extract to Root, not AddIn folder
+    Dim outFolder As String
+    outFolder = rootPath
+    
+    ' Ensure trailing slash
+    If right$(outFolder, 1) <> "\" Then outFolder = outFolder & "\"
+
+    ' 3. Extract using verified logic
+    ExtractEmbeddedStoreSheet wsStore, outFolder
+
+    Debug.Print "[Step5] Extraction completed into: " & outFolder
+    Exit Sub
+
+EH:
+    Debug.Print "[Step5][ERROR] " & Err.Description
+End Sub
+
+Private Sub ExtractEmbeddedStoreSheet(wsStore As Worksheet, outRoot As String)
+    Dim lastRow As Long
+    Dim r As Long
+    
+    Dim fileMap As Object
+    Dim fileKey As String
+    Dim fName As String
+    Dim rel As String
+    Dim chunkIndex As Long
+    Dim b64 As String
+
+    lastRow = wsStore.Cells(wsStore.rows.count, "A").End(xlUp).Row
+    If lastRow < 2 Then Exit Sub
+
+    Set fileMap = CreateObject("Scripting.Dictionary")
+
+    ' --- PASS 1: MAP CHUNKS ---
+    For r = 2 To lastRow
+        fName = CStr(wsStore.Cells(r, COL_FILENAME).value)
+        rel = CStr(wsStore.Cells(r, COL_RELPATH).value)
+        
+        If Len(fName) > 0 Or Len(rel) > 0 Then
+            fileKey = rel & "|" & fName
+            
+            If Not fileMap.Exists(fileKey) Then
+                fileMap.Add fileKey, CreateObject("Scripting.Dictionary")
+            End If
+            
+            chunkIndex = CLng(wsStore.Cells(r, COL_CHUNKINDEX).value)
+            b64 = CStr(wsStore.Cells(r, COL_BASE64).value)
+            
+            fileMap(fileKey)(chunkIndex) = b64
+        End If
+    Next r
+
+    ' --- PASS 2: REBUILD AND WRITE (WITH PROGRESS) ---
+    Dim k As Variant
+    Dim parts() As String
+    Dim relPath As String
+    Dim chunksDict As Object
+    Dim idxs As Variant
+    Dim i As Long
+    Dim bigB64 As String
+    Dim bytes() As Byte
+    Dim outPath As String
+    Dim folderPath As String
+    
+    ' Variables for Progress Calculation
+    Dim totalFiles As Long
+    Dim currentFile As Long
+    Dim startPct As Double: startPct = 0.5 ' Extraction starts at 50%
+    Dim endPct As Double: endPct = 0.8     ' Extraction ends at 80%
+    Dim rangePct As Double: rangePct = endPct - startPct
+    Dim calcPct As Double
+
+    totalFiles = fileMap.count
+    currentFile = 0
+
+    For Each k In fileMap.keys
+        currentFile = currentFile + 1
+        
+        parts = Split(CStr(k), "|")
+        relPath = parts(0)
+        
+        ' Update Progress Bar
+        ' Logic: Start% + (PercentOfFilesDone * RangeSize)
+        calcPct = startPct + ((currentFile / totalFiles) * rangePct)
+        UpdateProgress calcPct, "Extracting: " & parts(1)
+        
+        Set chunksDict = fileMap(k)
+        idxs = chunksDict.keys
+        
+        ' Sort chunks numerically
+        SortVariantNumeric idxs
+        
+        bigB64 = ""
+        For i = LBound(idxs) To UBound(idxs)
+            bigB64 = bigB64 & chunksDict(idxs(i))
+        Next i
+        
+        ' Decode and Write
+        bytes = Base64ToBinary(bigB64)
+        outPath = outRoot & relPath
+
+        ' Extract folder from file path and ensure it exists using PathUtils
+        folderPath = Left$(outPath, InStrRev(outPath, "\") - 1)
+        If Len(folderPath) > 0 Then Call EnsureFolderExists(folderPath)
+
+        WriteBinaryFile outPath, bytes
+    Next k
+End Sub
+
+
+' ==============================================================
+' STEP 6 - PIP INSTALL (DEBUGGING MODE)
+' ==============================================================
+
+Private Sub install_pip_Packages(targetPath As String)
+    Dim venvPy As String
+    Dim reqFile As String
+    Dim cmd As String
+    Dim sh As Object
+
+    ' LOGIC: Use the explicitly passed path (hostPath)
+    
+    ' Construct Paths using targetPath
+    venvPy = JoinPath(targetPath, "Python\.venv\Scripts\python.exe")
+    reqFile = JoinPath(targetPath, "Python\Requirements.txt")
+
+    ' Verify files exist before trying to run
+    If Len(Dir$(venvPy, vbNormal)) = 0 Then
+        Debug.Print "[Step 6] Error: Python executable not found at " & venvPy
+        Exit Sub
+    End If
+    If Len(Dir$(reqFile, vbNormal)) = 0 Then
+        Debug.Print "[Step 6] Error: Requirements file not found at " & reqFile
+        Exit Sub
+    End If
+
+    ' cmd /c closes the window when done
+    cmd = "cmd /c """"" & venvPy & """ -m pip install -r """ & reqFile & """ --no-input"""
+
+    Debug.Print "[Step 6] Running PIP Install..."
+    Debug.Print "[Step 6] Target VENV: " & venvPy
+    
+    Set sh = CreateObject("WScript.Shell")
+    sh.Run cmd, 1, True
+    
+    Debug.Print "[Step 6] PIP Install command returned."
+End Sub
+
+' ==============================================================
+' UTILITIES
+' ==============================================================
+
+Private Sub SortVariantNumeric(ByRef a As Variant)
+    Dim i As Long, j As Long, tmp As Variant
+    
+    If IsEmpty(a) Then Exit Sub
+    If UBound(a) <= LBound(a) Then Exit Sub
+    
+    For i = LBound(a) To UBound(a) - 1
+        For j = i + 1 To UBound(a)
+            If CLng(a(j)) < CLng(a(i)) Then
+                tmp = a(i): a(i) = a(j): a(j) = tmp
+            End If
+        Next j
+    Next i
+End Sub
+
+Private Function Base64ToBinary(b64 As String) As Byte()
+    Dim xml As Object: Set xml = CreateObject("MSXML2.DOMDocument.6.0")
+    Dim node As Object: Set node = xml.createElement("b64")
+    node.DataType = "bin.base64"
+    node.text = b64
+    Base64ToBinary = node.nodeTypedValue
+End Function
+
+' Note: EnsureFolderExists and CreateFoldersRecursive are now in PathUtils module
+
+Private Sub WriteBinaryFile(path As String, bytes() As Byte)
+    Dim stm As Object
+    Set stm = CreateObject("ADODB.Stream")
+    stm.Type = 1 ' adTypeBinary
+    stm.Open
+    stm.Write bytes
+    stm.SaveToFile path, 2 ' adSaveCreateOverWrite
+    stm.Close
+End Sub
+
+Public Function JoinPath(base As String, leaf As String) As String
+    If right$(base, 1) = "\" Then
+        JoinPath = base & leaf
+    Else
+        JoinPath = base & "\" & leaf
     End If
 End Function
 
-Private Function Quote(s As String) As String
-    Quote = """" & s & """"
-End Function
-
-Private Sub RunShellWait(cmd As String)
-    CreateObject("WScript.Shell").Run cmd, 0, True
-End Sub
 
 
 
