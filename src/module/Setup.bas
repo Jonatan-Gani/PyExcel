@@ -82,7 +82,7 @@ Attribute VB_Name = "Setup"
 '
 '
 '' ==============================================================
-'' STEP 1 â€“ PATH SELECTOR
+'' STEP 1 – PATH SELECTOR
 '' ==============================================================
 '
 'Public Function SelectAndSetupRootPath(wb As Workbook, fso As Object) As String
@@ -124,7 +124,7 @@ Attribute VB_Name = "Setup"
 '
 '
 '' ==============================================================
-'' STEP 2 â€“ BUILD FOLDER TREE
+'' STEP 2 – BUILD FOLDER TREE
 '' ==============================================================
 '
 'Public Sub BuildProjectDirectories(fso As Object, rootPath As String)
@@ -159,7 +159,7 @@ Attribute VB_Name = "Setup"
 '
 '
 '' ==============================================================
-'' STEP 3 â€“ SAVE HOST AS XLSM
+'' STEP 3 – SAVE HOST AS XLSM
 '' ==============================================================
 '
 'Public Sub SaveHostAsXLSM(wb As Workbook, rootPath As String)
@@ -177,7 +177,7 @@ Attribute VB_Name = "Setup"
 '
 '
 '' ==============================================================
-'' STEP 4 â€“ PYTHON VENV
+'' STEP 4 – PYTHON VENV
 '' ==============================================================
 '
 'Public Function CreatePythonVenv(fso As Object, rootPath As String) As Boolean
@@ -201,7 +201,7 @@ Attribute VB_Name = "Setup"
 '
 '
 '' ==============================================================
-'' STEP 5 â€“ REAL RESOURCE EXTRACTION
+'' STEP 5 – REAL RESOURCE EXTRACTION
 '' ==============================================================
 '
 'Public Sub ExtractResources(fso As Object, rootPath As String)
@@ -1098,6 +1098,11 @@ Public Function PyExcelSetup() As Boolean
     UpdateProgress 0.85, "Installing Python libraries (Excel will pause)..."
     install_pip_Packages hostPath
 
+    ' Stamp the current addin version to the workbook
+    UpdateProgress 0.95, "Finalizing setup..."
+    Update.SetStoredProjectVersion wb, Update.GetAddinVersion()
+    Debug.Print "[PyExcelSetup] Version stamped: " & Update.GetAddinVersion()
+
     UpdateProgress 1#, "Installation Completed!"
     Application.Wait Now + TimeValue("0:00:01")
 
@@ -1128,33 +1133,41 @@ End Function
 
 
 ' ==============================================================
-' STEP 1 - PATH SELECTOR
+' STEP 1 - PATH SELECTOR (INTEGRATED WITH PATHUTILS)
 ' ==============================================================
 
 Public Function SelectAndSetupRootPath(wb As Workbook, fso As Object) As String
     On Error GoTo EH
 
-    Dim fldr As Object
-    Dim defaultPath As String
     Dim pathChosen As String
     Dim projectName As String
     Dim dotIndex As Long
     Dim finalPath As String
 
-    If Len(wb.path) > 0 Then
-        defaultPath = wb.path
-    Else
-        defaultPath = Environ$("USERPROFILE")
+    ' Use PathUtils library to find the true local path (SharePoint or Local)
+    pathChosen = ResolveProjectPath()
+
+    ' Fallback if Resolver fails (e.g. OneDrive not syncing)
+    If pathChosen = "" Then
+        Dim fldr As Object
+        Dim defaultPath As String
+
+        If Len(wb.path) > 0 Then
+            defaultPath = wb.path
+        Else
+            defaultPath = Environ$("USERPROFILE")
+        End If
+
+        Set fldr = Application.FileDialog(msoFileDialogFolderPicker)
+        With fldr
+            .Title = "Select Project Root Folder (Manual Fallback)"
+            If Len(defaultPath) > 0 Then .InitialFileName = defaultPath
+            If .Show <> -1 Then Exit Function
+            pathChosen = .SelectedItems(1)
+        End With
     End If
 
-    Set fldr = Application.FileDialog(msoFileDialogFolderPicker)
-    With fldr
-        .Title = "Select Project Root Folder"
-        .InitialFileName = defaultPath
-        If .Show <> -1 Then Exit Function
-        pathChosen = .SelectedItems(1)
-    End With
-
+    ' Extract Project Name from Workbook
     dotIndex = InStrRev(wb.name, ".")
     If dotIndex > 0 Then
         projectName = Left$(wb.name, dotIndex - 1)
@@ -1162,52 +1175,49 @@ Public Function SelectAndSetupRootPath(wb As Workbook, fso As Object) As String
         projectName = wb.name
     End If
 
-    finalPath = pathChosen & Application.PathSeparator & projectName
+    ' Combine paths
+    If right$(pathChosen, 1) <> "\" Then pathChosen = pathChosen & "\"
+    finalPath = pathChosen & projectName
 
-    If Not fso.FolderExists(finalPath) Then
-        fso.CreateFolder finalPath
-    End If
+    ' Use PathUtils library's Ensure function to create the root
+    Call EnsureFolderExists(finalPath)
 
     SelectAndSetupRootPath = finalPath
     Exit Function
 
 EH:
-    Debug.Print "[SelectAndSetupRootPath][ERROR]"
-    Debug.Print Err.Number
-    Debug.Print Err.Source
-    Debug.Print Err.Description
-    Err.Clear
+    Debug.Print "[SelectAndSetupRootPath][ERROR] " & Err.Description
+    SelectAndSetupRootPath = ""
 End Function
 
 
 
 
 ' ==============================================================
-' STEP 2 - BUILD FOLDER TREE
+' STEP 2 - BUILD FOLDER TREE (USING PATHUTILS)
 ' ==============================================================
 
 Public Sub BuildProjectDirectories(fso As Object, rootPath As String)
     On Error GoTo EH
-    
-    Dim folder As Variant
-    Dim subFolders As Variant: subFolders = Array("AddIn", "Archive", "Python", "Temp", "userScripts")
 
-    For Each folder In subFolders
-        Dim full As String: full = rootPath & Application.PathSeparator & folder
-        If Not fso.FolderExists(full) Then fso.CreateFolder full
-    Next folder
+    ' Main structure - use PathUtils EnsureFolderPath for recursive creation
+    Call EnsureFolderPath(rootPath, "AddIn")
+    Call EnsureFolderPath(rootPath, "Archive")
+    Call EnsureFolderPath(rootPath, "Python")
+    Call EnsureFolderPath(rootPath, "userScripts")
 
+    ' Nested structures - venv path
     Dim venvPath As String
     venvPath = rootPath & "\Python\.venv"
-    If Not fso.FolderExists(venvPath) Then fso.CreateFolder venvPath
-    
+    Call EnsureFolderExists(venvPath)
+
+    ' Temp subfolders
     Dim subSub As Variant
     Dim subSubFolders As Variant: subSubFolders = Array("assets", "lists", "tables", "values")
 
     For Each subSub In subSubFolders
-        Dim path2 As String
-        path2 = rootPath & "\Temp\" & subSub
-        If Not fso.FolderExists(path2) Then fso.CreateFolder path2
+        ' Use PathUtils to handle the subfolder creation
+        Call EnsureFolderPath(rootPath & "\Temp", CStr(subSub))
     Next subSub
 
     Exit Sub
@@ -1369,6 +1379,7 @@ Private Sub ExtractEmbeddedStoreSheet(wsStore As Worksheet, outRoot As String)
     Dim bigB64 As String
     Dim bytes() As Byte
     Dim outPath As String
+    Dim folderPath As String
     
     ' Variables for Progress Calculation
     Dim totalFiles As Long
@@ -1406,8 +1417,11 @@ Private Sub ExtractEmbeddedStoreSheet(wsStore As Worksheet, outRoot As String)
         ' Decode and Write
         bytes = Base64ToBinary(bigB64)
         outPath = outRoot & relPath
-        
-        EnsureFolderExists outPath
+
+        ' Extract folder from file path and ensure it exists using PathUtils
+        folderPath = Left$(outPath, InStrRev(outPath, "\") - 1)
+        If Len(folderPath) > 0 Then Call EnsureFolderExists(folderPath)
+
         WriteBinaryFile outPath, bytes
     Next k
 End Sub
@@ -1478,22 +1492,7 @@ Private Function Base64ToBinary(b64 As String) As Byte()
     Base64ToBinary = node.nodeTypedValue
 End Function
 
-Private Sub EnsureFolderExists(fullPath As String)
-    Dim folder As String
-    folder = Left$(fullPath, InStrRev(fullPath, "\") - 1)
-    If Len(folder) = 0 Then Exit Sub
-    If Len(Dir(folder, vbDirectory)) = 0 Then CreateFoldersRecursive folder
-End Sub
-
-Private Sub CreateFoldersRecursive(folderPath As String)
-    Dim parts As Variant: parts = Split(folderPath, "\")
-    Dim build As String: build = parts(0) & "\"
-    Dim i As Long
-    For i = 1 To UBound(parts)
-        build = build & parts(i) & "\"
-        If Len(Dir(build, vbDirectory)) = 0 Then MkDir build
-    Next i
-End Sub
+' Note: EnsureFolderExists and CreateFoldersRecursive are now in PathUtils module
 
 Private Sub WriteBinaryFile(path As String, bytes() As Byte)
     Dim stm As Object
@@ -1512,5 +1511,7 @@ Public Function JoinPath(base As String, leaf As String) As String
         JoinPath = base & "\" & leaf
     End If
 End Function
+
+
 
 
