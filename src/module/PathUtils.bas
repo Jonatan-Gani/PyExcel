@@ -1,4 +1,5 @@
 Attribute VB_Name = "PathUtils"
+Attribute VB_Name = "PathUtils"
 Option Explicit
 
 Public Function ResolveProjectPath() As String
@@ -86,8 +87,10 @@ Private Sub MkDirRecursive(ByVal fullPath As String)
     If right(testPath, 1) <> ":" Then testPath = testPath & "\"
 
     For i = 1 To UBound(parts)
-        testPath = testPath & parts(i) & "\"
-        If Dir(testPath, vbDirectory) = "" Then MkDir testPath
+        If Len(parts(i)) > 0 Then
+            testPath = testPath & parts(i) & "\"
+            If Dir(testPath, vbDirectory) = "" Then MkDir testPath
+        End If
     Next i
 End Sub
 
@@ -111,4 +114,5 @@ Private Function DecodeUrlComponent(ByVal s As String) As String
     Loop
     DecodeUrlComponent = result
 End Function
+
 

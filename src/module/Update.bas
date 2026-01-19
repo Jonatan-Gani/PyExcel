@@ -146,6 +146,9 @@ Public Sub RunUpdateFromCurrentAddin()
     newVer = GetAddinVersion() ' Get version from ThisWorkbook
     SetStoredProjectVersion wbHost, newVer
 
+    ' Ensure structure integrity
+    ReEnsureStructure fso, targetPath
+
     UpdateProgress 1#, "Update Complete!"
     Application.Wait Now + TimeValue("0:00:01")
     CloseProgressBar
@@ -226,6 +229,9 @@ Public Sub RunUpdateFromExternalFile()
     
     ' D. UPDATE PROJECT TAG
     SetStoredProjectVersion wbHost, newVer
+    
+    ' Ensure structure integrity
+    ReEnsureStructure fso, targetPath
     
     UpdateProgress 1#, "Update Complete!"
     Application.Wait Now + TimeValue("0:00:01")
@@ -844,4 +850,35 @@ EH:
     Debug.Print "ERROR: Failed to fix encoding: " & Err.Description
     FixRequirementsEncoding = False
 End Function
+
+' ==============================================================
+' FOLDER STRUCTURE HELPERS
+' ==============================================================
+
+Private Sub ReEnsureStructure(fso As Object, rootPath As String)
+    On Error Resume Next
+    Dim p As String
+
+    ' Archive
+    p = rootPath & "\Archive"
+    If Not fso.FolderExists(p) Then fso.CreateFolder p
+    CreatePlaceholder fso, p, "This folder contains archived versions of your Python scripts."
+
+    ' userScripts
+    p = rootPath & "\userScripts"
+    If Not fso.FolderExists(p) Then fso.CreateFolder p
+    CreatePlaceholder fso, p, "Place your Python scripts here."
+End Sub
+
+Private Sub CreatePlaceholder(fso As Object, folderPath As String, content As String)
+    On Error Resume Next
+    Dim filePath As String
+    filePath = folderPath & "\ReadMe.txt"
+    If Not fso.fileExists(filePath) Then
+        Dim ts As Object
+        Set ts = fso.CreateTextFile(filePath, True)
+        ts.WriteLine content
+        ts.Close
+    End If
+End Sub
 

@@ -208,7 +208,11 @@ Public Function PyExcelSetup() As Boolean
 
     ' Re-ensure critical folders exist (in case of save oddities)
     Call EnsureFolderPath(hostPath, "Archive")
+    Call CreatePlaceholder(JoinPath(hostPath, "Archive"), "This folder contains archived versions of your Python scripts.")
+    
     Call EnsureFolderPath(hostPath, "userScripts")
+    Call CreatePlaceholder(JoinPath(hostPath, "userScripts"), "Place your Python scripts here.")
+    
     Call EnsureFolderPath(hostPath, "Temp")
 
     UpdateProgress 0.35, "Creating Python Environment (Excel will pause)..."
@@ -371,9 +375,14 @@ Public Sub BuildProjectDirectories(fso As Object, rootPath As String)
 
     ' Main structure - use PathUtils EnsureFolderPath for recursive creation
     Call EnsureFolderPath(rootPath, "AddIn")
+    
     Call EnsureFolderPath(rootPath, "Archive")
+    Call CreatePlaceholder(JoinPath(rootPath, "Archive"), "This folder contains archived versions of your Python scripts.")
+    
     Call EnsureFolderPath(rootPath, "Python")
+    
     Call EnsureFolderPath(rootPath, "userScripts")
+    Call CreatePlaceholder(JoinPath(rootPath, "userScripts"), "Place your Python scripts here.")
 
     ' Nested structures - venv path
     Dim venvPath As String
@@ -1195,6 +1204,19 @@ Private Sub WriteBinaryFile(path As String, bytes() As Byte)
     stm.Write bytes
     stm.SaveToFile path, 2 ' adSaveCreateOverWrite
     stm.Close
+End Sub
+
+Private Sub CreatePlaceholder(path As String, content As String)
+    On Error Resume Next
+    Dim fso As Object, ts As Object
+    Set fso = CreateObject("Scripting.FileSystemObject")
+    Dim filePath As String
+    filePath = JoinPath(path, "ReadMe.txt")
+    If Not fso.fileExists(filePath) Then
+        Set ts = fso.CreateTextFile(filePath, True)
+        ts.WriteLine content
+        ts.Close
+    End If
 End Sub
 
 Public Function JoinPath(base As String, leaf As String) As String
