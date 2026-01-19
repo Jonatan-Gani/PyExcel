@@ -67,18 +67,30 @@ Public Function EnsureFolderPath(base As String, subFolder As String) As String
 End Function
 
 Public Sub EnsureFolderExists(path As String)
-    If Dir(path, vbDirectory) = "" Then
+    ' Use FSO.FolderExists instead of Dir for SharePoint/OneDrive compatibility
+    Dim fso As Object
+    Set fso = CreateObject("Scripting.FileSystemObject")
+
+    If Not fso.FolderExists(path) Then
         Debug.Print "[Ensure] Creating folder:", path
         On Error Resume Next
-        MkDirRecursive path
+        MkDirRecursive path, fso
         If Err.Number <> 0 Then Debug.Print "[ERROR] MkDir failed:", Err.Description
         On Error GoTo 0
+
+        ' Verify creation (give SharePoint sync time to register)
+        DoEvents
+        If Not fso.FolderExists(path) Then
+            Debug.Print "[WARN] Folder may not be synced yet:", path
+        End If
     Else
         Debug.Print "[Ensure] Folder exists:", path
     End If
 End Sub
 
-Private Sub MkDirRecursive(ByVal fullPath As String)
+Private Sub MkDirRecursive(ByVal fullPath As String, Optional fso As Object = Nothing)
+    If fso Is Nothing Then Set fso = CreateObject("Scripting.FileSystemObject")
+
     Dim parts() As String: parts = Split(fullPath, "\")
     Dim testPath As String: testPath = parts(0)
     Dim i As Long
@@ -88,7 +100,17 @@ Private Sub MkDirRecursive(ByVal fullPath As String)
     For i = 1 To UBound(parts)
         If Len(parts(i)) > 0 Then
             testPath = testPath & parts(i)
-            If Dir(testPath, vbDirectory) = "" Then MkDir testPath
+            ' Use FSO.FolderExists instead of Dir for SharePoint compatibility
+            If Not fso.FolderExists(testPath) Then
+                On Error Resume Next
+                fso.CreateFolder testPath
+                If Err.Number <> 0 Then
+                    ' Fallback to MkDir if FSO fails
+                    Err.Clear
+                    MkDir testPath
+                End If
+                On Error GoTo 0
+            End If
             testPath = testPath & "\"
         End If
     Next i

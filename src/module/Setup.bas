@@ -373,23 +373,37 @@ End Function
 Public Sub BuildProjectDirectories(fso As Object, rootPath As String)
     On Error GoTo EH
 
+    LogMessage "INFO", "Folders", "Creating project directories in: " & rootPath
+
     ' Main structure - use PathUtils EnsureFolderPath for recursive creation
     Call EnsureFolderPath(rootPath, "AddIn")
-    
+    VerifyFolderCreated fso, rootPath, "AddIn"
+
     Call EnsureFolderPath(rootPath, "Archive")
+    VerifyFolderCreated fso, rootPath, "Archive"
     Call CreatePlaceholder(JoinPath(rootPath, "Archive"), "This folder contains archived versions of your Python scripts.")
-    
+
     Call EnsureFolderPath(rootPath, "Python")
-    
+    VerifyFolderCreated fso, rootPath, "Python"
+
     Call EnsureFolderPath(rootPath, "userScripts")
+    VerifyFolderCreated fso, rootPath, "userScripts"
     Call CreatePlaceholder(JoinPath(rootPath, "userScripts"), "Place your Python scripts here.")
 
     ' Nested structures - venv path
     Dim venvPath As String
     venvPath = rootPath & "\Python\.venv"
     Call EnsureFolderExists(venvPath)
+    If fso.FolderExists(venvPath) Then
+        LogMessage "INFO", "Folders", "Created: Python\.venv"
+    Else
+        LogMessage "WARN", "Folders", "Failed to verify: Python\.venv"
+    End If
 
     ' Temp subfolders
+    Call EnsureFolderPath(rootPath, "Temp")
+    VerifyFolderCreated fso, rootPath, "Temp"
+
     Dim subSub As Variant
     Dim subSubFolders As Variant: subSubFolders = Array("assets", "lists", "tables", "values")
 
@@ -398,10 +412,38 @@ Public Sub BuildProjectDirectories(fso As Object, rootPath As String)
         Call EnsureFolderPath(rootPath & "\Temp", CStr(subSub))
     Next subSub
 
+    LogMessage "INFO", "Folders", "Directory structure creation completed"
     Exit Sub
 
 EH:
+    LogMessage "ERROR", "Folders", "BuildProjectDirectories failed: " & Err.Description
     Debug.Print "[BuildDirs][ERROR] " & Err.Description
+End Sub
+
+' Helper to verify folder was actually created
+Private Sub VerifyFolderCreated(fso As Object, rootPath As String, folderName As String)
+    Dim fullPath As String
+    fullPath = JoinPath(rootPath, folderName)
+
+    ' Give SharePoint/OneDrive a moment to sync
+    DoEvents
+
+    If fso.FolderExists(fullPath) Then
+        LogMessage "INFO", "Folders", "Created: " & folderName
+    Else
+        LogMessage "WARN", "Folders", "Failed to verify: " & folderName & " at " & fullPath
+        SetupStats("Warnings") = SetupStats("Warnings") + 1
+
+        ' Try one more time with FSO.CreateFolder directly
+        On Error Resume Next
+        fso.CreateFolder fullPath
+        If Err.Number = 0 Then
+            LogMessage "INFO", "Folders", "Retry succeeded: " & folderName
+        Else
+            LogMessage "ERROR", "Folders", "Retry failed: " & folderName & " - " & Err.Description
+        End If
+        On Error GoTo 0
+    End If
 End Sub
 
 
@@ -840,15 +882,25 @@ Private Function FixRequirementsEncoding(sourcePath As String, destPath As Strin
 
     ' Detect UTF-16 BOM (FF FE or FE FF) or null bytes pattern
     Dim isUTF16 As Boolean
+    Dim hasUTF8BOM As Boolean
     isUTF16 = False
+    hasUTF8BOM = False
+
+    If UBound(bytes) >= 2 Then
+        ' Check for UTF-8 BOM (EF BB BF)
+        If bytes(0) = &HEF And bytes(1) = &HBB And bytes(2) = &HBF Then
+            hasUTF8BOM = True
+            LogMessage "INFO", "Encoding", "Detected UTF-8 BOM in requirements.txt"
+        End If
+    End If
 
     If UBound(bytes) >= 1 Then
-        ' Check for BOM
+        ' Check for UTF-16 BOM
         If (bytes(0) = &HFF And bytes(1) = &HFE) Or (bytes(0) = &HFE And bytes(1) = &HFF) Then
             isUTF16 = True
             LogMessage "INFO", "Encoding", "Detected UTF-16 BOM in requirements.txt"
         ' Check for null byte pattern (UTF-16 without BOM)
-        ElseIf UBound(bytes) >= 3 Then
+        ElseIf UBound(bytes) >= 3 And Not hasUTF8BOM Then
             If bytes(1) = 0 Or bytes(3) = 0 Then
                 isUTF16 = True
                 LogMessage "INFO", "Encoding", "Detected UTF-16 (no BOM) in requirements.txt"
@@ -856,17 +908,27 @@ Private Function FixRequirementsEncoding(sourcePath As String, destPath As Strin
         End If
     End If
 
-    If isUTF16 Then
-        ' Convert UTF-16 to UTF-8
-        LogMessage "INFO", "Encoding", "Converting UTF-16 to UTF-8..."
+    ' Force delete destination if exists
+    If fso.fileExists(destPath) Then
+        On Error Resume Next
+        fso.DeleteFile destPath, True
+        On Error GoTo EH
+    End If
 
-        Dim stmIn As Object, stmOut As Object
+    If isUTF16 Or hasUTF8BOM Then
+        ' Need to convert: Read as text and write as clean ASCII/UTF-8 without BOM
+        LogMessage "INFO", "Encoding", "Converting to clean UTF-8 (no BOM)..."
+
+        Dim stmIn As Object
         Set stmIn = CreateObject("ADODB.Stream")
-        Set stmOut = CreateObject("ADODB.Stream")
 
-        ' Read as UTF-16
+        ' Read as appropriate charset
         stmIn.Type = 2 ' adTypeText
-        stmIn.Charset = "unicode" ' UTF-16 LE
+        If isUTF16 Then
+            stmIn.Charset = "unicode" ' UTF-16 LE
+        Else
+            stmIn.Charset = "utf-8"
+        End If
         stmIn.Open
         stmIn.LoadFromFile sourcePath
 
@@ -878,44 +940,15 @@ Private Function FixRequirementsEncoding(sourcePath As String, destPath As Strin
         End If
         stmIn.Close
 
-        ' Write as UTF-8 (without BOM for pip compatibility)
-        stmOut.Type = 2
-        stmOut.Charset = "utf-8"
-        stmOut.Open
-        stmOut.WriteText textContent
+        LogMessage "INFO", "Encoding", "Read " & Len(textContent) & " characters from source"
 
-        ' Remove UTF-8 BOM by copying to binary stream
-        stmOut.Position = 0
-        stmOut.Type = 1 ' switch to binary
-
-        ' Skip BOM if present (first 3 bytes for UTF-8 BOM)
-        Dim outBytes As Variant
-        stmOut.Position = 3 ' Skip BOM
-        If stmOut.Size > 3 Then
-            outBytes = stmOut.Read
-        Else
-            stmOut.Position = 0
-            outBytes = stmOut.Read
-        End If
-        stmOut.Close
-
-        ' Force delete destination if exists
-        If fso.fileExists(destPath) Then
-            On Error Resume Next
-            fso.DeleteFile destPath, True
-            On Error GoTo EH
-        End If
-
-        LogMessage "INFO", "Encoding", "Saving converted file to: " & destPath
-
-        ' Write clean UTF-8 file
-        Dim stmFinal As Object
-        Set stmFinal = CreateObject("ADODB.Stream")
-        stmFinal.Type = 1
-        stmFinal.Open
-        stmFinal.Write outBytes
-        stmFinal.SaveToFile destPath, 2 ' adSaveCreateOverWrite
-        stmFinal.Close
+        ' Write as ASCII (which is compatible with UTF-8 for requirements.txt content)
+        ' This avoids any BOM issues entirely
+        Dim fNum As Integer
+        fNum = FreeFile
+        Open destPath For Output As #fNum
+        Print #fNum, textContent;
+        Close #fNum
 
         LogMessage "INFO", "Encoding", "Converted file saved to " & destPath
     Else
@@ -1207,16 +1240,33 @@ Private Sub WriteBinaryFile(path As String, bytes() As Byte)
 End Sub
 
 Private Sub CreatePlaceholder(path As String, content As String)
-    On Error Resume Next
+    On Error GoTo EH
+
     Dim fso As Object, ts As Object
     Set fso = CreateObject("Scripting.FileSystemObject")
+
+    ' Ensure the folder exists first (use FSO for SharePoint compatibility)
+    If Not fso.FolderExists(path) Then
+        LogMessage "WARN", "Placeholder", "Folder does not exist, creating: " & path
+        CreateFoldersRecursive path
+    End If
+
     Dim filePath As String
     filePath = JoinPath(path, "ReadMe.txt")
+
     If Not fso.fileExists(filePath) Then
         Set ts = fso.CreateTextFile(filePath, True)
         ts.WriteLine content
         ts.Close
+        LogMessage "INFO", "Placeholder", "Created: " & filePath
+    Else
+        LogMessage "INFO", "Placeholder", "Already exists: " & filePath
     End If
+    Exit Sub
+
+EH:
+    LogMessage "ERROR", "Placeholder", "Failed to create " & path & "\ReadMe.txt - " & Err.Description
+    SetupStats("Warnings") = SetupStats("Warnings") + 1
 End Sub
 
 Public Function JoinPath(base As String, leaf As String) As String
