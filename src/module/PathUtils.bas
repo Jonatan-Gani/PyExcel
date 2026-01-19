@@ -1,5 +1,4 @@
 Attribute VB_Name = "PathUtils"
-Attribute VB_Name = "PathUtils"
 Option Explicit
 
 Public Function ResolveProjectPath() As String
@@ -88,8 +87,9 @@ Private Sub MkDirRecursive(ByVal fullPath As String)
 
     For i = 1 To UBound(parts)
         If Len(parts(i)) > 0 Then
-            testPath = testPath & parts(i) & "\"
+            testPath = testPath & parts(i)
             If Dir(testPath, vbDirectory) = "" Then MkDir testPath
+            testPath = testPath & "\"
         End If
     Next i
 End Sub
