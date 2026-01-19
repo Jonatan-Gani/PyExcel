@@ -670,21 +670,36 @@ Private Function ExtractEmbeddedStoreUnified(wsStore As Worksheet, outRoot As St
 
         ' Decode and write
         On Error Resume Next
-        bytes = Base64ToBinary(bigB64)
-        If Err.Number = 0 Then
-            WriteBinaryFile fullPath, bytes
+        
+        ' DEBUG: Trace the conversion
+        Debug.Print "[Extract] Processing: " & fullPath
+        Debug.Print "[Extract] Base64 Len: " & Len(bigB64)
+        
+        Dim vResult As Variant
+        vResult = Base64ToBinary(bigB64)
+        
+        Debug.Print "[Extract] Base64ToBinary Type: " & TypeName(vResult)
+        
+        If VarType(vResult) = vbByte + vbArray Then
+            bytes = vResult
+            
             If Err.Number = 0 Then
-                extractedCount = extractedCount + 1
-                LogMessage "INFO", "Extract", "OK: " & fullPath
+                WriteBinaryFile fullPath, bytes
+                If Err.Number = 0 Then
+                    extractedCount = extractedCount + 1
+                    LogMessage "INFO", "Extract", "OK: " & fullPath
+                Else
+                    LogMessage "ERROR", "Extract", "Write failed: " & fullPath & " - " & Err.Description
+                    SetupStats("FilesFailed") = SetupStats("FilesFailed") + 1
+                    Err.Clear
+                End If
             Else
-                LogMessage "ERROR", "Extract", "Write failed: " & fullPath & " - " & Err.Description
-                SetupStats("FilesFailed") = SetupStats("FilesFailed") + 1
-                Err.Clear
+                 LogMessage "ERROR", "Extract", "Assign Byte() failed: " & Err.Description
+                 Err.Clear
             End If
         Else
-            LogMessage "ERROR", "Extract", "Decode failed: " & fullPath & " - " & Err.Description
+            LogMessage "ERROR", "Extract", "Type Mismatch: Base64ToBinary returned " & TypeName(vResult) & " for " & fullPath
             SetupStats("FilesFailed") = SetupStats("FilesFailed") + 1
-            Err.Clear
         End If
         On Error GoTo 0
     Next k
