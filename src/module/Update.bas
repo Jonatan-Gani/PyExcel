@@ -403,7 +403,7 @@ Public Sub UpdatePythonDependencies(rootPath As String)
     ' STEP 0: EXPLICIT UNINSTALL (The Cleanup Phase)
     ' ---------------------------------------------------------
     ' Only run if file exists AND has content (> 0 bytes)
-    If fso.FileExists(uninstallFile) Then
+    If fso.fileExists(uninstallFile) Then
         If fso.GetFile(uninstallFile).Size > 0 Then
             UpdateProgress 0.65, "Removing deprecated libraries..."
             cmd = "cmd /c " & venvPy & " -m pip uninstall -r " & Quote(uninstallFile) & " -y"
@@ -419,7 +419,7 @@ Public Sub UpdatePythonDependencies(rootPath As String)
     ' ---------------------------------------------------------
     ' STEP 1: PIP INSTALL (The Upgrade Phase)
     ' ---------------------------------------------------------
-    If fso.FileExists(rootPath & "\Python\Requirements.txt") Then
+    If fso.fileExists(rootPath & "\Python\Requirements.txt") Then
         ' Note: We run this AFTER uninstalling to ensure if a package
         ' is re-required by a dependency, it gets pulled back in.
         cmd = "cmd /c " & venvPy & " -m pip install -r " & reqFile & " --upgrade --no-input"

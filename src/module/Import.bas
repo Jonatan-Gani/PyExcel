@@ -24,11 +24,11 @@ Public Sub RunImportForSheet(sheetName As String, sourcePath As String, destAddr
     Dim fso As Object
     Set fso = CreateObject("Scripting.FileSystemObject")
     
-    If Len(Trim$(sourcePath)) = 0 Or (fso.FolderExists(sourcePath) And Not fso.FileExists(sourcePath)) Then
+    If Len(Trim$(sourcePath)) = 0 Or (fso.FolderExists(sourcePath) And Not fso.fileExists(sourcePath)) Then
         Dim initDir As String
         If fso.FolderExists(sourcePath) Then
             initDir = sourcePath
-        ElseIf fso.FileExists(sourcePath) Then
+        ElseIf fso.fileExists(sourcePath) Then
             initDir = fso.GetParentFolderName(sourcePath)
         Else
             initDir = CurDir$

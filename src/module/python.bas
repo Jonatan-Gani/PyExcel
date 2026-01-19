@@ -333,7 +333,7 @@ Public Function Py(scriptName As String, srcRangeRef As String, dstRangeRef As S
     Dim art As Variant
     For Each art In items
         If art.Exists("abs") Then
-            If fso.FileExists(CStr(art("abs"))) Then
+            If fso.fileExists(CStr(art("abs"))) Then
                 ArchiveFile CStr(art("abs")), runFolder
             End If
         End If
@@ -345,7 +345,7 @@ Public Function Py(scriptName As String, srcRangeRef As String, dstRangeRef As S
     If meta.Exists("run_id") Then
         runId = CStr(meta("run_id"))
         metaFile = folderTemp & "\meta_" & scriptName & "_" & runId & ".xml"
-        If fso.FileExists(metaFile) Then
+        If fso.fileExists(metaFile) Then
             ArchiveFile metaFile, runFolder
             Debug.Print "t+", Format(Timer - tStep, "0.000"), " Meta file archived"
         Else
@@ -355,7 +355,7 @@ Public Function Py(scriptName As String, srcRangeRef As String, dstRangeRef As S
         Debug.Print "t+", Format(Timer - tStep, "0.000"), " Meta missing run_id. Cannot archive meta file."
     End If
     
-    If fso.FileExists(inFile) Then
+    If fso.fileExists(inFile) Then
         ArchiveFile inFile, runFolder
         Debug.Print "t+", Format(Timer - tStep, "0.000"), " Input file archived"
     End If
@@ -413,11 +413,11 @@ Public Function RunPythonJob(script As String, tempFiles As Object, Optional inp
     Dim scriptPath As String: scriptPath = folderUserScripts & "\" & script
     Dim tempFolder As String: tempFolder = wbPath & "\Temp"
 
-    If Not fso.FileExists(exe) Then
+    If Not fso.fileExists(exe) Then
         MsgBox "Python executable not found at: " & exe, vbCritical, "RunPythonJob Error"
         Exit Function
     End If
-    If Not fso.FileExists(scriptPath) Then
+    If Not fso.fileExists(scriptPath) Then
         MsgBox "Python script not found: " & scriptPath, vbCritical, "RunPythonJob Error"
         Exit Function
     End If
@@ -455,10 +455,10 @@ Public Function RunPythonJob(script As String, tempFiles As Object, Optional inp
 
     If Len(inputText) > 0 Then
         Debug.Print "t+", Format(Timer - tStep, "0.000"), " Writing input text to file: " & tempFiles("in")
-        Dim fnum As Integer: fnum = FreeFile
-        Open tempFiles("in") For Output As #fnum
-        Print #fnum, inputText
-        Close #fnum
+        Dim fNum As Integer: fNum = FreeFile
+        Open tempFiles("in") For Output As #fNum
+        Print #fNum, inputText
+        Close #fNum
     End If
     tStep = Timer
 

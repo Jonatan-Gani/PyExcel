@@ -157,7 +157,7 @@ Public Function ParseMetaXml(xmlPath As String) As Object
         Dim absPath As String
         absPath = ResolveHref(xmlPath, href)
         a("abs") = absPath
-        a("exists") = fso.FileExists(absPath)
+        a("exists") = fso.fileExists(absPath)
 
         Debug.Print "artifact: type=" & IIf(a.Exists("type"), a("type"), "") & _
                     " id=" & IIf(a.Exists("id"), a("id"), "") & _
