@@ -817,19 +817,24 @@ Private Function InstallPipPackages(targetPath As String) As Boolean
     End If
     LogMessage "INFO", "Pip Install", "Requirements file encoding verified/fixed"
 
+    ' Log file for pip output
+    Dim pipLogFile As String
+    pipLogFile = JoinPath(targetPath, "Temp\pip_install.log")
+
     ' Upgrade pip first
     LogMessage "INFO", "Pip Install", "Upgrading pip..."
-    cmd = "cmd /c """ & venvPy & """ -m pip install --upgrade pip --no-input"
+    cmd = "cmd /c """ & venvPy & """ -m pip install --upgrade pip --no-input > """ & pipLogFile & """ 2>&1"
     Set sh = CreateObject("WScript.Shell")
     exitCode = sh.Run(cmd, 0, True)
     LogMessage "INFO", "Pip Install", "Pip upgrade exit code: " & exitCode
 
-    ' Install packages from fixed requirements
+    ' Install packages from fixed requirements (append to log)
     LogMessage "INFO", "Pip Install", "Installing packages from requirements..."
-    cmd = "cmd /c """ & venvPy & """ -m pip install -r """ & fixedReqFile & """ --no-input"
+    cmd = "cmd /c """ & venvPy & """ -m pip install -r """ & fixedReqFile & """ --no-input >> """ & pipLogFile & """ 2>&1"
     exitCode = sh.Run(cmd, 0, True)
 
     LogMessage "INFO", "Pip Install", "Pip install exit code: " & exitCode
+    LogMessage "INFO", "Pip Install", "Full pip output saved to: " & pipLogFile
 
     ' Exit code 0 = success
     If exitCode = 0 Then
