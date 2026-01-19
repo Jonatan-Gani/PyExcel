@@ -206,6 +206,11 @@ Public Function PyExcelSetup() As Boolean
     LogMessage "INFO", "Save Workbook", "Workbook saved to " & hostPath
     UpdateProgress 0.3, "Workbook saved."
 
+    ' Re-ensure critical folders exist (in case of save oddities)
+    Call EnsureFolderPath(hostPath, "Archive")
+    Call EnsureFolderPath(hostPath, "userScripts")
+    Call EnsureFolderPath(hostPath, "Temp")
+
     UpdateProgress 0.35, "Creating Python Environment (Excel will pause)..."
     If Not CreatePythonVenv(fso, hostPath) Then
         PyExcelSetup_LastMessage = "Failure in Step 4: Python venv creation did not complete. Ensure Python is installed and in PATH."
