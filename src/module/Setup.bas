@@ -1133,39 +1133,34 @@ End Function
 
 
 ' ==============================================================
-' STEP 1 - PATH SELECTOR (INTEGRATED WITH PATHUTILS)
+' STEP 1 - PATH SELECTOR
 ' ==============================================================
 
 Public Function SelectAndSetupRootPath(wb As Workbook, fso As Object) As String
     On Error GoTo EH
 
+    Dim fldr As Object
+    Dim defaultPath As String
     Dim pathChosen As String
     Dim projectName As String
     Dim dotIndex As Long
     Dim finalPath As String
 
-    ' Use PathUtils library to find the true local path (SharePoint or Local)
-    pathChosen = ResolveProjectPath()
-
-    ' Fallback if Resolver fails (e.g. OneDrive not syncing)
-    If pathChosen = "" Then
-        Dim fldr As Object
-        Dim defaultPath As String
-
-        If Len(wb.path) > 0 Then
-            defaultPath = wb.path
-        Else
-            defaultPath = Environ$("USERPROFILE")
-        End If
-
-        Set fldr = Application.FileDialog(msoFileDialogFolderPicker)
-        With fldr
-            .Title = "Select Project Root Folder (Manual Fallback)"
-            If Len(defaultPath) > 0 Then .InitialFileName = defaultPath
-            If .Show <> -1 Then Exit Function
-            pathChosen = .SelectedItems(1)
-        End With
+    ' Set default path for folder picker
+    If Len(wb.path) > 0 Then
+        defaultPath = wb.path
+    Else
+        defaultPath = Environ$("USERPROFILE")
     End If
+
+    ' Always show folder picker - user chooses location manually
+    Set fldr = Application.FileDialog(msoFileDialogFolderPicker)
+    With fldr
+        .Title = "Select Project Root Folder"
+        .InitialFileName = defaultPath
+        If .Show <> -1 Then Exit Function
+        pathChosen = .SelectedItems(1)
+    End With
 
     ' Extract Project Name from Workbook
     dotIndex = InStrRev(wb.name, ".")
@@ -1179,7 +1174,7 @@ Public Function SelectAndSetupRootPath(wb As Workbook, fso As Object) As String
     If right$(pathChosen, 1) <> "\" Then pathChosen = pathChosen & "\"
     finalPath = pathChosen & projectName
 
-    ' Use PathUtils library's Ensure function to create the root
+    ' Use PathUtils to create the folder (handles recursive creation safely)
     Call EnsureFolderExists(finalPath)
 
     SelectAndSetupRootPath = finalPath
