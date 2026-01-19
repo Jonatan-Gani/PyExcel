@@ -406,10 +406,19 @@ Public Sub UpdatePythonDependencies(rootPath As String)
     
     ' Define Paths
     venvPy = Quote(rootPath & "\Python\.venv\Scripts\python.exe")
-    reqFile = Quote(rootPath & "\Python\Requirements.txt")
+    
+    Dim rawReqPath As String
+    rawReqPath = rootPath & "\Python\Requirements.txt"
+    reqFile = Quote(rawReqPath)
+    
     uninstallFile = rootPath & "\Python\Uninstall.txt" ' Keep unquoted for FSO check
     snapFile = Quote(rootPath & "\Python\User_Environment_Snapshot.txt")
     
+    Dim fixedReqPath As String
+    fixedReqPath = rootPath & "\Temp\requirements_fixed.txt"
+    Dim fixedReqFile As String
+    fixedReqFile = Quote(fixedReqPath)
+
     ' ---------------------------------------------------------
     ' STEP 0: EXPLICIT UNINSTALL (The Cleanup Phase)
     ' ---------------------------------------------------------
@@ -430,10 +439,19 @@ Public Sub UpdatePythonDependencies(rootPath As String)
     ' ---------------------------------------------------------
     ' STEP 1: PIP INSTALL (The Upgrade Phase)
     ' ---------------------------------------------------------
-    If fso.fileExists(rootPath & "\Python\Requirements.txt") Then
+    If fso.fileExists(rawReqPath) Then
         ' Note: We run this AFTER uninstalling to ensure if a package
         ' is re-required by a dependency, it gets pulled back in.
-        cmd = "cmd /c " & venvPy & " -m pip install -r " & reqFile & " --upgrade --no-input"
+        
+        ' FIX ENCODING: Convert UTF-16 to ANSI/UTF-8 if needed
+        If FixRequirementsEncoding(rawReqPath, fixedReqPath) Then
+            Debug.Print "Pip Install: Using fixed requirements file: " & fixedReqPath
+            cmd = "cmd /c " & venvPy & " -m pip install -r " & fixedReqFile & " --upgrade --no-input"
+        Else
+            Debug.Print "Pip Install: Warning - Encoding fix failed, using original file."
+            cmd = "cmd /c " & venvPy & " -m pip install -r " & reqFile & " --upgrade --no-input"
+        End If
+        
         RunShellWait cmd
     End If
     
@@ -682,7 +700,7 @@ Private Function BuildPathKey(folderPart As String, filePart As String) As Strin
     Dim s As String: s = folderPart
     If right(s, 1) <> "\" And Len(s) > 0 Then s = s & "\"
     s = s & filePart
-    BuildPathKey = UCase(s)
+    key = UCase(s)
 End Function
 
 Private Function GetRelativePath(fullPath As String, rootPath As String) As String
@@ -704,5 +722,126 @@ Private Sub RunShellWait(cmd As String)
     CreateObject("WScript.Shell").Run cmd, 0, True
 End Sub
 
+' ==============================================================
+' ENCODING FIX FOR REQUIREMENTS.TXT
+' ==============================================================
 
+Private Function FixRequirementsEncoding(sourcePath As String, destPath As String) As Boolean
+    On Error GoTo EH
+
+    Dim fso As Object
+    Set fso = CreateObject("Scripting.FileSystemObject")
+
+    ' Ensure Temp folder exists
+    Dim tempFolder As String
+    tempFolder = fso.GetParentFolderName(destPath)
+    If Not fso.FolderExists(tempFolder) Then
+        Call EnsureFolderExists(fso, tempFolder)
+    End If
+
+    ' Read source file as binary to detect encoding
+    Dim stm As Object
+    Set stm = CreateObject("ADODB.Stream")
+
+    stm.Type = 1 ' adTypeBinary
+    stm.Open
+    stm.LoadFromFile sourcePath
+
+    Dim bytes() As Byte
+    bytes = stm.Read
+    stm.Close
+
+    ' Detect UTF-16 BOM (FF FE or FE FF) or null bytes pattern
+    Dim isUTF16 As Boolean
+    isUTF16 = False
+
+    If UBound(bytes) >= 1 Then
+        ' Check for BOM
+        If (bytes(0) = &HFF And bytes(1) = &HFE) Or (bytes(0) = &HFE And bytes(1) = &HFF) Then
+            isUTF16 = True
+            Debug.Print "INFO: Detected UTF-16 BOM in requirements.txt"
+        ' Check for null byte pattern (UTF-16 without BOM)
+        ElseIf UBound(bytes) >= 3 Then
+            If bytes(1) = 0 Or bytes(3) = 0 Then
+                isUTF16 = True
+                Debug.Print "INFO: Detected UTF-16 (no BOM) in requirements.txt"
+            End If
+        End If
+    End If
+
+    If isUTF16 Then
+        ' Convert UTF-16 to UTF-8
+        Debug.Print "INFO: Converting UTF-16 to UTF-8..."
+
+        Dim stmIn As Object, stmOut As Object
+        Set stmIn = CreateObject("ADODB.Stream")
+        Set stmOut = CreateObject("ADODB.Stream")
+
+        ' Read as UTF-16
+        stmIn.Type = 2 ' adTypeText
+        stmIn.Charset = "unicode" ' UTF-16 LE
+        stmIn.Open
+        stmIn.LoadFromFile sourcePath
+
+        Dim textContent As String
+        If Not stmIn.EOS Then
+            textContent = stmIn.ReadText
+        Else
+            textContent = ""
+        End If
+        stmIn.Close
+
+        ' Write as UTF-8 (without BOM for pip compatibility)
+        stmOut.Type = 2
+        stmOut.Charset = "utf-8"
+        stmOut.Open
+        stmOut.WriteText textContent
+
+        ' Remove UTF-8 BOM by copying to binary stream
+        stmOut.Position = 0
+        stmOut.Type = 1 ' switch to binary
+
+        ' Skip BOM if present (first 3 bytes for UTF-8 BOM)
+        Dim outBytes As Variant
+        stmOut.Position = 3 ' Skip BOM
+        If stmOut.Size > 3 Then
+            outBytes = stmOut.Read
+        Else
+            stmOut.Position = 0
+            outBytes = stmOut.Read
+        End If
+        stmOut.Close
+
+        ' Force delete destination if exists
+        If fso.fileExists(destPath) Then
+            On Error Resume Next
+            fso.DeleteFile destPath, True
+            On Error GoTo EH
+        End If
+
+        Debug.Print "INFO: Saving converted file to: " & destPath
+
+        ' Write clean UTF-8 file
+        Dim stmFinal As Object
+        Set stmFinal = CreateObject("ADODB.Stream")
+        stmFinal.Type = 1
+        stmFinal.Open
+        stmFinal.Write outBytes
+        stmFinal.SaveToFile destPath, 2 ' adSaveCreateOverWrite
+        stmFinal.Close
+
+        Debug.Print "INFO: Converted file saved to " & destPath
+    Else
+        ' File is already in correct encoding, just copy
+        Debug.Print "INFO: File encoding OK, copying to " & destPath
+        fso.CopyFile sourcePath, destPath, True
+    End If
+
+    FixRequirementsEncoding = True
+    Exit Function
+
+EH:
+    Debug.Print "ERROR: Failed to fix encoding: " & Err.Description
+    FixRequirementsEncoding = False
+End Function
 

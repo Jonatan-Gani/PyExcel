@@ -857,7 +857,11 @@ Private Function FixRequirementsEncoding(sourcePath As String, destPath As Strin
         stmIn.LoadFromFile sourcePath
 
         Dim textContent As String
-        textContent = stmIn.ReadText
+        If Not stmIn.EOS Then
+            textContent = stmIn.ReadText
+        Else
+            textContent = ""
+        End If
         stmIn.Close
 
         ' Write as UTF-8 (without BOM for pip compatibility)
@@ -871,7 +875,7 @@ Private Function FixRequirementsEncoding(sourcePath As String, destPath As Strin
         stmOut.Type = 1 ' switch to binary
 
         ' Skip BOM if present (first 3 bytes for UTF-8 BOM)
-        Dim outBytes() As Byte
+        Dim outBytes As Variant
         stmOut.Position = 3 ' Skip BOM
         If stmOut.Size > 3 Then
             outBytes = stmOut.Read
@@ -880,6 +884,15 @@ Private Function FixRequirementsEncoding(sourcePath As String, destPath As Strin
             outBytes = stmOut.Read
         End If
         stmOut.Close
+
+        ' Force delete destination if exists
+        If fso.fileExists(destPath) Then
+            On Error Resume Next
+            fso.DeleteFile destPath, True
+            On Error GoTo EH
+        End If
+
+        LogMessage "INFO", "Encoding", "Saving converted file to: " & destPath
 
         ' Write clean UTF-8 file
         Dim stmFinal As Object
