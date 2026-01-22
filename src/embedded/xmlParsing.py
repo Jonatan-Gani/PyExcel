@@ -153,7 +153,23 @@ def read_xml(path: str) -> dict[str, Any]:
                     df_dict[cname] = s.str.lower().eq("true")
 
                 elif ctype == "timestamp":
-                    df_dict[cname] = pd.to_datetime(s, errors="coerce", utc=True)
+                    # Try to convert to numeric first (Excel format)
+                    # Excel stores dates as days since 1899-12-30
+                    # This handles: dates (45741), times (0.5), datetimes (45741.65625)
+                    numeric_vals = pd.to_numeric(s, errors="coerce")
+
+                    if numeric_vals.notna().any():
+                        # Excel epoch: 1899-12-30 (Excel incorrectly treats 1900 as leap year)
+                        df_dict[cname] = pd.to_datetime(
+                            numeric_vals,
+                            unit='D',
+                            origin='1899-12-30',
+                            utc=True,
+                            errors='coerce'
+                        )
+                    else:
+                        # Fallback for string dates (backwards compatibility)
+                        df_dict[cname] = pd.to_datetime(s, dayfirst=True, errors="coerce", utc=True)
 
                 elif ctype == "blank":
                     df_dict[cname] = pd.Series(pd.NA, index=s.index)
@@ -209,7 +225,14 @@ def read_xml(path: str) -> dict[str, Any]:
             elif dtype == "bool":
                 out = raw.lower() == "true"
             elif dtype == "timestamp":
-                out = pd.to_datetime(raw, errors="coerce", utc=True)
+                # Try numeric first (Excel serial date format)
+                try:
+                    numeric_val = float(raw)
+                    # Excel epoch: 1899-12-30
+                    out = pd.to_datetime(numeric_val, unit='D', origin='1899-12-30', utc=True)
+                except (ValueError, TypeError):
+                    # Fallback to string parsing
+                    out = pd.to_datetime(raw, dayfirst=True, errors="coerce", utc=True)
             else:
                 out = raw
 
@@ -296,7 +319,14 @@ def write_xml(path: str,
         if isinstance(v, (int, float, np.integer, np.floating)):
             return str(v)
         if isinstance(v, (datetime, pd.Timestamp)):
-            return v.strftime("%Y-%m-%d")
+            # Convert to Excel serial date (days since 1899-12-30)
+            # This preserves time components and is unambiguous
+            excel_epoch = pd.Timestamp('1899-12-30', tz='UTC')
+            ts = pd.Timestamp(v)
+            if ts.tzinfo is None:
+                ts = ts.tz_localize('UTC')
+            delta = ts - excel_epoch
+            return str(delta.total_seconds() / 86400)  # Convert seconds to days
         return str(v)
 
     if isinstance(tables, pd.DataFrame):

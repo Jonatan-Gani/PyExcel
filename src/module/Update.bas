@@ -706,7 +706,7 @@ Private Function BuildPathKey(folderPart As String, filePart As String) As Strin
     Dim s As String: s = folderPart
     If right(s, 1) <> "\" And Len(s) > 0 Then s = s & "\"
     s = s & filePart
-    key = UCase(s)
+    BuildPathKey = UCase(s)
 End Function
 
 Private Function GetRelativePath(fullPath As String, rootPath As String) As String

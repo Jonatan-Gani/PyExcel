@@ -360,12 +360,15 @@ Public Function SerializeRangeToTypedXML(rngRef As String) As String
         If numRows = 1 And numCols = 1 Then
             If varBName = "" Then varBName = "value" & (i + 1)
 
-            Dim scalarVal As Variant: scalarVal = data(1, 1)
+            ' When reading a single cell, Range.Value returns a scalar, not a 2D array
+            Dim scalarVal As Variant: scalarVal = data
             Dim dt As String
 
             If IsDate(scalarVal) Then
                 dt = "timestamp"
-                scalarVal = Format$(scalarVal, "yyyy-mm-dd\THH:nn:ss") & "Z"
+                ' Export as Excel numeric serial date (days since 1899-12-30)
+                ' This handles dates, times, and datetimes unambiguously
+                scalarVal = CStr(CDbl(scalarVal))
             ElseIf IsNumeric(scalarVal) Then
                 If CLng(scalarVal) = CDbl(scalarVal) Then
                     dt = "int"
@@ -433,7 +436,7 @@ Public Function SerializeRangeToTypedXML(rngRef As String) As String
 
         For c = 1 To numCols
             Select Case LCase$(typeRow(c))
-                Case "date":  isDateCol(c) = True
+                Case "timestamp":  isDateCol(c) = True  ' InferColumnType returns "timestamp" for vbDate
                 Case "bool":  isBoolCol(c) = True
                 Case "int":   isNumCol(c) = True: wantsInt(c) = True
                 Case "float": isNumCol(c) = True
@@ -458,7 +461,9 @@ Public Function SerializeRangeToTypedXML(rngRef As String) As String
                 If IsEmpty(v) Then
                     colXml(c) = "<col/>"
                 ElseIf isDateCol(c) Then
-                    colXml(c) = "<col>" & Format$(v, "yyyy-mm-dd\THH:nn:ss") & "Z</col>"
+                    ' Export as Excel numeric serial date (days since 1899-12-30)
+                    ' This handles dates, times, and datetimes unambiguously
+                    colXml(c) = "<col>" & CStr(CDbl(v)) & "</col>"
                 ElseIf isBoolCol(c) Then
                     colXml(c) = "<col>" & LCase$(CStr(CBool(v))) & "</col>"
                 ElseIf isNumCol(c) Then
@@ -1420,7 +1425,20 @@ Public Function PasteTypedXMLToRange(xmlString As String, dstRef As String) As B
                     Case "bool"
                         out(r + 1, c) = (LCase$(CStr(val)) = "true")
                     Case "date"
-                        If LenB(val) > 0 And IsDate(val) Then out(r + 1, c) = CDate(val) Else out(r + 1, c) = ""
+                        ' Handle both numeric Excel serial dates and string dates
+                        If LenB(val) > 0 Then
+                            If IsNumeric(val) Then
+                                ' Excel serial date (days since 1899-12-30)
+                                out(r + 1, c) = CDate(CDbl(val))
+                            ElseIf IsDate(val) Then
+                                ' String date format (backwards compatibility)
+                                out(r + 1, c) = CDate(val)
+                            Else
+                                out(r + 1, c) = ""
+                            End If
+                        Else
+                            out(r + 1, c) = ""
+                        End If
                     Case Else
                         out(r + 1, c) = val
                 End Select
@@ -1519,9 +1537,5 @@ Fail:
     PasteTypedXMLToRange = False
     Resume clean_exit
 End Function
-
-
-
-
 
 

@@ -34,20 +34,20 @@ End Sub
 
 Public Sub UpdateProgress(pct As Double, msg As String)
     If CurrentProgressForm Is Nothing Then Exit Sub
-    
+        
     ' Update Text
     CurrentProgressForm.lblStatus.Caption = msg
-    
+        
     ' Update Bar Width
     Dim maxWidth As Double
     ' Use InsideWidth of the container frame
     maxWidth = CurrentProgressForm.fraBackground.InsideWidth
-    
+        
     ' Safety cap at 100%
     If pct > 1 Then pct = 1
-    
+        
     CurrentProgressForm.lblBar.Width = maxWidth * pct
-    
+        
     ' Force UI Update
     CurrentProgressForm.Repaint
     DoEvents
@@ -139,6 +139,57 @@ Private Function GetSetupSummary() As String
     GetSetupSummary = summary
 End Function
 
+Private Sub OfferToOpenUserGuide(rootPath As String)
+    On Error Resume Next
+
+    Dim fso As Object
+    Set fso = CreateObject("Scripting.FileSystemObject")
+
+    ' Look for the User Guide in common locations
+    Dim guidePaths As Variant
+    Dim guidePath As String
+    Dim foundPath As String
+    Dim i As Long
+
+    guidePaths = Array( _
+        rootPath & "\PyExcel_User_Guide.html", _
+        rootPath & "\AddIn\PyExcel_User_Guide.html", _
+        rootPath & "\docs\PyExcel_User_Guide.html", _
+        rootPath & "\README.html" _
+    )
+
+    foundPath = ""
+    For i = LBound(guidePaths) To UBound(guidePaths)
+        guidePath = guidePaths(i)
+        If fso.fileExists(guidePath) Then
+            foundPath = guidePath
+            Exit For
+        End If
+    Next i
+
+    ' Show completion message with option to open guide
+    Dim msgText As String
+    Dim userChoice As VbMsgBoxResult
+
+    msgText = GetSetupSummary() & vbCrLf & vbCrLf
+
+    If Len(foundPath) > 0 Then
+        msgText = msgText & "Would you like to open the PyExcel User Guide?"
+        userChoice = MsgBox(msgText, vbYesNo + vbInformation, "PyExcel Setup Complete")
+
+        If userChoice = vbYes Then
+            ' Open the user guide in the default browser
+            Dim sh As Object
+            Set sh = CreateObject("WScript.Shell")
+            sh.Run """" & foundPath & """", 1, False
+        End If
+    Else
+        ' No user guide found, just show the summary
+        MsgBox msgText & "You can find documentation in the project's AddIn folder.", _
+            vbInformation, "PyExcel Setup Complete"
+    End If
+End Sub
+
 ' ==============================================================
 ' CORE INSTALLATION LOGIC
 ' ==============================================================
@@ -157,10 +208,19 @@ Public Function PyExcelSetup() As Boolean
     Debug.Print "[PyExcelSetup] Initialization started."
 
     userChoice = MsgBox( _
-        "This installation may take several minutes and requires Python to be installed on this machine." & vbCrLf & vbCrLf & _
+        "PyExcel Setup will perform the following steps:" & vbCrLf & vbCrLf & _
+        "1. Create project folder structure" & vbCrLf & _
+        "2. Save your workbook as a macro-enabled file (.xlsm)" & vbCrLf & _
+        "3. Create a Python virtual environment" & vbCrLf & _
+        "4. Extract required Python scripts and resources" & vbCrLf & _
+        "5. Install Python packages (pandas, plotly, etc.)" & vbCrLf & vbCrLf & _
+        "Requirements:" & vbCrLf & _
+        "  - Python must be installed on this machine" & vbCrLf & _
+        "  - Internet connection for package downloads" & vbCrLf & vbCrLf & _
+        "This process may take several minutes. Excel will pause during some steps." & vbCrLf & vbCrLf & _
         "Do you want to continue?", _
         vbYesNo + vbQuestion, _
-        "Confirm Installation" _
+        "PyExcel Setup" _
     )
 
     If userChoice <> vbYes Then
@@ -209,10 +269,10 @@ Public Function PyExcelSetup() As Boolean
     ' Re-ensure critical folders exist (in case of save oddities)
     Call EnsureFolderPath(hostPath, "Archive")
     Call CreatePlaceholder(JoinPath(hostPath, "Archive"), "This folder contains archived versions of your Python scripts.")
-    
+        
     Call EnsureFolderPath(hostPath, "userScripts")
     Call CreatePlaceholder(JoinPath(hostPath, "userScripts"), "Place your Python scripts here.")
-    
+        
     Call EnsureFolderPath(hostPath, "Temp")
 
     UpdateProgress 0.35, "Creating Python Environment (Excel will pause)..."
@@ -278,8 +338,8 @@ Public Function PyExcelSetup() As Boolean
 
     CloseProgressBar
 
-    ' Show summary dialog
-    MsgBox GetSetupSummary(), vbInformation, "PyExcel Setup Complete"
+    ' Offer to open User Guide if it exists
+    OfferToOpenUserGuide hostPath
 
     PyExcelSetup_LastMessage = "Installation completed successfully."
     Debug.Print "[PyExcelSetup] Installation finished."
@@ -298,7 +358,7 @@ Failed:
     End If
     Debug.Print "[PyExcelSetup] " & PyExcelSetup_LastMessage
     MsgBox "Setup Failed: " & PyExcelSetup_LastMessage & vbCrLf & vbCrLf & _
-           "Check setup_log.txt in the Temp folder for details.", vbCritical, "PyExcel Setup Failed"
+            "Check setup_log.txt in the Temp folder for details.", vbCritical, "PyExcel Setup Failed"
     PyExcelSetup = False
     Exit Function
 
@@ -323,12 +383,45 @@ Public Function SelectAndSetupRootPath(wb As Workbook, fso As Object) As String
     Dim projectName As String
     Dim dotIndex As Long
     Dim finalPath As String
+    Dim isUnsavedWorkbook As Boolean
+
+    ' Check if workbook is unsaved (no path, or generic name like "Book1")
+    isUnsavedWorkbook = (Len(wb.path) = 0)
 
     ' Set default path for folder picker
     If Len(wb.path) > 0 Then
         defaultPath = wb.path
     Else
         defaultPath = Environ$("USERPROFILE")
+    End If
+
+    ' If workbook is unsaved, ask user for a project name first
+    If isUnsavedWorkbook Then
+        projectName = Application.InputBox( _
+            Prompt:="Your workbook has not been saved yet." & vbCrLf & vbCrLf & _
+                "Please enter a name for your PyExcel project:" & vbCrLf & _
+                "(This will be used as the project folder name)", _
+            Title:="Project Name", _
+            Default:="MyProject", _
+            Type:=2) ' Type 2 = String
+
+        ' User cancelled or entered empty string
+        If VarType(projectName) = vbBoolean Then
+            ' User pressed Cancel
+            Exit Function
+        End If
+        projectName = Trim(CStr(projectName))
+        If Len(projectName) = 0 Then
+            MsgBox "Project name cannot be empty.", vbExclamation, "Invalid Name"
+            Exit Function
+        End If
+
+        ' Sanitize project name (remove invalid characters)
+        projectName = SanitizeFileName(projectName)
+        If Len(projectName) = 0 Then
+            MsgBox "Project name contains only invalid characters.", vbExclamation, "Invalid Name"
+            Exit Function
+        End If
     End If
 
     ' Always show folder picker - user chooses location manually
@@ -340,12 +433,14 @@ Public Function SelectAndSetupRootPath(wb As Workbook, fso As Object) As String
         pathChosen = .SelectedItems(1)
     End With
 
-    ' Extract Project Name from Workbook
-    dotIndex = InStrRev(wb.name, ".")
-    If dotIndex > 0 Then
-        projectName = Left$(wb.name, dotIndex - 1)
-    Else
-        projectName = wb.name
+    ' Extract Project Name from Workbook (only if not already set for unsaved workbooks)
+    If Len(projectName) = 0 Then
+        dotIndex = InStrRev(wb.name, ".")
+        If dotIndex > 0 Then
+            projectName = Left$(wb.name, dotIndex - 1)
+        Else
+            projectName = wb.name
+        End If
     End If
 
     ' Combine paths
@@ -361,6 +456,29 @@ Public Function SelectAndSetupRootPath(wb As Workbook, fso As Object) As String
 EH:
     Debug.Print "[SelectAndSetupRootPath][ERROR] " & Err.Description
     SelectAndSetupRootPath = ""
+End Function
+
+' Helper function to sanitize file/folder names
+Private Function SanitizeFileName(ByVal fileName As String) As String
+    Dim invalidChars As Variant
+    Dim i As Long
+    Dim result As String
+
+    ' Characters not allowed in Windows file names
+    invalidChars = Array("\", "/", ":", "*", "?", """", "<", ">", "|")
+
+    result = fileName
+    For i = LBound(invalidChars) To UBound(invalidChars)
+        result = Replace(result, invalidChars(i), "")
+    Next i
+
+    ' Also trim leading/trailing spaces and dots
+    result = Trim(result)
+    Do While Len(result) > 0 And right$(result, 1) = "."
+        result = Left$(result, Len(result) - 1)
+    Loop
+
+    SanitizeFileName = result
 End Function
 
 
@@ -453,7 +571,7 @@ End Sub
 
 Public Function SaveHostAsXLSM(wb As Workbook, rootPath As String) As Boolean
     On Error GoTo EH
-    
+
     Debug.Print "[SaveHostAsXLSM] === Starting SaveHostAsXLSM ==="
     Debug.Print "[SaveHostAsXLSM] Workbook name: " & wb.name
     Debug.Print "[SaveHostAsXLSM] Workbook path: " & wb.path
@@ -461,24 +579,17 @@ Public Function SaveHostAsXLSM(wb As Workbook, rootPath As String) As Boolean
     Debug.Print "[SaveHostAsXLSM] Root path: " & rootPath
     Debug.Print "[SaveHostAsXLSM] Workbook.Saved status: " & wb.Saved
     Debug.Print "[SaveHostAsXLSM] Workbook.ReadOnly: " & wb.ReadOnly
-    
-    ' Handle unsaved workbook names
-    Dim baseName As String
-    Dim dotIndex As Long
-    dotIndex = InStrRev(wb.name, ".")
-    
-    If dotIndex > 0 Then
-        baseName = Left$(wb.name, dotIndex - 1)
-    Else
-        baseName = wb.name
-    End If
-    
-    Debug.Print "[SaveHostAsXLSM] Base name extracted: " & baseName
-    
-    ' CREATE THE ROOT PATH IF IT DOESN'T EXIST
+
     Dim fso As Object
     Set fso = CreateObject("Scripting.FileSystemObject")
-    
+
+    ' Extract project name from the root path (folder name = project name)
+    ' This ensures consistency with SelectAndSetupRootPath
+    Dim baseName As String
+    baseName = fso.GetFileName(rootPath) ' Gets the last folder name
+    Debug.Print "[SaveHostAsXLSM] Base name from rootPath: " & baseName
+
+    ' CREATE THE ROOT PATH IF IT DOESN'T EXIST
     If Not fso.FolderExists(rootPath) Then
         Debug.Print "[SaveHostAsXLSM] Root path does not exist, creating it..."
         On Error Resume Next
@@ -493,25 +604,46 @@ Public Function SaveHostAsXLSM(wb As Workbook, rootPath As String) As Boolean
     Else
         Debug.Print "[SaveHostAsXLSM] Root path exists: OK"
     End If
-    
+
     Dim targetPath As String
     targetPath = rootPath & "\" & baseName & ".xlsm"
     Debug.Print "[SaveHostAsXLSM] Target path: " & targetPath
-    
-    ' Check if already saved in correct location
-    If wb.path = rootPath And LCase$(right$(wb.name, 5)) = ".xlsm" Then
-        Debug.Print "[SaveHostAsXLSM] Workbook already saved in correct location"
+
+    ' Check if already saved in correct location with correct name
+    If LCase$(wb.FullName) = LCase$(targetPath) Then
+        Debug.Print "[SaveHostAsXLSM] Workbook already saved in correct location with correct name"
+        ' Just save to update (no SaveAs needed)
+        wb.Save
         SaveHostAsXLSM = True
         Exit Function
     End If
-    
-    ' Check if file already exists at target
-    On Error Resume Next
+
+    ' Check if the source file IS the target file (same path)
+    ' This handles the case where an .xlsm is already in the project folder
+    If wb.path = rootPath And LCase$(right$(wb.name, 5)) = ".xlsm" Then
+        ' File is already in correct location but might have different name
+        ' If same name, just save; otherwise we need to SaveAs (rename)
+        If LCase$(fso.GetBaseName(wb.name)) = LCase$(baseName) Then
+            Debug.Print "[SaveHostAsXLSM] Workbook already saved in correct location"
+            wb.Save
+            SaveHostAsXLSM = True
+            Exit Function
+        End If
+    End If
+
+    ' Check if file already exists at target (could be a different file)
     Dim fileExists As Boolean
-    fileExists = (Dir(targetPath) <> "")
+    fileExists = fso.fileExists(targetPath)
     Debug.Print "[SaveHostAsXLSM] Target file exists: " & fileExists
-    On Error GoTo EH
-    
+
+    ' If target exists and is the same as source, just save
+    If fileExists And LCase$(wb.FullName) = LCase$(targetPath) Then
+        Debug.Print "[SaveHostAsXLSM] Source and target are the same file, just saving"
+        wb.Save
+        SaveHostAsXLSM = True
+        Exit Function
+    End If
+
     ' Check if workbook has VBA project and if it's protected
     On Error Resume Next
     Dim hasVBA As Boolean
@@ -523,21 +655,21 @@ Public Function SaveHostAsXLSM(wb As Workbook, rootPath As String) As Boolean
         Debug.Print "[SaveHostAsXLSM] VBA Project name: " & vbaProjectName
     End If
     On Error GoTo EH
-    
+
     Debug.Print "[SaveHostAsXLSM] About to disable alerts and attempt SaveAs..."
     Application.DisplayAlerts = False
-    
+
     ' Attempt the save with detailed error capture
     On Error Resume Next
     wb.SaveAs fileName:=targetPath, FileFormat:=xlOpenXMLWorkbookMacroEnabled
-    
+
     Dim saveError As Long
     Dim saveErrorDesc As String
     saveError = Err.Number
     saveErrorDesc = Err.Description
-    
+
     Application.DisplayAlerts = True
-    
+
     If saveError <> 0 Then
         Debug.Print "[SaveHostAsXLSM] SaveAs FAILED!"
         Debug.Print "[SaveHostAsXLSM] Error Number: " & saveError
@@ -545,15 +677,15 @@ Public Function SaveHostAsXLSM(wb As Workbook, rootPath As String) As Boolean
         Debug.Print "[SaveHostAsXLSM] FileFormat constant value: " & xlOpenXMLWorkbookMacroEnabled
         Err.Raise saveError, "SaveHostAsXLSM", saveErrorDesc
     End If
-    
+
     On Error GoTo EH
-    
+
     Debug.Print "[SaveHostAsXLSM] SaveAs succeeded!"
     Debug.Print "[SaveHostAsXLSM] New workbook FullName: " & wb.FullName
-    
+
     SaveHostAsXLSM = True
     Exit Function
-    
+
 EH:
     Application.DisplayAlerts = True
     Debug.Print "[SaveHostAsXLSM] === ERROR HANDLER TRIGGERED ==="
@@ -570,7 +702,7 @@ End Function
 
 Public Function CreatePythonVenv(fso As Object, rootPath As String) As Boolean
     On Error GoTo EH
-    
+        
     Dim venvPath As String
     venvPath = rootPath & "\Python\.venv"
 
@@ -705,7 +837,7 @@ Private Function ExtractEmbeddedStoreUnified(wsStore As Worksheet, outRoot As St
         ' Assemble chunks (1-based to match Embedder)
         Set chunksDict = fileMap(k)
         bigB64 = ""
-        
+            
         For i = 1 To chunksDict.count
             If chunksDict.Exists(CLng(i)) Then
                 bigB64 = bigB64 & chunksDict(i)
@@ -715,7 +847,7 @@ Private Function ExtractEmbeddedStoreUnified(wsStore As Worksheet, outRoot As St
         ' Build full path (Simplified: Trust RelPath)
         ' parts(0) = relPath (The correct relative path, e.g., "Python\tools.py")
         ' parts(1) = fName (Ignored for path construction to avoid "Bad Packer" absolute path bugs)
-        
+            
         fullPath = outRoot & parts(0)
         fullPath = Replace(fullPath, "\\", "\")
 
@@ -727,19 +859,19 @@ Private Function ExtractEmbeddedStoreUnified(wsStore As Worksheet, outRoot As St
 
         ' Decode and write
         On Error Resume Next
-        
+            
         ' DEBUG: Trace the conversion
         Debug.Print "[Extract] Processing: " & fullPath
         Debug.Print "[Extract] Base64 Len: " & Len(bigB64)
-        
+            
         Dim vResult As Variant
         vResult = Base64ToBinary(bigB64)
-        
+            
         Debug.Print "[Extract] Base64ToBinary Type: " & TypeName(vResult)
-        
+            
         If VarType(vResult) = vbByte + vbArray Then
             bytes = vResult
-            
+                
             If Err.Number = 0 Then
                 WriteBinaryFile fullPath, bytes
                 If Err.Number = 0 Then
@@ -751,8 +883,8 @@ Private Function ExtractEmbeddedStoreUnified(wsStore As Worksheet, outRoot As St
                     Err.Clear
                 End If
             Else
-                 LogMessage "ERROR", "Extract", "Assign Byte() failed: " & Err.Description
-                 Err.Clear
+                    LogMessage "ERROR", "Extract", "Assign Byte() failed: " & Err.Description
+                    Err.Clear
             End If
         Else
             LogMessage "ERROR", "Extract", "Type Mismatch: Base64ToBinary returned " & TypeName(vResult) & " for " & fullPath
@@ -826,19 +958,24 @@ Private Function InstallPipPackages(targetPath As String) As Boolean
 
     LogMessage "INFO", "Pip Install", "Pip log file: " & pipLogFile
 
+
+
     ' Upgrade pip first
     LogMessage "INFO", "Pip Install", "Upgrading pip..."
-    cmd = "cmd /c """"" & venvPy & """ -m pip install --upgrade pip --no-input"" > """ & pipLogFile & """ 2>&1"
+    cmd = "cmd /c call """ & venvPy & """ -m pip install --upgrade pip"
     LogMessage "DEBUG", "Pip Install", "Command: " & cmd
     Set sh = CreateObject("WScript.Shell")
-    exitCode = sh.Run(cmd, 0, True)
+    exitCode = sh.Run(cmd, 1, True)
     LogMessage "INFO", "Pip Install", "Pip upgrade exit code: " & exitCode
-
+        
     ' Install packages from fixed requirements (append to log)
     LogMessage "INFO", "Pip Install", "Installing packages from requirements..."
-    cmd = "cmd /c """"" & venvPy & """ -m pip install -r """ & fixedReqFile & """ --no-input"" >> """ & pipLogFile & """ 2>&1"
+    cmd = "cmd /c call """ & venvPy & """ -m pip install -r """ & fixedReqFile & """"
     LogMessage "DEBUG", "Pip Install", "Command: " & cmd
-    exitCode = sh.Run(cmd, 0, True)
+    exitCode = sh.Run(cmd, 1, True)
+        
+        
+        
 
     LogMessage "INFO", "Pip Install", "Pip install exit code: " & exitCode
     LogMessage "INFO", "Pip Install", "Full pip output saved to: " & pipLogFile
@@ -1013,7 +1150,7 @@ Private Function VerifyExtractedFiles(fso As Object, rootPath As String) As Bool
 
         If Len(Dir$(filePath, vbNormal)) = 0 Then
             LogMessage "ERROR", "File Verify", "Missing critical file: " & criticalFiles(i)
-            missingFiles = missingFiles & vbCrLf & "  - " & criticalFiles(i)
+            missingFiles = missingFiles & vbCrLf & "    - " & criticalFiles(i)
             allFound = False
         Else
             LogMessage "INFO", "File Verify", "OK: " & criticalFiles(i)
@@ -1045,17 +1182,15 @@ End Function
 
 Private Function VerifyPipPackages(rootPath As String, ByRef installedCount As Long, ByRef requiredCount As Long) As Boolean
     On Error GoTo EH
-
     Dim venvPy As String
     Dim reqFile As String
     Dim fixedReqFile As String
     Dim fso As Object
-
     Set fso = CreateObject("Scripting.FileSystemObject")
-
+        
     venvPy = JoinPath(rootPath, "Python\.venv\Scripts\python.exe")
     fixedReqFile = JoinPath(rootPath, "Temp\requirements_fixed.txt")
-
+        
     ' Use the fixed requirements file if it exists
     If fso.fileExists(fixedReqFile) Then
         reqFile = fixedReqFile
@@ -1065,18 +1200,18 @@ Private Function VerifyPipPackages(rootPath As String, ByRef installedCount As L
             reqFile = JoinPath(rootPath, "Python\Requirements.txt")
         End If
     End If
-
+        
     ' Parse requirements to get expected packages
     Dim requiredPackages As Object
     Set requiredPackages = CreateObject("Scripting.Dictionary")
-
+        
     If fso.fileExists(reqFile) Then
         Dim ts As Object
         Set ts = fso.OpenTextFile(reqFile, 1, False)
         Dim line As String
         Dim pkgName As String
         Dim eqPos As Long
-
+            
         Do While Not ts.AtEndOfStream
             line = Trim(ts.ReadLine)
             ' Skip empty lines and comments
@@ -1087,16 +1222,13 @@ Private Function VerifyPipPackages(rootPath As String, ByRef installedCount As L
                 If eqPos = 0 Then eqPos = InStr(line, "<=")
                 If eqPos = 0 Then eqPos = InStr(line, ">")
                 If eqPos = 0 Then eqPos = InStr(line, "<")
-
                 If eqPos > 0 Then
                     pkgName = LCase(Trim(Left(line, eqPos - 1)))
                 Else
                     pkgName = LCase(Trim(line))
                 End If
-
                 ' Normalize package names (replace _ with -)
                 pkgName = Replace(pkgName, "_", "-")
-
                 If Len(pkgName) > 0 Then
                     requiredPackages(pkgName) = True
                 End If
@@ -1104,67 +1236,82 @@ Private Function VerifyPipPackages(rootPath As String, ByRef installedCount As L
         Loop
         ts.Close
     End If
-
+        
     requiredCount = requiredPackages.count
     LogMessage "INFO", "Pip Verify", "Required packages: " & requiredCount
-
-    ' Get installed packages via pip list
-    Dim tempFile As String
-    tempFile = JoinPath(rootPath, "Temp\pip_list.txt")
-
-    Dim cmd As String
+        
+    ' Get installed packages via pip list using Exec to capture output directly
     Dim sh As Object
     Set sh = CreateObject("WScript.Shell")
-
-    cmd = "cmd /c """ & venvPy & """ -m pip list --format=freeze > """ & tempFile & """"
-    sh.Run cmd, 0, True
-
-    ' Parse pip list output
+        
+    Dim cmd As String
+    Dim oExec As Object
+    cmd = """" & venvPy & """ -m pip list --format=freeze"
+    LogMessage "DEBUG", "Pip Verify", "Running: " & cmd
+        
+    Set oExec = sh.Exec(cmd)
+        
+    ' Wait for completion
+    Do While oExec.status = 0
+        DoEvents
+    Loop
+        
+    ' Read output
+    Dim output As String
+    output = oExec.StdOut.ReadAll
+        
+    LogMessage "DEBUG", "Pip Verify", "Raw pip output length: " & Len(output)
+        
+    ' Parse the output directly
+    Dim lines() As String
     Dim installedPackages As Object
     Set installedPackages = CreateObject("Scripting.Dictionary")
-
-    If fso.fileExists(tempFile) Then
-        Set ts = fso.OpenTextFile(tempFile, 1, False)
-
-        Do While Not ts.AtEndOfStream
-            line = Trim(ts.ReadLine)
+        
+    If Len(output) > 0 Then
+        lines = Split(output, vbLf)
+            
+        Dim i As Long
+        For i = LBound(lines) To UBound(lines)
+            line = Trim(Replace(lines(i), vbCr, ""))
             If Len(line) > 0 Then
                 eqPos = InStr(line, "==")
                 If eqPos > 0 Then
                     pkgName = LCase(Trim(Left(line, eqPos - 1)))
                     pkgName = Replace(pkgName, "_", "-")
                     installedPackages(pkgName) = True
+                    LogMessage "DEBUG", "Pip Verify", "Found installed: " & pkgName
                 End If
             End If
-        Loop
-        ts.Close
+        Next i
     End If
-
+        
     LogMessage "INFO", "Pip Verify", "Installed packages: " & installedPackages.count
-
+        
     ' Check each required package
     Dim missingPackages As String
     Dim pkg As Variant
     installedCount = 0
-
+        
     For Each pkg In requiredPackages.keys
         If installedPackages.Exists(CStr(pkg)) Then
             installedCount = installedCount + 1
+            LogMessage "DEBUG", "Pip Verify", "Verified: " & pkg
         Else
             ' Try with underscores instead of hyphens
             Dim altPkg As String
             altPkg = Replace(CStr(pkg), "-", "_")
             If installedPackages.Exists(altPkg) Then
                 installedCount = installedCount + 1
+                LogMessage "DEBUG", "Pip Verify", "Verified (alt): " & pkg & " as " & altPkg
             Else
                 LogMessage "WARN", "Pip Verify", "Missing package: " & pkg
                 missingPackages = missingPackages & vbCrLf & "  - " & pkg
             End If
         End If
     Next pkg
-
+        
     LogMessage "INFO", "Pip Verify", "Verified " & installedCount & " of " & requiredCount & " packages"
-
+        
     If installedCount < requiredCount Then
         LogMessage "WARN", "Pip Verify", "Missing packages:" & missingPackages
         SetupStats("PackagesFailed") = requiredCount - installedCount
@@ -1179,23 +1326,22 @@ Private Function VerifyPipPackages(rootPath As String, ByRef installedCount As L
     Else
         VerifyPipPackages = True
     End If
+        
     Exit Function
-
 EH:
     LogMessage "ERROR", "Pip Verify", "Exception: " & Err.Description
     VerifyPipPackages = False
 End Function
-
 ' ==============================================================
 ' UTILITIES
 ' ==============================================================
 
 Private Sub SortVariantNumeric(ByRef a As Variant)
     Dim i As Long, j As Long, tmp As Variant
-    
+        
     If IsEmpty(a) Then Exit Sub
     If UBound(a) <= LBound(a) Then Exit Sub
-    
+        
     For i = LBound(a) To UBound(a) - 1
         For j = i + 1 To UBound(a)
             If CLng(a(j)) < CLng(a(i)) Then
@@ -1288,7 +1434,4 @@ Public Function JoinPath(base As String, leaf As String) As String
         JoinPath = base & "\" & leaf
     End If
 End Function
-
-
-
 
