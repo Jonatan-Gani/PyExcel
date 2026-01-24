@@ -54,14 +54,39 @@ Sub RunGenericPythonScript(scriptName As String, srcRangeRef As String, dstRange
     tStep = Timer
 
     For Each part In Split(srcRangeRef, ";")
-        If InStr(part, "!") > 0 Then
-            addr = Split(part, "!")(1)
-            Set ws = wb.Sheets(Split(part, "!")(0))
+        Dim token As String: token = Trim$(CStr(part))
+
+        ' Strip name= prefix if present (e.g., "Sales=Sheet1!A1:C10" -> "Sheet1!A1:C10")
+        Dim eqPos As Long: eqPos = InStr(1, token, "=")
+        Dim bangPos As Long: bangPos = InStr(1, token, "!")
+
+        ' If = exists and comes before any ! (or no ! exists), strip the name
+        If eqPos > 0 And (bangPos = 0 Or eqPos < bangPos) Then
+            token = Trim$(Mid$(token, eqPos + 1))
+        End If
+
+        If Len(token) = 0 Then GoTo NextPart
+
+        ' Use ParseRangeRef to handle quoted sheet names (e.g., 'My Sheet'!A1:B10)
+        Dim parsedSheet As String, parsedAddr As String
+        ParseRangeRef token, parsedSheet, parsedAddr
+
+        If Len(parsedSheet) > 0 Then
+            addr = parsedAddr
+            On Error Resume Next
+            Set ws = wb.Sheets(parsedSheet)
+            On Error GoTo Fail
+            If ws Is Nothing Then
+                MsgBox "Sheet '" & parsedSheet & "' not found. Sheet names with spaces are supported, " & _
+                       "but the sheet must exist in the workbook.", vbCritical, "Python Script Error"
+                GoTo Fail
+            End If
         Else
-            addr = part
+            addr = token
             Set ws = HostManager_GetCurrentSheet()
         End If
         srcRangeList.Add ws.Range(addr)
+NextPart:
     Next part
 
     Debug.Print "  t+", Format(Timer - tStep, "0.000"), " srcRangeList built"
@@ -455,10 +480,10 @@ Public Function RunPythonJob(script As String, tempFiles As Object, Optional inp
 
     If Len(inputText) > 0 Then
         Debug.Print "t+", Format(Timer - tStep, "0.000"), " Writing input text to file: " & tempFiles("in")
-        Dim fNum As Integer: fNum = FreeFile
-        Open tempFiles("in") For Output As #fNum
-        Print #fNum, inputText
-        Close #fNum
+        Dim fnum As Integer: fnum = FreeFile
+        Open tempFiles("in") For Output As #fnum
+        Print #fnum, inputText
+        Close #fnum
     End If
     tStep = Timer
 

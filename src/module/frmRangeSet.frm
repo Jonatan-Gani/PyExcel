@@ -13,13 +13,12 @@ Attribute VB_GlobalNameSpace = False
 Attribute VB_Creatable = False
 Attribute VB_PredeclaredId = True
 Attribute VB_Exposed = False
-
 Option Explicit
 Private returnValue As String
 Private originalValue As String
 
 '=========================================
-' Entry point â€“ called from parent
+' Entry point – called from parent
 '=========================================
 Public Function GetUpdatedValue(oldValue As String) As String
     originalValue = oldValue
@@ -58,7 +57,7 @@ Private Sub Preload(v As String)
 End Sub
 
 '=========================================
-' Save button â€“ name optional
+' Save button – name optional
 '=========================================
 Private Sub SetButton_Click()
     Dim nm As String
@@ -85,7 +84,7 @@ Private Sub SetButton_Click()
     End If
 
     Set ws = rng.Worksheet
-    finalRef = ws.name & "!" & rng.Address(False, False)
+    finalRef = BuildRangeRef(ws.name, rng.Address(False, False))
 
     If nm = "" Then
         returnValue = finalRef
@@ -100,10 +99,11 @@ End Sub
 
 
 '=========================================
-' Cancel button â€“ return original
+' Cancel button – return original
 '=========================================
 Private Sub CancelButton_Click()
     returnValue = originalValue
     Me.Hide
 End Sub
+
 

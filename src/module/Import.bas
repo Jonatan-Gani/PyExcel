@@ -89,7 +89,13 @@ Public Sub RunImportForSheet(sheetName As String, sourcePath As String, destAddr
         Debug.Print "dest resolved to address: " & dest.Address
     End If
     On Error GoTo Fail
-    
+
+    ' NEW: Capture destination format before clearing
+    Dim savedFormatRow As Range
+    If Not dest Is Nothing Then
+        Set savedFormatRow = CaptureRowFormat(dest)
+    End If
+
     Dim writeRange As Range
     Set writeRange = PrepareOutputRange(dest, nRows, nCols, "Import", True, ws)
     If writeRange Is Nothing Then
@@ -118,11 +124,19 @@ Public Sub RunImportForSheet(sheetName As String, sourcePath As String, destAddr
         End If
     End With
 
+    ' NEW: Apply saved format and clear excess range
+    If Not savedFormatRow Is Nothing Then
+        ApplyFormatToRange savedFormatRow, writeRange
+    End If
+    If Not dest Is Nothing Then
+        ClearExcessRange dest, nRows
+    End If
+
 CLEANUP:
     Application.ScreenUpdating = True
     Application.EnableEvents = True
     Application.DisplayAlerts = True
-    MsgBox "Import complete: " & nRows & " rows Ã— " & nCols & " columns.", vbInformation
+    MsgBox "Import complete: " & nRows & " rows × " & nCols & " columns.", vbInformation
     Exit Sub
 
 Fail:
@@ -387,7 +401,7 @@ Private Function ReadExcel_ADO(filePath As String) As Variant
             ReadExcel_ADO = Empty
         End If
     Else
-        Debug.Print "EOF True â€“ No data."
+        Debug.Print "EOF True – No data."
         ReadExcel_ADO = Empty
     End If
 
@@ -486,4 +500,6 @@ Bad:
     rows = 0: cols = 0
     Variant2DSize = False
 End Function
+
+
 

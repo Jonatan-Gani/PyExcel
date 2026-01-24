@@ -221,7 +221,7 @@ Public Function SerializeRangeToTypedXML(rngRef As String) As String
             Debug.Print "User cancelled range selection or no range selected."
             GoTo Fail
         End If
-        rngRef = userSel.Worksheet.name & "!" & userSel.Address
+        rngRef = BuildRangeRef(userSel.Worksheet.name, userSel.Address)
         Debug.Print "User selected: " & rngRef
     End If
 
@@ -236,29 +236,19 @@ Public Function SerializeRangeToTypedXML(rngRef As String) As String
     ReDim partNames(LBound(rawParts) To UBound(rawParts))
     ReDim partRanges(LBound(rawParts) To UBound(rawParts))
     
-    Dim varName As String
-    
     Dim i As Long
     For i = LBound(rawParts) To UBound(rawParts)
         Dim token As String: token = Trim$(rawParts(i))
 
-        If Left$(token, 1) = "{" Then
-            Dim closePos As Long: closePos = InStr(2, token, "}")
-            If closePos > 0 Then
-'                Dim varName As String: varName = Mid$(token, 2, closePos - 2)
-                varName = Mid$(token, 2, closePos - 2)
-                Dim eqPos As Long: eqPos = InStr(closePos + 1, token, "=")
-                If eqPos > 0 Then
-                    partNames(i) = Trim$(varName)
-                    partRanges(i) = Trim$(Mid$(token, eqPos + 1))
-                Else
-                    partNames(i) = ""
-                    partRanges(i) = token
-                End If
-            Else
-                partNames(i) = ""
-                partRanges(i) = token
-            End If
+        ' Format: "name=range" or just "range"
+        ' Look for = but make sure it's not part of sheet!range syntax
+        Dim eqPos As Long: eqPos = InStr(1, token, "=")
+        Dim bangPos As Long: bangPos = InStr(1, token, "!")
+
+        ' If = exists and comes before any ! (or no ! exists), treat as name=range
+        If eqPos > 0 And (bangPos = 0 Or eqPos < bangPos) Then
+            partNames(i) = Trim$(Left$(token, eqPos - 1))
+            partRanges(i) = Trim$(Mid$(token, eqPos + 1))
         Else
             partNames(i) = ""
             partRanges(i) = token
@@ -288,10 +278,10 @@ Public Function SerializeRangeToTypedXML(rngRef As String) As String
                 Debug.Print "Trimmed range " & (i + 1) & " from " & currentRange.rows.count & " to " & trimmedRange.rows.count & " rows"
             End If
 
-            partRanges(i) = trimmedRange.Worksheet.name & "!" & trimmedRange.Address
+            partRanges(i) = BuildRangeRef(trimmedRange.Worksheet.name, trimmedRange.Address)
         Else
             Debug.Print "Range " & (i + 1) & " is completely empty"
-            partRanges(i) = currentRange.Worksheet.name & "!" & currentRange.Address
+            partRanges(i) = BuildRangeRef(currentRange.Worksheet.name, currentRange.Address)
         End If
     Next i
 
@@ -319,6 +309,11 @@ Public Function SerializeRangeToTypedXML(rngRef As String) As String
     ' ============================================================
     ' Process each input unit
     ' ============================================================
+    ' Per-type counters for auto-naming (df1, df2, ... / list1, list2, ... / value1, value2, ...)
+    Dim dfCount As Long: dfCount = 0
+    Dim listCount As Long: listCount = 0
+    Dim valueCount As Long: valueCount = 0
+
     Dim c As Long
     For i = LBound(partRanges) To UBound(partRanges)
         Dim part As String: part = Trim$(partRanges(i))
@@ -327,12 +322,20 @@ Public Function SerializeRangeToTypedXML(rngRef As String) As String
         Debug.Print "--- Serializing part " & (i + 1) & ": [" & part & "] ---"
 
         Dim ws As Worksheet, refRange As Range
-        If InStr(1, part, "!") > 0 Then
-            Dim sheetName As String, rangeText As String
-            sheetName = Left$(part, InStr(1, part, "!") - 1)
-            rangeText = Mid$(part, InStr(1, part, "!") + 1)
+        Dim sheetName As String, rangeText As String
 
+        ' Use ParseRangeRef to handle quoted sheet names (e.g., 'My Sheet'!A1:B10)
+        ParseRangeRef part, sheetName, rangeText
+
+        If Len(sheetName) > 0 Then
+            On Error Resume Next
             Set ws = Worksheets(sheetName)
+            On Error GoTo Fail
+            If ws Is Nothing Then
+                MsgBox "Sheet '" & sheetName & "' not found. Sheet names with spaces are supported, " & _
+                       "but the sheet must exist in the active workbook.", vbCritical, "Serialization Error"
+                GoTo Fail
+            End If
             Set refRange = ws.Range(rangeText)
         Else
             Set ws = ActiveSheet
@@ -358,7 +361,10 @@ Public Function SerializeRangeToTypedXML(rngRef As String) As String
         ' SCALAR (1x1)
         ' -------------------------
         If numRows = 1 And numCols = 1 Then
-            If varBName = "" Then varBName = "value" & (i + 1)
+            If varBName = "" Then
+                valueCount = valueCount + 1
+                varBName = "value" & valueCount
+            End If
 
             ' When reading a single cell, Range.Value returns a scalar, not a 2D array
             Dim scalarVal As Variant: scalarVal = data
@@ -391,18 +397,38 @@ Public Function SerializeRangeToTypedXML(rngRef As String) As String
         ' LIST (1xN or Nx1)
         ' -------------------------
         If (numRows = 1 And numCols > 1) Or (numCols = 1 And numRows > 1) Then
-            If varBName = "" Then varBName = "list" & (i + 1)
+            If varBName = "" Then
+                listCount = listCount + 1
+                varBName = "list" & listCount
+            End If
 
-            stream.WriteText "<list name=""" & varBName & """>" & vbCrLf
+            Dim isRowList As Boolean
+            Dim listLength As Long
+            Dim listType As String
             Dim r As Long
+            Dim itemVal As String
 
-            If numRows = 1 Then
+            isRowList = (numRows = 1)
+            If isRowList Then
+                listLength = numCols
+            Else
+                listLength = numRows
+            End If
+
+            ' Infer the type for the entire list
+            listType = InferListType(data, isRowList, listLength)
+
+            stream.WriteText "<list name=""" & varBName & """ datatype=""" & listType & """>" & vbCrLf
+
+            If isRowList Then
                 For c = 1 To numCols
-                    stream.WriteText "  <item>" & EscapeXml(CStr(data(1, c))) & "</item>" & vbCrLf
+                    itemVal = SerializeListItem(data(1, c), listType)
+                    stream.WriteText "  <item>" & itemVal & "</item>" & vbCrLf
                 Next
             Else
                 For r = 1 To numRows
-                    stream.WriteText "  <item>" & EscapeXml(CStr(data(r, 1))) & "</item>" & vbCrLf
+                    itemVal = SerializeListItem(data(r, 1), listType)
+                    stream.WriteText "  <item>" & itemVal & "</item>" & vbCrLf
                 Next
             End If
 
@@ -413,7 +439,10 @@ Public Function SerializeRangeToTypedXML(rngRef As String) As String
         ' -------------------------
         ' DATAFRAME (existing code)
         ' -------------------------
-        If varBName = "" Then varBName = "df" & (i + 1)
+        If varBName = "" Then
+            dfCount = dfCount + 1
+            varBName = "df" & dfCount
+        End If
 
         ' Original header/type logic remains unchanged
         Dim headerRow() As String, typeRow() As String
@@ -591,6 +620,108 @@ nextRow:
     End If
 End Function
 
+' Infer type for a 1D list (single row or single column range)
+' data: 2-D Variant from Range.Value (but only one dimension has >1 elements)
+' isRow: True if data is 1xN (single row), False if Nx1 (single column)
+Private Function InferListType(ByRef data As Variant, ByVal isRow As Boolean, ByVal count As Long) As String
+    Dim idx As Long
+    Dim v As Variant
+    Dim vt As VbVarType
+    Dim anyNonBlank As Boolean
+
+    Dim allDates As Boolean: allDates = True
+    Dim allBools As Boolean: allBools = True
+    Dim anyString As Boolean
+    Dim anyErrorish As Boolean
+    Dim anyNumeric As Boolean
+    Dim anyFloat As Boolean
+    Dim d As Double
+
+    For idx = 1 To count
+        If isRow Then
+            v = data(1, idx)
+        Else
+            v = data(idx, 1)
+        End If
+
+        If IsEmpty(v) Then GoTo nextItem
+
+        anyNonBlank = True
+        vt = VarType(v)
+
+        Select Case vt
+            Case vbString
+                anyString = True
+                Exit For  ' string dominates
+
+            Case vbBoolean
+                allDates = False
+
+            Case vbDate
+                allBools = False
+
+            Case vbByte, vbInteger, vbLong, vbLongLong, vbSingle, vbDouble, vbCurrency, vbDecimal
+                allDates = False
+                allBools = False
+                anyNumeric = True
+                d = CDbl(v)
+                If Abs(d - Fix(d)) >= 0.0000001 Then anyFloat = True
+
+            Case vbError, vbNull, vbObject, vbArray, vbDataObject, vbVariant
+                anyErrorish = True
+                Exit For
+
+            Case Else
+                anyErrorish = True
+                Exit For
+        End Select
+nextItem:
+    Next
+
+    If Not anyNonBlank Then
+        InferListType = "string"
+        Exit Function
+    End If
+
+    If anyString Or anyErrorish Then
+        InferListType = "string"
+    ElseIf allDates And Not anyNumeric And Not allBools Then
+        InferListType = "timestamp"
+    ElseIf allBools And Not anyNumeric And Not allDates Then
+        InferListType = "bool"
+    ElseIf anyNumeric And Not anyString And Not anyErrorish And Not allDates And Not allBools Then
+        If anyFloat Then
+            InferListType = "float"
+        Else
+            InferListType = "int"
+        End If
+    Else
+        InferListType = "string"
+    End If
+End Function
+
+' Serialize a single list item value based on its type
+Private Function SerializeListItem(ByVal v As Variant, ByVal listType As String) As String
+    If IsEmpty(v) Then
+        SerializeListItem = ""
+        Exit Function
+    End If
+
+    Select Case listType
+        Case "timestamp"
+            ' Export as Excel numeric serial date
+            SerializeListItem = CStr(CDbl(v))
+        Case "bool"
+            SerializeListItem = LCase$(CStr(CBool(v)))
+        Case "int"
+            SerializeListItem = CStr(CLng(v))
+        Case "float"
+            SerializeListItem = Format$(CDbl(v), "0.############################")
+        Case Else
+            SerializeListItem = EscapeXml(CStr(v))
+    End Select
+End Function
+
 Private Sub ShuffleArray(arr() As Long)
     Dim i As Long, j As Long, tmp As Long
     For i = UBound(arr) To LBound(arr) + 1 Step -1
@@ -630,6 +761,85 @@ Private Function SafeText$(v As Variant)
         SafeText = CStr(v)
     End If
 End Function
+
+' Wraps a sheet name in single quotes if it contains spaces or special characters.
+' Also escapes any embedded single quotes by doubling them.
+Public Function QuoteSheetName(ByVal sheetName As String) As String
+    ' Check if quoting is needed: spaces, single quotes, or other special chars
+    If InStr(sheetName, " ") > 0 Or InStr(sheetName, "'") > 0 Or _
+       InStr(sheetName, "[") > 0 Or InStr(sheetName, "]") > 0 Then
+        ' Escape embedded single quotes by doubling them
+        QuoteSheetName = "'" & Replace(sheetName, "'", "''") & "'"
+    Else
+        QuoteSheetName = sheetName
+    End If
+End Function
+
+' Builds a proper range reference: 'Sheet Name'!A1:B10 or SheetName!A1:B10
+Public Function BuildRangeRef(ByVal sheetName As String, ByVal rangeAddress As String) As String
+    BuildRangeRef = QuoteSheetName(sheetName) & "!" & rangeAddress
+End Function
+
+' Parses a range reference like 'Sheet Name'!A1:B10 or SheetName!A1:B10
+' Returns the sheet name (unquoted) and the range address.
+' If no sheet specified, returns empty sheetName and the full ref as rangeAddress.
+Public Sub ParseRangeRef(ByVal ref As String, ByRef sheetName As String, ByRef rangeAddress As String)
+    Dim bangPos As Long
+
+    ref = Trim$(ref)
+    sheetName = ""
+    rangeAddress = ref
+
+    If Len(ref) = 0 Then Exit Sub
+
+    ' Check if sheet name is quoted
+    If Left$(ref, 1) = "'" Then
+        ' Find the closing quote - it will be followed by '!
+        ' Handle escaped quotes ('') inside the name
+        Dim i As Long
+        Dim inQuote As Boolean
+        inQuote = True
+        i = 2  ' Start after opening quote
+
+        Do While i <= Len(ref)
+            If Mid$(ref, i, 1) = "'" Then
+                ' Check if it's an escaped quote ('') or closing quote
+                If i < Len(ref) And Mid$(ref, i + 1, 1) = "'" Then
+                    ' Escaped quote, skip both
+                    i = i + 2
+                Else
+                    ' This is the closing quote
+                    inQuote = False
+                    Exit Do
+                End If
+            Else
+                i = i + 1
+            End If
+        Loop
+
+        If Not inQuote And i <= Len(ref) Then
+            ' Extract sheet name (without quotes) and unescape doubled quotes
+            sheetName = Mid$(ref, 2, i - 2)
+            sheetName = Replace(sheetName, "''", "'")
+
+            ' Check for ! after the closing quote
+            If i < Len(ref) And Mid$(ref, i + 1, 1) = "!" Then
+                rangeAddress = Mid$(ref, i + 2)
+            Else
+                ' No ! found after quote - malformed, treat whole thing as address
+                sheetName = ""
+                rangeAddress = ref
+            End If
+        End If
+    Else
+        ' Unquoted sheet name - simple split on first !
+        bangPos = InStr(ref, "!")
+        If bangPos > 0 Then
+            sheetName = Left$(ref, bangPos - 1)
+            rangeAddress = Mid$(ref, bangPos + 1)
+        End If
+    End If
+End Sub
 
 
 
@@ -1337,7 +1547,11 @@ Public Function PasteTypedXMLToRange(xmlString As String, dstRef As String) As B
     
     Dim needLabel As Boolean: needLabel = (numTables > 1)
     Dim nextRow As Long, anchorCol As Long, placedCount As Long
-    
+
+    ' NEW: Capture destination format before clearing
+    Dim savedFormatRow As Range
+    Set savedFormatRow = CaptureRowFormat(dstRange)
+
     ' Pre-prepare the full destination once (pure-range mode: clears exactly dstRange, no resize)
     Dim preparedAnchor As Range
     Set preparedAnchor = PrepareOutputRange(dstRange, , , "Paste Typed XML", False)
@@ -1522,6 +1736,19 @@ Public Function PasteTypedXMLToRange(xmlString As String, dstRef As String) As B
 next_table:
     Next tIdx
 
+    ' NEW: Apply saved format to all data rows (after all tables are pasted)
+    Dim totalDataRows As Long
+    totalDataRows = nextRow - dstRange.Row
+
+    If totalDataRows > 0 And Not savedFormatRow Is Nothing Then
+        Dim actualUsedRange As Range
+        Set actualUsedRange = wsDst.Range(wsDst.Cells(dstRange.Row, anchorCol), _
+                                           wsDst.Cells(nextRow - 1, anchorCol + dstRange.Columns.count - 1))
+        ApplyFormatToRange savedFormatRow, actualUsedRange
+    End If
+
+    ' NEW: Clear excess range cells beyond the actual data
+    ClearExcessRange dstRange, totalDataRows
 
 clean_exit:
     '=== Restore Excel settings ===
@@ -1537,5 +1764,11 @@ Fail:
     PasteTypedXMLToRange = False
     Resume clean_exit
 End Function
+
+
+
+
+
+
 
 

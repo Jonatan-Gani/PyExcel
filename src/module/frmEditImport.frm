@@ -13,7 +13,6 @@ Attribute VB_GlobalNameSpace = False
 Attribute VB_Creatable = False
 Attribute VB_PredeclaredId = True
 Attribute VB_Exposed = False
-
 'Private Sub UserForm_Initialize()
 '    Dim wsName As String
 '
@@ -155,13 +154,13 @@ Private Sub btnSave_Click()
     wsName = ws.name
 
     tempInput = ""
-    For i = 0 To ListBoxInput.ListCount - 1
+    For i = 0 To ListBoxInput.listCount - 1
         If i > 0 Then tempInput = tempInput & ";"
         tempInput = tempInput & ListBoxInput.List(i)
     Next i
 
     tempOutput = ""
-    For i = 0 To ListBoxOutput.ListCount - 1
+    For i = 0 To ListBoxOutput.listCount - 1
         If i > 0 Then tempOutput = tempOutput & ";"
         tempOutput = tempOutput & ListBoxOutput.List(i)
     Next i
@@ -270,7 +269,7 @@ Private Sub btnEditOutput_Click()
     If rng Is Nothing Then Exit Sub
 
     ' Update the list value
-    ListBoxOutput.List(idx) = rng.parent.name & "!" & rng.Address(False, False)
+    ListBoxOutput.List(idx) = BuildRangeRef(rng.parent.name, rng.Address(False, False))
 End Sub
 
 
@@ -283,7 +282,7 @@ Private Sub btnAddOutput_Click()
     On Error GoTo 0
     If rng Is Nothing Then Exit Sub
 
-    ListBoxOutput.AddItem rng.parent.name & "!" & rng.Address(False, False)
+    ListBoxOutput.AddItem BuildRangeRef(rng.parent.name, rng.Address(False, False))
 End Sub
 
 
@@ -298,4 +297,5 @@ Private Sub btnDeleteOutput_Click()
 
     ListBoxOutput.RemoveItem idx
 End Sub
+
 

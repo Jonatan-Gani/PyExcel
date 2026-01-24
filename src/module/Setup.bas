@@ -93,34 +93,34 @@ Private Sub WriteSetupLog(rootPath As String)
     ' Ensure Temp folder exists
     Call EnsureFolderExists(rootPath & "\Temp")
 
-    Dim fNum As Integer
-    fNum = FreeFile
-    Open logPath For Output As #fNum
+    Dim fnum As Integer
+    fnum = FreeFile
+    Open logPath For Output As #fnum
 
     ' Write header
-    Print #fNum, "========================================"
-    Print #fNum, "PyExcel Setup Log"
-    Print #fNum, "Generated: " & Format(Now, "yyyy-mm-dd hh:nn:ss")
-    Print #fNum, "========================================"
-    Print #fNum, ""
+    Print #fnum, "========================================"
+    Print #fnum, "PyExcel Setup Log"
+    Print #fnum, "Generated: " & Format(Now, "yyyy-mm-dd hh:nn:ss")
+    Print #fnum, "========================================"
+    Print #fnum, ""
 
     ' Write stats summary
-    Print #fNum, "--- SUMMARY ---"
-    Print #fNum, "Files Extracted: " & SetupStats("FilesExtracted")
-    Print #fNum, "Files Failed: " & SetupStats("FilesFailed")
-    Print #fNum, "Packages Installed: " & SetupStats("PackagesInstalled")
-    Print #fNum, "Packages Failed: " & SetupStats("PackagesFailed")
-    Print #fNum, "Warnings: " & SetupStats("Warnings")
-    Print #fNum, ""
-    Print #fNum, "--- DETAILED LOG ---"
+    Print #fnum, "--- SUMMARY ---"
+    Print #fnum, "Files Extracted: " & SetupStats("FilesExtracted")
+    Print #fnum, "Files Failed: " & SetupStats("FilesFailed")
+    Print #fnum, "Packages Installed: " & SetupStats("PackagesInstalled")
+    Print #fnum, "Packages Failed: " & SetupStats("PackagesFailed")
+    Print #fnum, "Warnings: " & SetupStats("Warnings")
+    Print #fnum, ""
+    Print #fnum, "--- DETAILED LOG ---"
 
     ' Write all log entries
     Dim entry As Variant
     For Each entry In SetupLogEntries
-        Print #fNum, entry
+        Print #fnum, entry
     Next entry
 
-    Close #fNum
+    Close #fnum
 
     LogMessage "INFO", "Log File", "Written to " & logPath
 End Sub
@@ -398,7 +398,7 @@ Public Function SelectAndSetupRootPath(wb As Workbook, fso As Object) As String
     ' If workbook is unsaved, ask user for a project name first
     If isUnsavedWorkbook Then
         projectName = Application.InputBox( _
-            Prompt:="Your workbook has not been saved yet." & vbCrLf & vbCrLf & _
+            PROMPT:="Your workbook has not been saved yet." & vbCrLf & vbCrLf & _
                 "Please enter a name for your PyExcel project:" & vbCrLf & _
                 "(This will be used as the project folder name)", _
             Title:="Project Name", _
@@ -1093,11 +1093,11 @@ Private Function FixRequirementsEncoding(sourcePath As String, destPath As Strin
 
         ' Write as ASCII (which is compatible with UTF-8 for requirements.txt content)
         ' This avoids any BOM issues entirely
-        Dim fNum As Integer
-        fNum = FreeFile
-        Open destPath For Output As #fNum
-        Print #fNum, textContent;
-        Close #fNum
+        Dim fnum As Integer
+        fnum = FreeFile
+        Open destPath For Output As #fnum
+        Print #fnum, textContent;
+        Close #fnum
 
         LogMessage "INFO", "Encoding", "Converted file saved to " & destPath
     Else

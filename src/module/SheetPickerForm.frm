@@ -23,7 +23,7 @@ Private Sub UserForm_Initialize()
     For Each ws In ActiveWorkbook.Worksheets
         Me.cmbSheets.AddItem ws.name
     Next ws
-    If Me.cmbSheets.ListCount > 0 Then Me.cmbSheets.ListIndex = 0
+    If Me.cmbSheets.listCount > 0 Then Me.cmbSheets.ListIndex = 0
 End Sub
 
 Private Sub btnOK_Click()

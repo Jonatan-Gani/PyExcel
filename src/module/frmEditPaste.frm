@@ -105,7 +105,7 @@ Private Sub btnSave_Click()
     wsName = ws.name
 
     tempOutput = ""
-    For i = 0 To ListBoxOutput.ListCount - 1
+    For i = 0 To ListBoxOutput.listCount - 1
         If i > 0 Then tempOutput = tempOutput & ";"
         tempOutput = tempOutput & ListBoxOutput.List(i)
     Next i

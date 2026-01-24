@@ -156,6 +156,72 @@ Fail:
     MsgBox "PrepareOutputRange failed: " & Err.Description, vbCritical, opName
 End Function
 
+' ============================================================================
+' CaptureRowFormat
+' Saves a reference to the first row of a range for later format copying.
+' Returns the first row range to be used with ApplyFormatToRange.
+' ============================================================================
+Public Function CaptureRowFormat(ByVal firstRow As Range) As Range
+    On Error Resume Next
+    If firstRow Is Nothing Then Exit Function
+    Set CaptureRowFormat = firstRow.rows(1)
+    On Error GoTo 0
+End Function
+
+' ============================================================================
+' ApplyFormatToRange
+' Copies the formatting from sourceRow to all rows in targetRange.
+' Uses PasteSpecial xlPasteFormats for efficient batch formatting.
+' ============================================================================
+Public Sub ApplyFormatToRange(ByVal sourceRow As Range, ByVal targetRange As Range)
+    On Error Resume Next
+
+    If sourceRow Is Nothing Or targetRange Is Nothing Then Exit Sub
+    If targetRange.rows.count = 0 Then Exit Sub
+
+    ' Copy just the relevant columns from the source row
+    Dim sourceFormatRange As Range
+    Set sourceFormatRange = sourceRow.Cells(1, targetRange.Column).Resize(1, targetRange.Columns.count)
+
+    ' Apply to entire target range at once
+    sourceFormatRange.Copy
+    targetRange.PasteSpecial xlPasteFormats
+    Application.CutCopyMode = False
+
+    On Error GoTo 0
+End Sub
+
+' ============================================================================
+' ClearExcessRange
+' Clears destination cells beyond the actual data rows.
+' Only clears within the original destination columns (preserves adjacent data).
+' ============================================================================
+Public Sub ClearExcessRange( _
+    ByVal originalDestRange As Range, _
+    ByVal actualDataRowCount As Long _
+)
+    On Error Resume Next
+
+    If originalDestRange Is Nothing Then Exit Sub
+
+    Dim excessRowCount As Long
+    excessRowCount = originalDestRange.rows.count - actualDataRowCount
+
+    If excessRowCount > 0 Then
+        ' Clear only the destination columns, not entire Excel rows
+        ' This preserves adjacent data in other columns
+        Dim excessRange As Range
+        Set excessRange = originalDestRange.Offset(actualDataRowCount, 0) _
+                            .Resize(excessRowCount, originalDestRange.Columns.count)
+
+        excessRange.Clear  ' Clears contents AND formatting
+
+        Debug.Print "Cleared excess range: " & excessRange.Address
+    End If
+
+    On Error GoTo 0
+End Sub
+
 Private Function ResolveDestinationRange( _
     ByVal ws As Worksheet, _
     ByVal opName As String _
@@ -202,7 +268,7 @@ Private Function ResolveDestinationRange( _
     Application.CommandBars.ExecuteMso "ActivateWindow"
 
     Set r = Application.InputBox( _
-        Prompt:="Select destination range", _
+        PROMPT:="Select destination range", _
         Title:=opName & " - Destination", _
         Type:=8)
     Debug.Print "  >> InputBox elapsed (sec): " & Format(Timer - t0, "0.00")
@@ -234,5 +300,7 @@ clean_exit:
     Debug.Print "ResolveDestinationRange: END " & Format(Now, "hh:nn:ss")
     Debug.Print String(60, "-")
 End Function
+
+
 
 

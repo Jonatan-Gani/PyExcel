@@ -191,14 +191,60 @@ def read_xml(path: str) -> dict[str, Any]:
             col_buffers = None
 
         # -----------------------------
-        # NEW: <list>
+        # NEW: <list> with optional datatype
         # -----------------------------
         elif tag == "list":
             name = elem.get("name")
             if not name:
                 raise ValueError("<list> missing required 'name' attribute")
 
-            items = [(child.text or "") for child in elem.findall("item")]
+            datatype = elem.get("datatype", "string")
+            raw_items = [(child.text or "") for child in elem.findall("item")]
+
+            # Convert items based on datatype
+            if datatype == "int":
+                items = []
+                for raw in raw_items:
+                    if raw == "":
+                        items.append(0)
+                    else:
+                        try:
+                            items.append(int(float(raw)))
+                        except (ValueError, TypeError):
+                            items.append(0)
+
+            elif datatype == "float":
+                items = []
+                for raw in raw_items:
+                    if raw == "":
+                        items.append(0.0)
+                    else:
+                        try:
+                            items.append(float(raw))
+                        except (ValueError, TypeError):
+                            items.append(0.0)
+
+            elif datatype == "bool":
+                items = [raw.lower() == "true" for raw in raw_items]
+
+            elif datatype == "timestamp":
+                items = []
+                for raw in raw_items:
+                    if raw == "":
+                        items.append(pd.NaT)
+                    else:
+                        try:
+                            # Try numeric first (Excel serial date format)
+                            numeric_val = float(raw)
+                            items.append(pd.to_datetime(numeric_val, unit='D', origin='1899-12-30', utc=True))
+                        except (ValueError, TypeError):
+                            # Fallback to string parsing
+                            items.append(pd.to_datetime(raw, dayfirst=True, errors="coerce", utc=True))
+
+            else:
+                # Default: keep as strings
+                items = raw_items
+
             result[name] = items
 
             elem.clear()

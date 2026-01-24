@@ -1,10 +1,10 @@
-**Version:** 20260122_233042
+**Version:** 20260124_163946
 
 ---
 
 # PyExcel
 
-PyExcel is an Excel Add-in that bridges the gap between Microsoft Excel and Python. It enables users to leverage Python's robust data analysis and visualization libraries (like Pandas, NumPy, and Plotly) directly within their Excel workflows.
+An Excel add-in that enables execution of Python scripts directly from the workbook within a dedicated, isolated environment. Scripts run non-reactively, ensuring deterministic and reproducible execution. The add-in allows direct use of Python��s data analysis and visualization ecosystem including Pandas, NumPy, Plotly, and sqlite3 while maintaining clear separation between Excel and the Python runtime. This approach provides a controlled, reliable way to integrate advanced analytics and data processing into Excel workflows without compromising stability or speed.
 
 ## Features
 
