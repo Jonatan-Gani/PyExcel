@@ -449,8 +449,16 @@ class PlotlyToExcelXMLConverter:
                 return "scatter_lines_markers"
             return "scatter"
 
+        # Handle bar orientation: Plotly "bar" with orientation="v" (default) = vertical columns
+        # Excel: xlColumnClustered = vertical, xlBarClustered = horizontal
+        if trace_type == "bar":
+            orientation = getattr(trace, "orientation", "v") or "v"
+            if orientation.lower() == "h":
+                return "bar"  # horizontal bars -> Excel xlBarClustered
+            else:
+                return "column"  # vertical bars -> Excel xlColumnClustered
+
         mapping = {
-            "bar": "bar",
             "histogram": "histogram",
             "area": "area",
             "pie": "pie",
@@ -654,7 +662,14 @@ class PlotlyToExcelXMLConverter:
             LET.SubElement(marker_el, "color").text = marker_color
             LET.SubElement(marker_el, "shape").text = marker_shape
 
-            LET.SubElement(style_el, "fill_color").text = self._safe_text(getattr(trace, "fillcolor", ""))
+            # For bar/column/histogram traces, use marker.color as fill color if fillcolor is not set
+            fill_color_value = getattr(trace, "fillcolor", "") or ""
+            if not fill_color_value and hasattr(trace, "marker") and trace.marker:
+                marker_color = getattr(trace.marker, "color", None)
+                # Only use marker.color if it's a single color (not an array)
+                if marker_color is not None and not isinstance(marker_color, (list, tuple)):
+                    fill_color_value = str(marker_color)
+            LET.SubElement(style_el, "fill_color").text = self._safe_text(fill_color_value)
             LET.SubElement(style_el, "fill_opacity").text = self._safe_text(getattr(trace, "opacity", ""))
 
             # NEW: error bars
