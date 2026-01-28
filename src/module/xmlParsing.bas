@@ -1548,9 +1548,12 @@ Public Function PasteTypedXMLToRange(xmlString As String, dstRef As String) As B
     Dim needLabel As Boolean: needLabel = (numTables > 1)
     Dim nextRow As Long, anchorCol As Long, placedCount As Long
 
-    ' NEW: Capture destination format before clearing
+    ' NEW: Capture destination format from first DATA row (row 2) before clearing
+    ' Row 1 is the header row; row 2 is the first data row whose format we want to preserve
     Dim savedFormatRow As Range
-    Set savedFormatRow = CaptureRowFormat(dstRange)
+    If dstRange.rows.count >= 2 Then
+        Set savedFormatRow = CaptureRowFormat(dstRange.rows(2))
+    End If
 
     ' Pre-prepare the full destination once (pure-range mode: clears exactly dstRange, no resize)
     Dim preparedAnchor As Range
