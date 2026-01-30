@@ -1739,19 +1739,24 @@ Public Function PasteTypedXMLToRange(xmlString As String, dstRef As String) As B
 next_table:
     Next tIdx
 
-    ' NEW: Apply saved format to all data rows (after all tables are pasted)
+    ' NEW: Apply saved format to DATA rows only (excluding header row)
+    ' Header row is formatted separately with bold/light blue/border inside the loop
     Dim totalDataRows As Long
-    totalDataRows = nextRow - dstRange.Row
+    totalDataRows = nextRow - dstRange.Row - 1  ' Subtract 1 for header row
 
     If totalDataRows > 0 And Not savedFormatRow Is Nothing Then
-        Dim actualUsedRange As Range
-        Set actualUsedRange = wsDst.Range(wsDst.Cells(dstRange.Row, anchorCol), _
-                                           wsDst.Cells(nextRow - 1, anchorCol + dstRange.Columns.count - 1))
-        ApplyFormatToRange savedFormatRow, actualUsedRange
+        Dim dataRowsRange As Range
+        ' Start from row 2 (first data row), not row 1 (header row)
+        Set dataRowsRange = wsDst.Range(wsDst.Cells(dstRange.Row + 1, anchorCol), _
+                                         wsDst.Cells(nextRow - 1, anchorCol + dstRange.Columns.count - 1))
+        ApplyFormatToRange savedFormatRow, dataRowsRange
     End If
 
     ' NEW: Clear excess range cells beyond the actual data
-    ClearExcessRange dstRange, totalDataRows
+    ' ClearExcessRange needs total rows written (header + data), not just data rows
+    Dim totalRowsWritten As Long
+    totalRowsWritten = nextRow - dstRange.Row
+    ClearExcessRange dstRange, totalRowsWritten
 
 clean_exit:
     '=== Restore Excel settings ===
