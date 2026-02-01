@@ -585,6 +585,18 @@ class PlotlyToExcelXMLConverter:
                 LET.SubElement(data_el, "x").text = self._comma_join(x_labels)
                 LET.SubElement(data_el, "y").text = self._comma_join(counts)
 
+            # Handle bar orientation: Plotly horizontal bars have x=values, y=categories
+            # But VBA expects x=categories, y=values for categorical chart types
+            elif trace.type == "bar":
+                orientation = getattr(trace, "orientation", "v") or "v"
+                if orientation.lower() == "h":
+                    # Horizontal bars: swap x and y so VBA gets x=categories, y=values
+                    LET.SubElement(data_el, "x").text = self._comma_join(getattr(trace, "y", []))
+                    LET.SubElement(data_el, "y").text = self._comma_join(getattr(trace, "x", []))
+                else:
+                    LET.SubElement(data_el, "x").text = self._comma_join(getattr(trace, "x", []))
+                    LET.SubElement(data_el, "y").text = self._comma_join(getattr(trace, "y", []))
+
             else:
                 LET.SubElement(data_el, "x").text = self._comma_join(getattr(trace, "x", []))
                 LET.SubElement(data_el, "y").text = self._comma_join(getattr(trace, "y", []))
@@ -665,10 +677,21 @@ class PlotlyToExcelXMLConverter:
             # For bar/column/histogram traces, use marker.color as fill color if fillcolor is not set
             fill_color_value = getattr(trace, "fillcolor", "") or ""
             if not fill_color_value and hasattr(trace, "marker") and trace.marker:
-                marker_color = getattr(trace.marker, "color", None)
+                marker_color_val = getattr(trace.marker, "color", None)
                 # Only use marker.color if it's a single color (not an array)
-                if marker_color is not None and not isinstance(marker_color, (list, tuple)):
-                    fill_color_value = str(marker_color)
+                if marker_color_val is not None and not isinstance(marker_color_val, (list, tuple)):
+                    fill_color_value = str(marker_color_val)
+
+            # If still no fill color for bar/column/histogram, use a default color from Plotly's palette
+            series_type = self._map_plotly_type_to_series_type(trace)
+            if not fill_color_value and series_type in ("bar", "column", "histogram"):
+                # Plotly's default color sequence (D3 category10)
+                default_colors = [
+                    "#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd",
+                    "#8c564b", "#e377c2", "#7f7f7f", "#bcbd22", "#17becf"
+                ]
+                fill_color_value = default_colors[(idx - 1) % len(default_colors)]
+
             LET.SubElement(style_el, "fill_color").text = self._safe_text(fill_color_value)
             LET.SubElement(style_el, "fill_opacity").text = self._safe_text(getattr(trace, "opacity", ""))
 

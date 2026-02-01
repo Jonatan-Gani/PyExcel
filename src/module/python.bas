@@ -472,10 +472,9 @@ Public Function RunPythonJob(script As String, tempFiles As Object, Optional inp
     Debug.Print "Meta file path: " & metaFile
 
     Dim logOut As String, logErr As String
-    logOut = tempFolder & "\py_" & script & "_" & runId & ".out.log"
-    logErr = tempFolder & "\py_" & script & "_" & runId & ".err.log"
-    Debug.Print "Stdout log: " & logOut
-    Debug.Print "Stderr log: " & logErr
+    logOut = tempFolder & "\py_" & script & "_" & runId & ".log"
+    logErr = logOut  ' Combined log file (stdout + stderr merged via Tee-Object)
+    Debug.Print "Combined log: " & logOut
     tStep = Timer
 
     If Len(inputText) > 0 Then
@@ -488,20 +487,30 @@ Public Function RunPythonJob(script As String, tempFiles As Object, Optional inp
     tStep = Timer
 
     Debug.Print "t+", Format(Timer - tStep, "0.000"), " Building command line"
+
+    ' Build command that displays output in terminal AND saves to log file
+    ' We use PowerShell's Tee-Object to mirror output to both destinations
+    ' stdout and stderr are combined (2>&1) since errors are also captured in meta XML
+
+    Dim Q As String: Q = Chr(34)  ' Double quote for cleaner string building
+
     Dim baseCmd As String
-    baseCmd = _
-        "set ""PYTHONPATH=" & folderPythonScripts & ";%PYTHONPATH%"" && " & _
-        "set ""PYTHONUNBUFFERED=1"" && " & _
-        """" & exe & """ -u " & _
-        """" & scriptPath & """ " & _
-        "--in " & """" & tempFiles("in") & """ " & _
-        "--out " & """" & tempFiles("out") & """ " & _
-        "--meta " & """" & metaFile & """ " & _
-        "--run-id " & """" & runId & """" & _
-        " 1> """ & logOut & """ 2> """ & logErr & """"
+    baseCmd = "set " & Q & "PYTHONPATH=" & folderPythonScripts & ";%PYTHONPATH%" & Q & " && " & _
+              "set " & Q & "PYTHONUNBUFFERED=1" & Q & " && " & _
+              Q & exe & Q & " -u " & _
+              Q & scriptPath & Q & " " & _
+              "--in " & Q & tempFiles("in") & Q & " " & _
+              "--out " & Q & tempFiles("out") & Q & " " & _
+              "--meta " & Q & metaFile & Q & " " & _
+              "--run-id " & Q & runId & Q & " 2>&1"
+
+    ' Pipe through PowerShell Tee-Object to display in terminal AND write to file
+    ' Use single quotes inside PowerShell for the file path to avoid quote escaping issues
+    Dim teeCmd As String
+    teeCmd = " | powershell -NoProfile -Command " & Q & "$input | Tee-Object -FilePath '" & logOut & "'" & Q
 
     Dim cmd As String
-    cmd = "cmd /c " & """" & baseCmd & """"
+    cmd = "cmd /c " & Q & baseCmd & teeCmd & Q
     Debug.Print "Full command: " & cmd
     tStep = Timer
 

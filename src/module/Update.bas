@@ -15,8 +15,7 @@ Private Const PROPERTY_VERSION_TAG As String = "PyExcel_Version"
 Public UpdateAvailable As Boolean
 Public AvailableVersion As String
 
-' FOLDER NAMES (SAFETY ZONES)
-Private Const FOLDER_PYTHON As String = "Python"
+' SAFE ZONES (Never touch these folders, anywhere in the tree)
 Private Const FOLDER_VENV As String = ".venv"
 Private Const FOLDER_USER_SCRIPTS As String = "userScripts"
 
@@ -249,56 +248,102 @@ End Sub
 
 
 ' ==============================================================================
-' PART 2: SMART CLEANER (SAFETY LOGIC)
+' PART 2: SMART CLEANER (MANIFEST-DRIVEN WITH SAFE ZONES)
 ' ==============================================================================
 
 Private Sub SmartCleanFolder(fso As Object, rootPath As String, wbSource As Workbook)
-    ' Only target the Python folder to prevent root accidents
-    Dim pythonPath As String
-    pythonPath = rootPath & "\" & FOLDER_PYTHON
-    
-    If Not fso.FolderExists(pythonPath) Then Exit Sub
-    
     ' Get Manifest from New XLAM
     Dim manifest As Object
     Set manifest = LoadManifest(wbSource)
-    
-    ' Recursively clean
-    CleanRecursive fso, fso.GetFolder(pythonPath), rootPath, manifest
+
+    ' Derive which top-level folders the manifest "owns"
+    Dim ownedFolders As Object
+    Set ownedFolders = GetOwnedFolders(manifest)
+
+    ' Clean each owned folder
+    Dim folderName As Variant
+    Dim folderPath As String
+
+    For Each folderName In ownedFolders.keys
+        folderPath = rootPath & "\" & folderName
+
+        If fso.FolderExists(folderPath) Then
+            Debug.Print "[Cleaner] Cleaning owned folder: " & folderName
+            CleanRecursive fso, fso.GetFolder(folderPath), rootPath, manifest
+        End If
+    Next folderName
 End Sub
+
+' Extract unique top-level folders from manifest RelPaths
+Private Function GetOwnedFolders(manifest As Object) As Object
+    Dim d As Object
+    Set d = CreateObject("Scripting.Dictionary")
+    d.CompareMode = vbTextCompare
+
+    Dim key As Variant
+    Dim parts() As String
+    Dim topFolder As String
+
+    For Each key In manifest.keys
+        ' key is like "PYTHON\SCRIPTS\TOOLS.PY" or "ADDIN\LOGO.PNG"
+        parts = Split(CStr(key), "\")
+
+        If UBound(parts) >= 1 Then
+            ' Has at least one folder level
+            topFolder = parts(0)
+
+            ' Skip if it's a safe zone at top level
+            If Not IsSafeZone(topFolder) Then
+                If Not d.Exists(topFolder) Then
+                    d.Add topFolder, True
+                End If
+            End If
+        End If
+    Next key
+
+    Set GetOwnedFolders = d
+End Function
+
+' Check if folder name is a protected safe zone
+Private Function IsSafeZone(folderName As String) As Boolean
+    Dim uName As String
+    uName = UCase(folderName)
+
+    Select Case uName
+        Case UCase(FOLDER_VENV), UCase(FOLDER_USER_SCRIPTS)
+            IsSafeZone = True
+        Case Else
+            IsSafeZone = False
+    End Select
+End Function
 
 Private Sub CleanRecursive(fso As Object, fldr As Object, rootPath As String, manifest As Object)
     Dim file As Object
     Dim subFldr As Object
     Dim fName As String
     Dim relPath As String
-    
+
     ' A. CHECK FILES
     For Each file In fldr.files
         relPath = GetRelativePath(file.path, rootPath)
-        
-        ' IF not in Manifest AND not in Safe Zone -> DELETE
+
+        ' IF not in Manifest -> DELETE
         If Not manifest.Exists(relPath) Then
-             ' Double check we are deep enough (paranoid safety)
-             If InStr(relPath, "\") > 0 Then
-                Debug.Print "[Cleaner] Deleting Zombie: " & relPath
-                On Error Resume Next
-                file.Delete True
-                On Error GoTo 0
-             End If
+            Debug.Print "[Cleaner] Deleting: " & relPath
+            On Error Resume Next
+            file.Delete True
+            On Error GoTo 0
         End If
     Next file
-    
+
     ' B. RECURSE SUBFOLDERS
     For Each subFldr In fldr.subFolders
-        fName = UCase(subFldr.name)
-        
-        ' SAFETY: DO NOT ENTER THESE FOLDERS
-        If fName = UCase(FOLDER_VENV) Then
-            ' Skip .venv
-        ElseIf fName = UCase(FOLDER_USER_SCRIPTS) Then
-            ' Skip userScripts
-        ElseIf fName = "__PYCACHE__" Then
+        fName = subFldr.name
+
+        ' SAFETY: Skip protected folders anywhere in tree
+        If IsSafeZone(fName) Then
+            Debug.Print "[Cleaner] Skipping safe zone: " & fName
+        ElseIf UCase(fName) = "__PYCACHE__" Then
             ' Nuke Pycache
             On Error Resume Next
             subFldr.Delete True
@@ -306,13 +351,13 @@ Private Sub CleanRecursive(fso As Object, fldr As Object, rootPath As String, ma
         Else
             ' Recurse
             CleanRecursive fso, subFldr, rootPath, manifest
-            
-            ' Optional: Remove empty folders
+
+            ' Remove empty folders
+            On Error Resume Next
             If subFldr.files.count = 0 And subFldr.subFolders.count = 0 Then
-                On Error Resume Next
                 subFldr.Delete True
-                On Error GoTo 0
             End If
+            On Error GoTo 0
         End If
     Next subFldr
 End Sub
@@ -641,6 +686,16 @@ End Sub
 ' ==============================================================================
 
 Private Function VersionToNumber(v As String) As Double
+    On Error Resume Next
+
+    ' Handle timestamp format (yyyymmdd_hhnnss) from PackageAddin
+    If InStr(v, "_") > 0 Then
+        ' Remove underscore and convert: "20250201_143022" -> 20250201143022
+        VersionToNumber = CDbl(Replace(v, "_", ""))
+        Exit Function
+    End If
+
+    ' Handle semantic version format (1.2.3)
     Dim p() As String: p = Split(v, ".")
     Dim n As Double
     If UBound(p) >= 0 Then n = n + CDbl(p(0)) * 10000
