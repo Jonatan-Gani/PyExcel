@@ -65,12 +65,12 @@ Public Sub VerifyProjectVersion()
         Exit Sub
     End If
 
-    ' 3. Handle missing version (first time after enable)
+    ' 3. Handle missing version (legacy project from before versioning)
+    ' Assume outdated and offer update to ensure files are current
     If projectVersion = "" Then
-        SetStoredProjectVersion wb, addinVersion
-        Debug.Print "[VerifyProjectVersion] Auto-stamped version " & addinVersion & " for " & wb.name
-        UpdateAvailable = False
-        AvailableVersion = ""
+        UpdateAvailable = True
+        AvailableVersion = addinVersion
+        Debug.Print "[VerifyProjectVersion] No version found - assuming legacy project needs update to " & addinVersion
         RefreshEnableButton
         Exit Sub
     End If
