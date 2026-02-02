@@ -109,8 +109,11 @@ Public Sub RunUpdateFromCurrentAddin()
 
     Dim fso As Object
     Dim targetPath As String
+    Dim stepName As String
 
     ' 1. VALIDATE CONTEXT
+    stepName = "Validating context"
+    Debug.Print "[Update] Step: " & stepName
     Dim wbHost As Workbook
     Set wbHost = HostManager_GetCurrentWorkbook()
     If wbHost Is Nothing Then
@@ -120,6 +123,8 @@ Public Sub RunUpdateFromCurrentAddin()
     targetPath = wbHost.path
 
     ' 2. EXECUTE UPDATE FROM ThisWorkbook (the active addin)
+    stepName = "Initializing"
+    Debug.Print "[Update] Step: " & stepName & " - Target: " & targetPath
     InitProgressBar
     Set fso = CreateObject("Scripting.FileSystemObject")
 
@@ -127,38 +132,53 @@ Public Sub RunUpdateFromCurrentAddin()
     Application.ScreenUpdating = False
 
     ' A. RUN SMART CLEANER (Deletes obsolete files safely)
+    stepName = "Smart clean"
+    Debug.Print "[Update] Step: " & stepName
     UpdateProgress 0.2, "Cleaning obsolete files..."
     SmartCleanFolder fso, targetPath, ThisWorkbook
 
     ' B. EXTRACT RESOURCES FROM ThisWorkbook
+    stepName = "Extract resources"
+    Debug.Print "[Update] Step: " & stepName
     UpdateProgress 0.4, "Installing new files..."
     ExtractResources fso, targetPath, ThisWorkbook
 
     Application.ScreenUpdating = True
 
     ' C. UPDATE PYTHON (Pip Install + Freeze)
+    stepName = "Update Python dependencies"
+    Debug.Print "[Update] Step: " & stepName
     UpdateProgress 0.7, "Updating Python libraries..."
     UpdatePythonDependencies targetPath
 
     ' D. UPDATE PROJECT TAG
+    stepName = "Set project version"
+    Debug.Print "[Update] Step: " & stepName
     Dim newVer As String
     newVer = GetAddinVersion() ' Get version from ThisWorkbook
     SetStoredProjectVersion wbHost, newVer
 
     ' Ensure structure integrity
+    stepName = "Ensure structure"
+    Debug.Print "[Update] Step: " & stepName
     ReEnsureStructure fso, targetPath
 
     UpdateProgress 1#, "Update Complete!"
     Application.Wait Now + TimeValue("0:00:01")
     CloseProgressBar
 
+    Debug.Print "[Update] SUCCESS - Updated to version " & newVer
     MsgBox "Project successfully updated to version " & newVer, vbInformation
     Exit Sub
 
 EH:
+    Dim errMsg As String
+    errMsg = Err.Description
+    If Len(errMsg) = 0 Then errMsg = "Unknown error (Error " & Err.Number & ")"
+    Debug.Print "[Update] FAILED at step: " & stepName & " - " & errMsg
     Application.ScreenUpdating = True
     CloseProgressBar
-    MsgBox "Update Failed: " & Err.Description, vbCritical
+    MsgBox "Update Failed at '" & stepName & "':" & vbCrLf & vbCrLf & errMsg, vbCritical
 End Sub
 
 ' ENTRY 3: MANUAL UPDATE (Call this from Ribbon - prompts for external file)
@@ -240,10 +260,13 @@ Public Sub RunUpdateFromExternalFile()
     Exit Sub
 
 EH:
+    Dim errMsg As String
+    errMsg = Err.Description
+    If Len(errMsg) = 0 Then errMsg = "Unknown error (Error " & Err.Number & ")"
     Application.ScreenUpdating = True
     If Not wbNew Is Nothing Then wbNew.Close SaveChanges:=False
     CloseProgressBar
-    MsgBox "Update Failed: " & Err.Description, vbCritical
+    MsgBox "Update Failed: " & errMsg, vbCritical
 End Sub
 
 
@@ -399,8 +422,15 @@ End Function
 ' ==============================================================================
 
 Public Sub ExtractResources(fso As Object, rootPath As String, wbSource As Workbook)
+    On Error Resume Next
     Dim wsStore As Worksheet
     Set wsStore = wbSource.Worksheets(EMBED_SHEET_NAME)
+    On Error GoTo 0
+
+    If wsStore Is Nothing Then
+        Err.Raise vbObjectError + 1001, "ExtractResources", _
+            "EmbeddedStore sheet not found in " & wbSource.name & ". The add-in may be corrupted or missing embedded files."
+    End If
     
     ' 1. BUILD MAP
     Dim fileMap As Object: Set fileMap = CreateObject("Scripting.Dictionary")
@@ -632,7 +662,10 @@ Public Sub RunManualUpdate()
     Exit Sub
 
 EH:
-    MsgBox "Update failed: " & Err.Description, vbCritical
+    Dim errMsg As String
+    errMsg = Err.Description
+    If Len(errMsg) = 0 Then errMsg = "Unknown error (Error " & Err.Number & ")"
+    MsgBox "Update failed: " & errMsg, vbCritical
 End Sub
 
 ' ENTRY 5: DISMISS UPDATE (User clicks No to dismiss update prompt)
