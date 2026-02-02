@@ -1,5 +1,4 @@
 Attribute VB_Name = "modDst"
-Attribute VB_Name = "modDst"
 Option Explicit
 
 Public Function PrepareOutputRange( _

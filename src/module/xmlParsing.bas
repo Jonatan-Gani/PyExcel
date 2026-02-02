@@ -1,5 +1,5 @@
 Attribute VB_Name = "xmlParsing"
-ption Explicit
+Option Explicit
 
 'Public Function SerializeRangeToTypedXML(rngRef As String) As String
 '    On Error GoTo Fail
