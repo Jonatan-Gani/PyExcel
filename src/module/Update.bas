@@ -120,7 +120,14 @@ Public Sub RunUpdateFromCurrentAddin()
         MsgBox "Please open your project workbook first.", vbExclamation
         Exit Sub
     End If
-    targetPath = wbHost.path
+
+    ' Resolve SharePoint/OneDrive URLs to local paths
+    targetPath = ResolveProjectPath()
+    If Len(targetPath) = 0 Then
+        MsgBox "Could not resolve project path. If using SharePoint/OneDrive, ensure the folder is synced locally.", vbExclamation
+        Exit Sub
+    End If
+    Debug.Print "[Update] Resolved target path: " & targetPath
 
     ' 2. EXECUTE UPDATE FROM ThisWorkbook (the active addin)
     stepName = "Initializing"
@@ -199,8 +206,14 @@ Public Sub RunUpdateFromExternalFile()
         MsgBox "Please open your project workbook first.", vbExclamation
         Exit Sub
     End If
-    targetPath = wbHost.path
-    
+
+    ' Resolve SharePoint/OneDrive URLs to local paths
+    targetPath = ResolveProjectPath()
+    If Len(targetPath) = 0 Then
+        MsgBox "Could not resolve project path. If using SharePoint/OneDrive, ensure the folder is synced locally.", vbExclamation
+        Exit Sub
+    End If
+
     ' 2. SELECT UPDATE FILE
     Set fd = Application.FileDialog(msoFileDialogFilePicker)
     With fd
