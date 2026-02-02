@@ -1,5 +1,5 @@
 Attribute VB_Name = "xmlParsing"
-Option Explicit
+ption Explicit
 
 'Public Function SerializeRangeToTypedXML(rngRef As String) As String
 '    On Error GoTo Fail
@@ -1550,9 +1550,18 @@ Public Function PasteTypedXMLToRange(xmlString As String, dstRef As String) As B
 
     ' NEW: Capture destination format from first DATA row (row 2) before clearing
     ' Row 1 is the header row; row 2 is the first data row whose format we want to preserve
+    ' IMPORTANT: Copy format to a temporary row to preserve it through clearing and table writes
+    ' (The original dstRange.rows(2) cells will become table 1's header and get header formatting)
     Dim savedFormatRow As Range
+    Dim tempRowNum As Long
     If dstRange.rows.count >= 2 Then
-        Set savedFormatRow = CaptureRowFormat(dstRange.rows(2))
+        ' Use the last row of the worksheet as a safe temp location
+        tempRowNum = wsDst.rows.count
+        Set savedFormatRow = wsDst.Cells(tempRowNum, dstRange.Column).Resize(1, dstRange.Columns.count)
+        ' Copy only the formatting from the original data row template
+        dstRange.rows(2).Copy
+        savedFormatRow.PasteSpecial xlPasteFormats
+        Application.CutCopyMode = False
     End If
 
     ' Pre-prepare the full destination once (pure-range mode: clears exactly dstRange, no resize)
@@ -1754,6 +1763,13 @@ next_table:
     ClearExcessRange dstRange, totalRowsWritten
 
 clean_exit:
+    '=== Clean up temporary format row ===
+    If Not savedFormatRow Is Nothing Then
+        On Error Resume Next
+        savedFormatRow.ClearFormats
+        On Error GoTo 0
+    End If
+
     '=== Restore Excel settings ===
     Application.Calculation = oldCalc
     Application.ScreenUpdating = oldScreen
@@ -1767,6 +1783,7 @@ Fail:
     PasteTypedXMLToRange = False
     Resume clean_exit
 End Function
+
 
 
 

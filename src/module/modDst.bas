@@ -1,4 +1,5 @@
 Attribute VB_Name = "modDst"
+Attribute VB_Name = "modDst"
 Option Explicit
 
 Public Function PrepareOutputRange( _
@@ -179,9 +180,10 @@ Public Sub ApplyFormatToRange(ByVal sourceRow As Range, ByVal targetRange As Ran
     If sourceRow Is Nothing Or targetRange Is Nothing Then Exit Sub
     If targetRange.rows.count = 0 Then Exit Sub
 
-    ' Copy just the relevant columns from the source row
+    ' Copy from the start of sourceRow, resized to match target width
+    ' Note: sourceRow.Cells(1, 1) gets the first cell of the source row (relative indexing)
     Dim sourceFormatRange As Range
-    Set sourceFormatRange = sourceRow.Cells(1, targetRange.Column).Resize(1, targetRange.Columns.count)
+    Set sourceFormatRange = sourceRow.Cells(1, 1).Resize(1, targetRange.Columns.count)
 
     ' Apply to entire target range at once
     sourceFormatRange.Copy
