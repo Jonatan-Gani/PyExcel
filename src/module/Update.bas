@@ -450,14 +450,18 @@ Public Sub ExtractResources(fso As Object, rootPath As String, wbSource As Workb
     ' 2. WRITE FILES
     Dim k As Variant, parts() As String, fullPath As String
     Dim i As Long, bigB64 As String, bytes() As Byte, chunks As Object
-    
+    Dim fileCount As Long: fileCount = 0
+
     For Each k In fileMap.keys
+        fileCount = fileCount + 1
         parts = Split(k, "|")
         ' parts(0) = relPath (The correct relative path)
         ' parts(1) = fName (Ignored)
-        
+
         fullPath = rootPath & "\" & parts(0)
         fullPath = Replace(fullPath, "\\", "\")
+
+        Debug.Print "[Extract] File " & fileCount & ": " & fullPath
         
         EnsureFolderExists fso, fullPath
         
@@ -766,11 +770,43 @@ Private Sub EnsureFolderExists(fso As Object, filePath As String)
     If Not fso.FolderExists(p) Then CreateFoldersRecursive fso, p
 End Sub
 
-Private Sub CreateFoldersRecursive(fso As Object, folderPath As String)
-    If Not fso.FolderExists(fso.GetParentFolderName(folderPath)) Then
-        CreateFoldersRecursive fso, fso.GetParentFolderName(folderPath)
+Private Sub CreateFoldersRecursive(fso As Object, folderPath As String, Optional depth As Long = 0)
+    ' Safety: prevent runaway recursion
+    If depth > 50 Then
+        Debug.Print "[CreateFolders] ERROR: Max depth exceeded at: " & folderPath
+        Exit Sub
     End If
-    If Not fso.FolderExists(folderPath) Then fso.CreateFolder folderPath
+
+    ' Base case: empty or root path - stop recursion
+    If Len(folderPath) = 0 Then
+        Debug.Print "[CreateFolders] Base case: empty path"
+        Exit Sub
+    End If
+    If fso.FolderExists(folderPath) Then Exit Sub
+
+    Dim parentPath As String
+    parentPath = fso.GetParentFolderName(folderPath)
+
+    Debug.Print "[CreateFolders] Depth " & depth & ": " & folderPath & " (parent: " & parentPath & ")"
+
+    ' Base case: no parent (at root like "C:\") or parent same as current
+    If Len(parentPath) = 0 Or parentPath = folderPath Then
+        Debug.Print "[CreateFolders] Base case: at root"
+        On Error Resume Next
+        fso.CreateFolder folderPath
+        On Error GoTo 0
+        Exit Sub
+    End If
+
+    ' Recurse to create parent first
+    If Not fso.FolderExists(parentPath) Then
+        CreateFoldersRecursive fso, parentPath, depth + 1
+    End If
+
+    ' Now create this folder
+    On Error Resume Next
+    fso.CreateFolder folderPath
+    On Error GoTo 0
 End Sub
 
 Private Sub WriteBinaryFile(pth As String, dat() As Byte)
