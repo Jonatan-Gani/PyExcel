@@ -13,7 +13,6 @@ Attribute VB_GlobalNameSpace = False
 Attribute VB_Creatable = False
 Attribute VB_PredeclaredId = True
 Attribute VB_Exposed = False
-
 Option Explicit
 Public SelectedSheet As String
 
@@ -32,11 +31,12 @@ Private Sub btnOK_Click()
     Else
         SelectedSheet = ""
     End If
-    Unload Me
+    Me.Hide
 End Sub
 
 Private Sub btnCancel_Click()
     SelectedSheet = ""
-    Unload Me
+    Me.Hide
 End Sub
+
 
