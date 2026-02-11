@@ -1732,7 +1732,7 @@ Public Function GetWorkbookValue(wb As Workbook, ctrlId As String) As String
     Dim raw As String
 
     If wb Is Nothing Then Exit Function
-    
+
     ' Try to get the named range in the workbook scope
     On Error Resume Next
     Set nm = wb.Names(ctrlId)
@@ -1740,8 +1740,15 @@ Public Function GetWorkbookValue(wb As Workbook, ctrlId As String) As String
 
     If nm Is Nothing Then Exit Function ' Name not found in workbook scope
 
+    ' Verify this is truly a workbook-scoped name, not a sheet-scoped name
+    ' Sheet-scoped names have a Worksheet as Parent, workbook-scoped have Workbook as Parent
+    If Not TypeOf nm.parent Is Workbook Then
+        Debug.Print "[GetWorkbookValue] Ignoring sheet-scoped name '" & ctrlId & "' (Parent is not Workbook)"
+        Exit Function
+    End If
+
     raw = nm.RefersTo
-    
+
     ' Normalize the string result
     If Left$(raw, 1) = "=" Then raw = Mid$(raw, 2)
     If Left$(raw, 1) = """" And right$(raw, 1) = """" Then
@@ -1776,6 +1783,62 @@ Public Sub SaveWorkbookValue(wb As Workbook, ctrlId As String, val As Variant)
 
 EH:
     Debug.Print "[SaveWorkbookValue][ERROR] ctrl='" & ctrlId & "' err=" & Err.Description
+End Sub
+
+
+' ==============================================================
+' CLEANUP SHEET-SCOPED WORKBOOK SETTINGS
+' Removes sheet-scoped Named Ranges that should only exist at workbook level.
+' This prevents issues when sheets are transferred from non-enabled workbooks.
+' ==============================================================
+
+Public Sub CleanSheetScopedWorkbookSettings(wb As Workbook)
+    On Error GoTo EH
+
+    If wb Is Nothing Then Exit Sub
+
+    ' List of settings that should ONLY be workbook-scoped
+    Dim workbookOnlySettings As Variant
+    workbookOnlySettings = Array("PyExcelEnabled", "PyExcel_ProjectVersion", "PyExcel_UpdateDeclined")
+
+    Dim nm As name
+    Dim settingName As Variant
+    Dim toDelete As Collection
+    Set toDelete = New Collection
+
+    ' Scan all names in workbook and collect sheet-scoped versions of workbook-only settings
+    For Each nm In wb.Names
+        ' Sheet-scoped names have a Worksheet as Parent
+        If TypeOf nm.parent Is Worksheet Then
+            For Each settingName In workbookOnlySettings
+                ' Check if this sheet-scoped name matches a workbook-only setting
+                ' Sheet-scoped names are stored as "SheetName!SettingName" in wb.Names
+                If InStr(1, nm.name, "!" & CStr(settingName), vbTextCompare) > 0 Then
+                    toDelete.Add nm
+                    Debug.Print "[CleanSheetScopedWorkbookSettings] Marking for deletion: " & nm.name
+                    Exit For
+                End If
+            Next settingName
+        End If
+    Next nm
+
+    ' Delete collected names (separate loop to avoid modifying collection while iterating)
+    Dim i As Long
+    For i = toDelete.count To 1 Step -1
+        On Error Resume Next
+        toDelete(i).Delete
+        Debug.Print "[CleanSheetScopedWorkbookSettings] Deleted: " & toDelete(i).name
+        On Error GoTo EH
+    Next i
+
+    If toDelete.count > 0 Then
+        Debug.Print "[CleanSheetScopedWorkbookSettings] Cleaned " & toDelete.count & " sheet-scoped workbook settings"
+    End If
+
+    Exit Sub
+
+EH:
+    Debug.Print "[CleanSheetScopedWorkbookSettings][ERROR] " & Err.Description
 End Sub
 
 
