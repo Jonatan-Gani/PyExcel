@@ -479,10 +479,10 @@ Public Function RunPythonJob(script As String, tempFiles As Object, Optional inp
 
     If Len(inputText) > 0 Then
         Debug.Print "t+", Format(Timer - tStep, "0.000"), " Writing input text to file: " & tempFiles("in")
-        Dim fnum As Integer: fnum = FreeFile
-        Open tempFiles("in") For Output As #fnum
-        Print #fnum, inputText
-        Close #fnum
+        Dim fNum As Integer: fNum = FreeFile
+        Open tempFiles("in") For Output As #fNum
+        Print #fNum, inputText
+        Close #fNum
     End If
     tStep = Timer
 

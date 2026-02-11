@@ -269,7 +269,7 @@ Private Function ResolveDestinationRange( _
     Application.CommandBars.ExecuteMso "ActivateWindow"
 
     Set r = Application.InputBox( _
-        PROMPT:="Select destination range", _
+        Prompt:="Select destination range", _
         Title:=opName & " - Destination", _
         Type:=8)
     Debug.Print "  >> InputBox elapsed (sec): " & Format(Timer - t0, "0.00")

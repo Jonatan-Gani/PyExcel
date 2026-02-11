@@ -93,34 +93,34 @@ Private Sub WriteSetupLog(rootPath As String)
     ' Ensure Temp folder exists
     Call EnsureFolderExists(rootPath & "\Temp")
 
-    Dim fnum As Integer
-    fnum = FreeFile
-    Open logPath For Output As #fnum
+    Dim fNum As Integer
+    fNum = FreeFile
+    Open logPath For Output As #fNum
 
     ' Write header
-    Print #fnum, "========================================"
-    Print #fnum, "PyExcel Setup Log"
-    Print #fnum, "Generated: " & Format(Now, "yyyy-mm-dd hh:nn:ss")
-    Print #fnum, "========================================"
-    Print #fnum, ""
+    Print #fNum, "========================================"
+    Print #fNum, "PyExcel Setup Log"
+    Print #fNum, "Generated: " & Format(Now, "yyyy-mm-dd hh:nn:ss")
+    Print #fNum, "========================================"
+    Print #fNum, ""
 
     ' Write stats summary
-    Print #fnum, "--- SUMMARY ---"
-    Print #fnum, "Files Extracted: " & SetupStats("FilesExtracted")
-    Print #fnum, "Files Failed: " & SetupStats("FilesFailed")
-    Print #fnum, "Packages Installed: " & SetupStats("PackagesInstalled")
-    Print #fnum, "Packages Failed: " & SetupStats("PackagesFailed")
-    Print #fnum, "Warnings: " & SetupStats("Warnings")
-    Print #fnum, ""
-    Print #fnum, "--- DETAILED LOG ---"
+    Print #fNum, "--- SUMMARY ---"
+    Print #fNum, "Files Extracted: " & SetupStats("FilesExtracted")
+    Print #fNum, "Files Failed: " & SetupStats("FilesFailed")
+    Print #fNum, "Packages Installed: " & SetupStats("PackagesInstalled")
+    Print #fNum, "Packages Failed: " & SetupStats("PackagesFailed")
+    Print #fNum, "Warnings: " & SetupStats("Warnings")
+    Print #fNum, ""
+    Print #fNum, "--- DETAILED LOG ---"
 
     ' Write all log entries
     Dim entry As Variant
     For Each entry In SetupLogEntries
-        Print #fnum, entry
+        Print #fNum, entry
     Next entry
 
-    Close #fnum
+    Close #fNum
 
     LogMessage "INFO", "Log File", "Written to " & logPath
 End Sub
@@ -208,16 +208,21 @@ Public Function PyExcelSetup() As Boolean
     Debug.Print "[PyExcelSetup] Initialization started."
 
     userChoice = MsgBox( _
-        "PyExcel Setup will perform the following steps:" & vbCrLf & vbCrLf & _
-        "1. Create project folder structure" & vbCrLf & _
-        "2. Save your workbook as a macro-enabled file (.xlsm)" & vbCrLf & _
-        "3. Create a Python virtual environment" & vbCrLf & _
-        "4. Extract required Python scripts and resources" & vbCrLf & _
-        "5. Install Python packages (pandas, plotly, etc.)" & vbCrLf & vbCrLf & _
+        "=== PyExcel One-Time Setup ===" & vbCrLf & vbCrLf & _
+        "This wizard will configure PyExcel for this workbook." & vbCrLf & _
+        "This is a ONE-TIME setup that may take SEVERAL MINUTES." & vbCrLf & vbCrLf & _
+        "Setup Steps:" & vbCrLf & _
+        "  1. Choose project location and name" & vbCrLf & _
+        "  2. Create project folder structure" & vbCrLf & _
+        "  3. Save workbook as macro-enabled (.xlsm)" & vbCrLf & _
+        "  4. Create Python virtual environment" & vbCrLf & _
+        "  5. Extract Python scripts and resources" & vbCrLf & _
+        "  6. Install Python packages (pandas, plotly, etc.)" & vbCrLf & vbCrLf & _
         "Requirements:" & vbCrLf & _
         "  - Python must be installed on this machine" & vbCrLf & _
         "  - Internet connection for package downloads" & vbCrLf & vbCrLf & _
-        "This process may take several minutes. Excel will pause during some steps." & vbCrLf & vbCrLf & _
+        "NOTE: Excel may appear frozen during some steps." & vbCrLf & _
+        "Please be patient and do not close Excel." & vbCrLf & vbCrLf & _
         "Do you want to continue?", _
         vbYesNo + vbQuestion, _
         "PyExcel Setup" _
@@ -383,10 +388,7 @@ Public Function SelectAndSetupRootPath(wb As Workbook, fso As Object) As String
     Dim projectName As String
     Dim dotIndex As Long
     Dim finalPath As String
-    Dim isUnsavedWorkbook As Boolean
-
-    ' Check if workbook is unsaved (no path, or generic name like "Book1")
-    isUnsavedWorkbook = (Len(wb.path) = 0)
+    Dim defaultProjectName As String
 
     ' Set default path for folder picker
     If Len(wb.path) > 0 Then
@@ -395,33 +397,54 @@ Public Function SelectAndSetupRootPath(wb As Workbook, fso As Object) As String
         defaultPath = Environ$("USERPROFILE")
     End If
 
-    ' If workbook is unsaved, ask user for a project name first
-    If isUnsavedWorkbook Then
-        projectName = Application.InputBox( _
-            PROMPT:="Your workbook has not been saved yet." & vbCrLf & vbCrLf & _
-                "Please enter a name for your PyExcel project:" & vbCrLf & _
-                "(This will be used as the project folder name)", _
-            Title:="Project Name", _
-            Default:="MyProject", _
-            Type:=2) ' Type 2 = String
+    ' Determine default project name
+    If Len(wb.path) = 0 Then
+        ' Unsaved workbook - check if it's a default name like "Book1"
+        If wb.name Like "Book*" Or wb.name Like "Workbook*" Then
+            defaultProjectName = "MyProject"
+        Else
+            ' Has a custom unsaved name
+            dotIndex = InStrRev(wb.name, ".")
+            If dotIndex > 0 Then
+                defaultProjectName = Left$(wb.name, dotIndex - 1)
+            Else
+                defaultProjectName = wb.name
+            End If
+        End If
+    Else
+        ' Saved workbook - use its name
+        dotIndex = InStrRev(wb.name, ".")
+        If dotIndex > 0 Then
+            defaultProjectName = Left$(wb.name, dotIndex - 1)
+        Else
+            defaultProjectName = wb.name
+        End If
+    End If
 
-        ' User cancelled or entered empty string
-        If VarType(projectName) = vbBoolean Then
-            ' User pressed Cancel
-            Exit Function
-        End If
-        projectName = Trim(CStr(projectName))
-        If Len(projectName) = 0 Then
-            MsgBox "Project name cannot be empty.", vbExclamation, "Invalid Name"
-            Exit Function
-        End If
+    ' ALWAYS ask user for project name (with smart default)
+    projectName = Application.InputBox( _
+        Prompt:="Enter a name for your PyExcel project:" & vbCrLf & vbCrLf & _
+            "(This will be used as the project folder name and workbook name)", _
+        Title:="Project Name", _
+        Default:=defaultProjectName, _
+        Type:=2) ' Type 2 = String
 
-        ' Sanitize project name (remove invalid characters)
-        projectName = SanitizeFileName(projectName)
-        If Len(projectName) = 0 Then
-            MsgBox "Project name contains only invalid characters.", vbExclamation, "Invalid Name"
-            Exit Function
-        End If
+    ' User cancelled or entered empty string
+    If VarType(projectName) = vbBoolean Then
+        ' User pressed Cancel
+        Exit Function
+    End If
+    projectName = Trim(CStr(projectName))
+    If Len(projectName) = 0 Then
+        MsgBox "Project name cannot be empty.", vbExclamation, "Invalid Name"
+        Exit Function
+    End If
+
+    ' Sanitize project name (remove invalid characters)
+    projectName = SanitizeFileName(projectName)
+    If Len(projectName) = 0 Then
+        MsgBox "Project name contains only invalid characters.", vbExclamation, "Invalid Name"
+        Exit Function
     End If
 
     ' Always show folder picker - user chooses location manually
@@ -432,16 +455,6 @@ Public Function SelectAndSetupRootPath(wb As Workbook, fso As Object) As String
         If .Show <> -1 Then Exit Function
         pathChosen = .SelectedItems(1)
     End With
-
-    ' Extract Project Name from Workbook (only if not already set for unsaved workbooks)
-    If Len(projectName) = 0 Then
-        dotIndex = InStrRev(wb.name, ".")
-        If dotIndex > 0 Then
-            projectName = Left$(wb.name, dotIndex - 1)
-        Else
-            projectName = wb.name
-        End If
-    End If
 
     ' Combine paths
     If right$(pathChosen, 1) <> "\" Then pathChosen = pathChosen & "\"
@@ -656,7 +669,63 @@ Public Function SaveHostAsXLSM(wb As Workbook, rootPath As String) As Boolean
     End If
     On Error GoTo EH
 
-    Debug.Print "[SaveHostAsXLSM] About to disable alerts and attempt SaveAs..."
+    ' ============================================================
+    ' SAME-NAME CONFLICT DETECTION
+    ' If source is .xlsm and source basename matches target basename,
+    ' Excel won't allow SaveAs because two workbooks can't have the same name
+    ' ============================================================
+    Dim sourceBaseName As String
+    Dim targetBaseName As String
+    Dim sourceIsXlsm As Boolean
+    Dim needsTempStrategy As Boolean
+    Dim tempFilePath As String
+
+    sourceBaseName = fso.GetBaseName(wb.name)      ' e.g., "Example" from "Example.xlsm"
+    targetBaseName = baseName                       ' From folder name = project name
+    sourceIsXlsm = (LCase(right$(wb.name, 5)) = ".xlsm")
+
+    ' Conflict exists if: source is XLSM AND source base name = target base name
+    ' AND they are in different locations (same location already handled above)
+    needsTempStrategy = sourceIsXlsm And (LCase(sourceBaseName) = LCase(targetBaseName)) _
+                        And (LCase$(wb.path) <> LCase$(rootPath))
+
+    Debug.Print "[SaveHostAsXLSM] Source base name: " & sourceBaseName
+    Debug.Print "[SaveHostAsXLSM] Target base name: " & targetBaseName
+    Debug.Print "[SaveHostAsXLSM] Source is XLSM: " & sourceIsXlsm
+    Debug.Print "[SaveHostAsXLSM] Needs temp strategy: " & needsTempStrategy
+
+    If needsTempStrategy Then
+        Debug.Print "[SaveHostAsXLSM] Same-name conflict detected, using two-SaveAs temp strategy"
+
+        ' Step 1: SaveAs to temp name in original location (changes workbook identity)
+        Dim originalFolder As String
+        originalFolder = wb.path
+        If Len(originalFolder) = 0 Then originalFolder = Environ$("TEMP")
+
+        tempFilePath = originalFolder & "\" & sourceBaseName & "_PyExcel_Temp.xlsm"
+        Debug.Print "[SaveHostAsXLSM] Step 1: SaveAs to temp: " & tempFilePath
+
+        Application.DisplayAlerts = False
+        On Error Resume Next
+        wb.SaveAs fileName:=tempFilePath, FileFormat:=xlOpenXMLWorkbookMacroEnabled
+
+        Dim tempSaveError As Long
+        tempSaveError = Err.Number
+        Application.DisplayAlerts = True
+
+        If tempSaveError <> 0 Then
+            Debug.Print "[SaveHostAsXLSM] Temp SaveAs FAILED: " & Err.Description
+            On Error GoTo EH
+            Err.Raise tempSaveError, "SaveHostAsXLSM", "Failed to save temp file: " & Err.Description
+        End If
+        On Error GoTo EH
+
+        Debug.Print "[SaveHostAsXLSM] Temp SaveAs succeeded, workbook identity changed"
+        ' Now wb.Name is "Example_PyExcel_Temp.xlsm" - no more conflict
+    End If
+
+    ' Step 2 (or only step if no conflict): SaveAs to final target
+    Debug.Print "[SaveHostAsXLSM] About to disable alerts and attempt SaveAs to final target..."
     Application.DisplayAlerts = False
 
     ' Attempt the save with detailed error capture
@@ -675,6 +744,7 @@ Public Function SaveHostAsXLSM(wb As Workbook, rootPath As String) As Boolean
         Debug.Print "[SaveHostAsXLSM] Error Number: " & saveError
         Debug.Print "[SaveHostAsXLSM] Error Description: " & saveErrorDesc
         Debug.Print "[SaveHostAsXLSM] FileFormat constant value: " & xlOpenXMLWorkbookMacroEnabled
+        On Error GoTo EH
         Err.Raise saveError, "SaveHostAsXLSM", saveErrorDesc
     End If
 
@@ -682,6 +752,20 @@ Public Function SaveHostAsXLSM(wb As Workbook, rootPath As String) As Boolean
 
     Debug.Print "[SaveHostAsXLSM] SaveAs succeeded!"
     Debug.Print "[SaveHostAsXLSM] New workbook FullName: " & wb.FullName
+
+    ' Step 3: Clean up temp file if we created one
+    If needsTempStrategy And Len(tempFilePath) > 0 Then
+        If fso.fileExists(tempFilePath) Then
+            Debug.Print "[SaveHostAsXLSM] Step 3: Deleting temp file: " & tempFilePath
+            On Error Resume Next
+            fso.DeleteFile tempFilePath, True
+            If Err.Number <> 0 Then
+                Debug.Print "[SaveHostAsXLSM] Warning: Could not delete temp file: " & Err.Description
+                ' Non-fatal, continue
+            End If
+            On Error GoTo EH
+        End If
+    End If
 
     SaveHostAsXLSM = True
     Exit Function
@@ -1093,11 +1177,11 @@ Private Function FixRequirementsEncoding(sourcePath As String, destPath As Strin
 
         ' Write as ASCII (which is compatible with UTF-8 for requirements.txt content)
         ' This avoids any BOM issues entirely
-        Dim fnum As Integer
-        fnum = FreeFile
-        Open destPath For Output As #fnum
-        Print #fnum, textContent;
-        Close #fnum
+        Dim fNum As Integer
+        fNum = FreeFile
+        Open destPath For Output As #fNum
+        Print #fNum, textContent;
+        Close #fNum
 
         LogMessage "INFO", "Encoding", "Converted file saved to " & destPath
     Else
@@ -1434,4 +1518,6 @@ Public Function JoinPath(base As String, leaf As String) As String
         JoinPath = base & "\" & leaf
     End If
 End Function
+
+
 
