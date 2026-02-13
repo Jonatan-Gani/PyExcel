@@ -765,14 +765,12 @@ End Function
 ' Wraps a sheet name in single quotes if it contains spaces or special characters.
 ' Also escapes any embedded single quotes by doubling them.
 Public Function QuoteSheetName(ByVal sheetName As String) As String
-    ' Check if quoting is needed: spaces, single quotes, or other special chars
-    If InStr(sheetName, " ") > 0 Or InStr(sheetName, "'") > 0 Or _
-       InStr(sheetName, "[") > 0 Or InStr(sheetName, "]") > 0 Then
-        ' Escape embedded single quotes by doubling them
-        QuoteSheetName = "'" & Replace(sheetName, "'", "''") & "'"
-    Else
-        QuoteSheetName = sheetName
-    End If
+    ' Always quote the sheet name. It is always safe to quote even when not
+    ' strictly required, and it avoids misinterpretation of numeric names
+    ' (e.g., "1"), names starting with digits, names that look like cell
+    ' references (e.g., "R1C1"), or names with spaces/special characters.
+    ' Escape embedded single quotes by doubling them.
+    QuoteSheetName = "'" & Replace(sheetName, "'", "''") & "'"
 End Function
 
 ' Builds a proper range reference: 'Sheet Name'!A1:B10 or SheetName!A1:B10
