@@ -322,9 +322,25 @@ End Sub
 
 Private Sub DebugPrint(ByVal comp As String, ByVal func As String, ByVal msg As String)
 #If DEV Then
-    If DebugMode Then Debug.Print "[" & Format$(Now, "hh:nn:ss") & "] [" & comp & "] [" & func & "] " & msg
+    If Not DebugMode Then Exit Sub
+    LogToFile "[" & Format$(Now, "yyyy-mm-dd hh:nn:ss") & "] [" & comp & "] [" & func & "] " & msg
 #End If
 End Sub
+
+' Write a single line to the PyExcel debug log file.
+' Safe to call from any module. Fails silently on I/O errors.
+Public Sub LogToFile(ByVal logLine As String)
+    On Error Resume Next
+    Dim f As Integer: f = FreeFile
+    Open Environ$("TEMP") & "\PyExcel_Debug.log" For Append As #f
+    Print #f, logLine
+    Close #f
+End Sub
+
+' Returns the full path of the debug log file.
+Public Function GetLogFilePath() As String
+    GetLogFilePath = Environ$("TEMP") & "\PyExcel_Debug.log"
+End Function
 
 '============================================================================================================================
 ' RESILIENCE / SELF-HEALING
@@ -370,8 +386,12 @@ Public Sub HostManager_Watchdog()
         HostManager_SetSheetByKey CurrentKey, ws
     End If
 
-    ' 4. Refresh ribbon context to ensure UI sync
-    HostManager_RibbonRefreshAll
+    ' 4. Ribbon refresh: full refresh only when PyExcel is active.
+    '    When disabled, CAppEvents handles all context changes adequately.
+    '    The watchdog's role is self-healing (steps 1-3), not routine refresh.
+    If RibbonIsEnabled Then
+        HostManager_RibbonRefreshAll
+    End If
 
 Reschedule:
     ' 5. Re-arm timer for continuous monitoring
