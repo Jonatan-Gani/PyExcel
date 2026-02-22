@@ -9,7 +9,7 @@ Option Explicit
 
 
 
-Sub RunGenericPythonScript(scriptName As String, srcRangeRef As String, dstRangeRef As String, wb As Workbook, ws As Worksheet)
+Sub RunGenericPythonScript(scriptName As String, srcRangeRef As String, dstRangeRef As String, wb As Workbook, ws As Worksheet, Optional entreToEnd As Boolean = False)
     On Error GoTo Fail
 
     Dim srcRangeList As New Collection
@@ -100,7 +100,7 @@ NextPart:
     tStep = Timer
 
     Debug.Print "  t+", Format(Timer - tStep, "0.000"), " Calling Py()"
-    Call Py(scriptName, srcRangeRef, dstRangeRef, wb, ws)
+    Call Py(scriptName, srcRangeRef, dstRangeRef, wb, ws, entreToEnd)
     Debug.Print "  t+", Format(Timer - tStep, "0.000"), " Py() completed"
     tStep = Timer
 
@@ -218,7 +218,7 @@ End Sub
 '
 '    Dim defaultSheet As Worksheet
 '    Set defaultSheet = Application.ThisWorkbook.ActiveSheet
-Public Function Py(scriptName As String, srcRangeRef As String, dstRangeRef As String, wb As Workbook, ws As Worksheet) As Boolean
+Public Function Py(scriptName As String, srcRangeRef As String, dstRangeRef As String, wb As Workbook, ws As Worksheet, Optional entreToEnd As Boolean = False) As Boolean
     On Error GoTo Fail
 
     Dim fso As Object: Set fso = CreateObject("Scripting.FileSystemObject")
@@ -268,7 +268,7 @@ Public Function Py(scriptName As String, srcRangeRef As String, dstRangeRef As S
     tempFiles.Add "in", inFile
 
     Debug.Print "t+", Format(Timer - tStep, "0.000"), " Running Python script: " & scriptName
-    Set meta = RunPythonJob(scriptName, tempFiles)
+    Set meta = RunPythonJob(scriptName, tempFiles, , entreToEnd)
     Debug.Print "t+", Format(Timer - tStep, "0.000"), " RunPythonJob complete"
     tStep = Timer
 
@@ -410,7 +410,7 @@ End Function
 
 
 
-Public Function RunPythonJob(script As String, tempFiles As Object, Optional inputText As String = "") As Object
+Public Function RunPythonJob(script As String, tempFiles As Object, Optional inputText As String = "", Optional entreToEnd As Boolean = False) As Object
     On Error GoTo Fail
 
     Dim tStart As Double
@@ -479,10 +479,10 @@ Public Function RunPythonJob(script As String, tempFiles As Object, Optional inp
 
     If Len(inputText) > 0 Then
         Debug.Print "t+", Format(Timer - tStep, "0.000"), " Writing input text to file: " & tempFiles("in")
-        Dim fNum As Integer: fNum = FreeFile
-        Open tempFiles("in") For Output As #fNum
-        Print #fNum, inputText
-        Close #fNum
+        Dim fnum As Integer: fnum = FreeFile
+        Open tempFiles("in") For Output As #fnum
+        Print #fnum, inputText
+        Close #fnum
     End If
     tStep = Timer
 
@@ -509,8 +509,13 @@ Public Function RunPythonJob(script As String, tempFiles As Object, Optional inp
     Dim teeCmd As String
     teeCmd = " | powershell -NoProfile -Command " & Q & "$input | Tee-Object -FilePath '" & logOut & "'" & Q
 
+    Dim pauseCmd As String
+    If entreToEnd Then
+        pauseCmd = " & echo. & set /p PAUSE_=Press Enter to exit..."
+    End If
+
     Dim cmd As String
-    cmd = "cmd /c " & Q & baseCmd & teeCmd & Q
+    cmd = "cmd /c " & Q & baseCmd & teeCmd & pauseCmd & Q
     Debug.Print "Full command: " & cmd
     tStep = Timer
 

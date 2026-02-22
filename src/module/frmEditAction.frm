@@ -1,10 +1,10 @@
 VERSION 5.00
 Begin {C62A69F0-16DC-11CE-9E98-00AA00574A4F} frmEditAction 
-   Caption         =   "Edit Action"
-   ClientHeight    =   4656
+   Caption         =   "Manage Action"
+   ClientHeight    =   4584
    ClientLeft      =   96
    ClientTop       =   416
-   ClientWidth     =   3568
+   ClientWidth     =   7144
    OleObjectBlob   =   "frmEditAction.frx":0000
    StartUpPosition =   1  'CenterOwner
 End
@@ -52,6 +52,7 @@ Private Sub RefreshFromContext()
     Dim inputVals As Variant
     Dim outputVals As Variant
     Dim i As Long
+    Dim aliasName As String, rangeAddr As String, sheetName As String, itemType As String
 
     Set wb = HostManager_GetCurrentWorkbook()
     Set ws = HostManager_GetCurrentSheet()
@@ -78,17 +79,32 @@ Private Sub RefreshFromContext()
 
     ComboBoxScript.value = GetSheetValue(wb, currentSheetName, "cmbScript")
 
+    ' Configure 4-column listboxes: Name | Range | Sheet | Type
+    ListBoxInput.ColumnCount = 4
+    ListBoxInput.ColumnWidths = "60;80;65;40"
+    ListBoxOutput.ColumnCount = 4
+    ListBoxOutput.ColumnWidths = "60;80;65;40"
+
     ListBoxInput.Clear
     inputVals = Split(GetSheetValue(wb, currentSheetName, "txtPyInput"), ";")
     For i = LBound(inputVals) To UBound(inputVals)
-        If Trim$(inputVals(i)) <> "" Then ListBoxInput.AddItem Trim$(inputVals(i))
+        If Trim$(inputVals(i)) <> "" Then
+            ParseRefToColumns Trim$(inputVals(i)), aliasName, rangeAddr, sheetName, itemType
+            AddListBoxRow ListBoxInput, aliasName, rangeAddr, sheetName, itemType
+        End If
     Next i
 
     ListBoxOutput.Clear
     outputVals = Split(GetSheetValue(wb, currentSheetName, "txtPyOutput"), ";")
     For i = LBound(outputVals) To UBound(outputVals)
-        If Trim$(outputVals(i)) <> "" Then ListBoxOutput.AddItem Trim$(outputVals(i))
+        If Trim$(outputVals(i)) <> "" Then
+            ParseRefToColumns Trim$(outputVals(i)), aliasName, rangeAddr, sheetName, itemType
+            AddListBoxRow ListBoxOutput, aliasName, rangeAddr, sheetName, itemType
+        End If
     Next i
+
+    ' Load EntreBox state
+    EntreBox.value = (GetSheetValue(wb, currentSheetName, "chkEntireRow") = "True")
 
     Debug.Print "[frmEditAction] Refreshed for sheet: " & currentSheetName & ", action='" & currentAction & "'"
     Exit Sub
@@ -124,13 +140,13 @@ Private Sub btnSave_Click()
     tempInput = ""
     For i = 0 To ListBoxInput.listCount - 1
         If i > 0 Then tempInput = tempInput & ";"
-        tempInput = tempInput & ListBoxInput.List(i)
+        tempInput = tempInput & BuildRefFromCols(ListBoxInput.List(i, 0), ListBoxInput.List(i, 2), ListBoxInput.List(i, 1))
     Next i
 
     tempOutput = ""
     For i = 0 To ListBoxOutput.listCount - 1
         If i > 0 Then tempOutput = tempOutput & ";"
-        tempOutput = tempOutput & ListBoxOutput.List(i)
+        tempOutput = tempOutput & BuildRefFromCols(ListBoxOutput.List(i, 0), ListBoxOutput.List(i, 2), ListBoxOutput.List(i, 1))
     Next i
 
     inputVal = tempInput
@@ -162,6 +178,7 @@ Private Sub btnSave_Click()
     act("script") = scriptVal
     act("input") = inputVal
     act("output") = outputVal
+    act("entireRow") = IIf(EntreBox.value, "True", "False")
     Set actionData(newAction) = act
 
     SaveActionsForSheet currentSheetName, actionData
@@ -173,6 +190,7 @@ Private Sub btnSave_Click()
     SaveSheetValue wb, currentSheetName, "cmbScript", act("script")
     SaveSheetValue wb, currentSheetName, "txtPyInput", act("input")
     SaveSheetValue wb, currentSheetName, "txtPyOutput", act("output")
+    SaveSheetValue wb, currentSheetName, "chkEntireRow", act("entireRow")
     scriptSelected = act("script")
 
     If Not rib Is Nothing Then
@@ -201,7 +219,7 @@ Private Sub btnAddInput_Click()
     Set rng = Application.InputBox("Select Input Range", Type:=8)
     On Error GoTo 0
     If rng Is Nothing Then Exit Sub
-    ListBoxInput.AddItem BuildRangeRef(rng.parent.name, rng.Address(False, False))
+    AddListBoxRow ListBoxInput, "", rng.Address(False, False), rng.parent.name, "Range"
 End Sub
 
 Private Sub btnAddOutput_Click()
@@ -210,17 +228,18 @@ Private Sub btnAddOutput_Click()
     Set rng = Application.InputBox("Select Output Range", Type:=8)
     On Error GoTo 0
     If rng Is Nothing Then Exit Sub
-    ListBoxOutput.AddItem BuildRangeRef(rng.parent.name, rng.Address(False, False))
+    AddListBoxRow ListBoxOutput, "", rng.Address(False, False), rng.parent.name, "Range"
 End Sub
 
 
 
 Private Sub btnEditInput_Click()
     Dim i As Long
-    Dim original As String
+    Dim rawRef As String
     Dim updated As String
     Dim savedLeft As Single
     Dim savedTop As Single
+    Dim aliasName As String, rangeAddr As String, sheetName As String, itemType As String
 
     i = ListBoxInput.ListIndex
     If i < 0 Then
@@ -228,35 +247,34 @@ Private Sub btnEditInput_Click()
         Exit Sub
     End If
 
-    original = ListBoxInput.List(i)
+    rawRef = BuildRefFromCols(ListBoxInput.List(i, 0), ListBoxInput.List(i, 2), ListBoxInput.List(i, 1))
 
-    ' Save current position
     savedLeft = Me.Left
     savedTop = Me.Top
-
-    ' Off-screen hide
     Me.Left = -20000
     Me.Top = -20000
 
-    ' Call child form
-    updated = frmRangeSet.GetUpdatedValue(original)
+    updated = frmRangeSet.GetUpdatedValue(rawRef)
 
-    ' Restore position
     Me.Left = savedLeft
     Me.Top = savedTop
 
-    ' Write updated value
-    ListBoxInput.List(i) = updated
+    ParseRefToColumns updated, aliasName, rangeAddr, sheetName, itemType
+    ListBoxInput.List(i, 0) = aliasName
+    ListBoxInput.List(i, 1) = rangeAddr
+    ListBoxInput.List(i, 2) = sheetName
+    ListBoxInput.List(i, 3) = itemType
 End Sub
 
 
 
 Private Sub btnEditOutput_Click()
     Dim i As Long
-    Dim original As String
+    Dim rawRef As String
     Dim updated As String
     Dim savedLeft As Single
     Dim savedTop As Single
+    Dim aliasName As String, rangeAddr As String, sheetName As String, itemType As String
 
     i = ListBoxOutput.ListIndex
     If i < 0 Then
@@ -264,7 +282,7 @@ Private Sub btnEditOutput_Click()
         Exit Sub
     End If
 
-    original = ListBoxOutput.List(i)
+    rawRef = BuildRefFromCols(ListBoxOutput.List(i, 0), ListBoxOutput.List(i, 2), ListBoxOutput.List(i, 1))
 
     savedLeft = Me.Left
     savedTop = Me.Top
@@ -273,7 +291,7 @@ Private Sub btnEditOutput_Click()
     Me.Left = -20000
     Me.Top = -20000
 
-    updated = frmRangeSet.GetUpdatedValue(original)
+    updated = frmRangeSet.GetUpdatedValue(rawRef)
 
 
 
@@ -282,7 +300,11 @@ Private Sub btnEditOutput_Click()
     Me.Left = savedLeft
     Me.Top = savedTop
 
-    ListBoxOutput.List(i) = updated
+    ParseRefToColumns updated, aliasName, rangeAddr, sheetName, itemType
+    ListBoxOutput.List(i, 0) = aliasName
+    ListBoxOutput.List(i, 1) = rangeAddr
+    ListBoxOutput.List(i, 2) = sheetName
+    ListBoxOutput.List(i, 3) = itemType
 
 
 
@@ -318,4 +340,157 @@ Private Sub btnDeleteOutput_Click()
     End If
     ListBoxOutput.RemoveItem selIndex
 
+End Sub
+
+
+
+Private Sub btnMoveUpInput_Click()
+    MoveListBoxItem ListBoxInput, -1
+End Sub
+
+Private Sub btnMoveDownInput_Click()
+    MoveListBoxItem ListBoxInput, 1
+End Sub
+
+Private Sub btnMoveUpOutput_Click()
+    MoveListBoxItem ListBoxOutput, -1
+End Sub
+
+Private Sub btnMoveDownOutput_Click()
+    MoveListBoxItem ListBoxOutput, 1
+End Sub
+
+Private Sub MoveListBoxItem(lb As MSForms.ListBox, direction As Integer)
+    Dim i As Long, swapIdx As Long, c As Long
+    Dim temp As String
+
+    i = lb.ListIndex
+    If i < 0 Then Exit Sub
+
+    swapIdx = i + direction
+    If swapIdx < 0 Or swapIdx >= lb.listCount Then Exit Sub
+
+    For c = 0 To lb.ColumnCount - 1
+        temp = lb.List(i, c)
+        lb.List(i, c) = lb.List(swapIdx, c)
+        lb.List(swapIdx, c) = temp
+    Next c
+    lb.ListIndex = swapIdx
+End Sub
+
+
+
+Private Sub ParseRefToColumns(rawRef As String, aliasName As String, rangeAddr As String, sheetName As String, itemType As String)
+    Dim eqPos As Long
+    Dim refPart As String
+
+    itemType = "Range"
+    aliasName = ""
+    rangeAddr = ""
+    sheetName = ""
+
+    rawRef = Trim$(rawRef)
+    If Len(rawRef) = 0 Then Exit Sub
+
+    eqPos = InStr(rawRef, "=")
+    If eqPos > 0 Then
+        aliasName = Trim$(Left$(rawRef, eqPos - 1))
+        refPart = Trim$(Mid$(rawRef, eqPos + 1))
+    Else
+        refPart = rawRef
+    End If
+
+    ParseRangeRef refPart, sheetName, rangeAddr
+End Sub
+
+
+Private Sub AddListBoxRow(lb As MSForms.ListBox, aliasName As String, rangeAddr As String, sheetName As String, itemType As String)
+    lb.AddItem aliasName
+    Dim r As Long: r = lb.listCount - 1
+    lb.List(r, 1) = rangeAddr
+    lb.List(r, 2) = sheetName
+    lb.List(r, 3) = itemType
+End Sub
+
+
+Private Function BuildRefFromCols(aliasName As String, sheetName As String, rangeAddr As String) As String
+    Dim ref As String
+    If Len(sheetName) > 0 Then
+        ref = BuildRangeRef(sheetName, rangeAddr)
+    Else
+        ref = rangeAddr
+    End If
+    If Len(aliasName) > 0 Then
+        BuildRefFromCols = aliasName & "=" & ref
+    Else
+        BuildRefFromCols = ref
+    End If
+End Function
+
+
+Private Sub btnNewScript_Click()
+    On Error GoTo EH
+
+    Dim scriptName As String
+    Dim folderPath As String
+    Dim fullPath As String
+    Dim fileNum As Integer
+
+    scriptName = Trim$(InputBox("Enter a name for the new script:", "New Script"))
+    If Len(scriptName) = 0 Then Exit Sub
+
+    ' Ensure .py extension
+    If LCase(right$(scriptName, 3)) <> ".py" Then scriptName = scriptName & ".py"
+
+    folderPath = GetScriptFolderPath()
+    If Len(folderPath) = 0 Then
+        MsgBox "Could not resolve the userScripts folder.", vbExclamation
+        Exit Sub
+    End If
+
+    If right$(folderPath, 1) <> "\" Then folderPath = folderPath & "\"
+    fullPath = folderPath & scriptName
+
+    If Dir(fullPath) <> "" Then
+        MsgBox "A script named '" & scriptName & "' already exists.", vbExclamation
+        Exit Sub
+    End If
+
+    ' Write template file
+    fileNum = FreeFile
+    Open fullPath For Output As #fileNum
+    Print #fileNum, "from typing import Dict, Any"
+    Print #fileNum, "import pandas as pd"
+    Print #fileNum, "from tools import run_script_cli"
+    Print #fileNum, ""
+    Print #fileNum, ""
+    Print #fileNum, "def transform(inputs: Dict[str, Any]) -> Dict[str, Any]:"
+    Print #fileNum, "    # inputs contains DataFrames, lists, or scalars from Excel"
+    Print #fileNum, "    # df = inputs.get(""df1"", pd.DataFrame())"
+    Print #fileNum, ""
+    Print #fileNum, "    return {}"
+    Print #fileNum, ""
+    Print #fileNum, ""
+    Print #fileNum, "if __name__ == ""__main__"":"
+    Print #fileNum, "    run_script_cli(transform)"
+    Close #fileNum
+
+    ' Refresh the script combo box and select the new file
+    Dim files As Collection
+    Dim f As Variant
+    ComboBoxScript.Clear
+    Set files = GetScriptFiles()
+    If Not files Is Nothing Then
+        For Each f In files
+            ComboBoxScript.AddItem f
+        Next f
+    End If
+    ComboBoxScript.value = scriptName
+
+    MsgBox "Script '" & scriptName & "' created.", vbInformation
+    Exit Sub
+
+EH:
+    If fileNum > 0 Then Close #fileNum
+    MsgBox "Error creating script: " & Err.Description, vbCritical
 End Sub

@@ -1192,6 +1192,8 @@ Public Function LoadActionsForSheet(sheetName As String) As Object
                     act("script") = Trim$(cols(1))
                     act("input") = Trim$(cols(2))
                     act("output") = Trim$(cols(3))
+                    act("entireRow") = IIf(UBound(cols) >= 4, Trim$(cols(4)), "False")
+                    act("entreToEnd") = IIf(UBound(cols) >= 5, Trim$(cols(5)), "False")
                     dict.Add k, act
                 End If
             End If
@@ -1221,7 +1223,17 @@ Public Sub SaveActionsForSheet(sheetName As String, dict As Object)
     Debug.Print "SaveActionsForSheet", "dict.count=" & dict.count, "currentAction=" & currentAction
 
     For Each k In dict.keys
-        s = s & k & "|" & dict(k)("script") & "|" & dict(k)("input") & "|" & dict(k)("output") & ";"
+        Dim erVal As String: erVal = "False"
+        On Error Resume Next
+        erVal = dict(k)("entireRow")
+        If Len(erVal) = 0 Then erVal = "False"
+        On Error GoTo EH
+        Dim eteVal As String: eteVal = "False"
+        On Error Resume Next
+        eteVal = dict(k)("entreToEnd")
+        If Len(eteVal) = 0 Then eteVal = "False"
+        On Error GoTo EH
+        s = s & k & "|" & dict(k)("script") & "|" & dict(k)("input") & "|" & dict(k)("output") & "|" & erVal & "|" & eteVal & ";"
     Next k
 
     SaveSheetValue wb, sheetName, "Actions", s
@@ -1279,6 +1291,8 @@ Public Sub OnAddAction(control As IRibbonControl)
     act("script") = ""
     act("input") = ""
     act("output") = ""
+    act("entireRow") = "False"
+    act("entreToEnd") = "False"
     actionData.Add newName, act
 
     ' Persist data
@@ -1288,6 +1302,7 @@ Public Sub OnAddAction(control As IRibbonControl)
     SaveSheetValue wb, currentSheetName, "cmbScript", ""
     SaveSheetValue wb, currentSheetName, "txtPyInput", ""
     SaveSheetValue wb, currentSheetName, "txtPyOutput", ""
+    SaveSheetValue wb, currentSheetName, "chkEntireRow", "False"
 
     ' Refresh ribbon controls
     If Not rib Is Nothing Then
@@ -1396,14 +1411,26 @@ Public Sub OnRunPython(control As IRibbonControl)
            "Script: " & scriptName & vbCrLf & _
            "Input: " & inputVal & vbCrLf & _
            "Output: " & outputVal, vbInformation, "Run Python Action"
-           
+
     MsgBox "Action: " & currentAction & vbCrLf & _
            "Script: " & scriptName & vbCrLf & _
            "Input: " & inputVal & vbCrLf & _
            "Output: " & outputVal, vbInformation, "Run Python Action"
 
+    ' Read entreToEnd from current action settings
+    Dim entreToEnd As Boolean: entreToEnd = False
+    Dim actions As Object: Set actions = LoadActionsForSheet(currentSheetName)
+    If Not actions Is Nothing And Len(currentAction) > 0 Then
+        If actions.Exists(currentAction) Then
+            Dim actSettings As Object: Set actSettings = actions(currentAction)
+            On Error Resume Next
+            entreToEnd = (LCase$(Trim$(CStr(actSettings("entreToEnd")))) = "true")
+            On Error GoTo EH
+        End If
+    End If
+
     ' Run the linked Python script
-    RunGenericPythonScript scriptName, inputVal, outputVal, wb, ws
+    RunGenericPythonScript scriptName, inputVal, outputVal, wb, ws, entreToEnd
     Exit Sub
 
 EH:
@@ -1602,6 +1629,12 @@ Public Sub OnActionChange(control As IRibbonControl, text As String)
         SaveSheetValue wb, currentSheetName, "cmbScript", act("script")
         SaveSheetValue wb, currentSheetName, "txtPyInput", act("input")
         SaveSheetValue wb, currentSheetName, "txtPyOutput", act("output")
+        Dim erVal As String: erVal = "False"
+        On Error Resume Next
+        erVal = act("entireRow")
+        On Error GoTo EH
+        If Len(erVal) = 0 Then erVal = "False"
+        SaveSheetValue wb, currentSheetName, "chkEntireRow", erVal
         scriptSelected = act("script")
     End If
 

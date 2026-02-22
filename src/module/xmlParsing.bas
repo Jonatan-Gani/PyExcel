@@ -1546,18 +1546,21 @@ Public Function PasteTypedXMLToRange(xmlString As String, dstRef As String) As B
     Dim needLabel As Boolean: needLabel = (numTables > 1)
     Dim nextRow As Long, anchorCol As Long, placedCount As Long
 
-    ' NEW: Capture destination format from first DATA row (row 2) before clearing
-    ' Row 1 is the header row; row 2 is the first data row whose format we want to preserve
-    ' IMPORTANT: Copy format to a temporary row to preserve it through clearing and table writes
-    ' (The original dstRange.rows(2) cells will become table 1's header and get header formatting)
+    ' Capture destination format from first DATA row before clearing.
+    ' Layout differs by mode:
+    '   Single table:  Row1=Header,      Row2=First data row  ? capture row 2
+    '   Multi-table:   Row1=Label,       Row2=Header,         Row3=First data row  ? capture row 3
+    ' needLabel is already computed above based on numTables.
     Dim savedFormatRow As Range
     Dim tempRowNum As Long
-    If dstRange.rows.count >= 2 Then
+    Dim formatSrcOffset As Long
+    formatSrcOffset = IIf(needLabel, 3, 2)
+    If dstRange.rows.count >= formatSrcOffset Then
         ' Use the last row of the worksheet as a safe temp location
         tempRowNum = wsDst.rows.count
         Set savedFormatRow = wsDst.Cells(tempRowNum, dstRange.Column).Resize(1, dstRange.Columns.count)
         ' Copy only the formatting from the original data row template
-        dstRange.rows(2).Copy
+        dstRange.rows(formatSrcOffset).Copy
         savedFormatRow.PasteSpecial xlPasteFormats
         Application.CutCopyMode = False
     End If
