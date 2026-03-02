@@ -15,7 +15,7 @@ Attribute VB_PredeclaredId = True
 Attribute VB_Exposed = False
 Option Explicit
 
-Private hasLoaded As Boolean      ' <<< THE ONLY FIX ADDED
+Private hasLoaded As Boolean
 Private currentSheetName As String
 Private currentAction As String
 Private actionData As Object
@@ -103,8 +103,17 @@ Private Sub RefreshFromContext()
         End If
     Next i
 
-    ' Load EntreBox state
-    EntreBox.value = (GetSheetValue(wb, currentSheetName, "chkEntireRow") = "True")
+    ' Load EntreBox state from action dictionary
+    Set actionData = LoadActionsForSheet(currentSheetName)
+    Dim eteVal As String: eteVal = "False"
+    If Not actionData Is Nothing And Len(currentAction) > 0 Then
+        If actionData.Exists(currentAction) Then
+            On Error Resume Next
+            eteVal = actionData(currentAction)("entreToEnd")
+            On Error GoTo 0
+        End If
+    End If
+    EntreBox.value = (LCase$(Trim$(eteVal)) = "true")
 
     Debug.Print "[frmEditAction] Refreshed for sheet: " & currentSheetName & ", action='" & currentAction & "'"
     Exit Sub
@@ -178,7 +187,7 @@ Private Sub btnSave_Click()
     act("script") = scriptVal
     act("input") = inputVal
     act("output") = outputVal
-    act("entireRow") = IIf(EntreBox.value, "True", "False")
+    act("entreToEnd") = IIf(EntreBox.value, "True", "False")
     Set actionData(newAction) = act
 
     SaveActionsForSheet currentSheetName, actionData
