@@ -1181,19 +1181,59 @@ Public Function LoadActionsForSheet(sheetName As String) As Object
         Exit Function
     End If
 
-    rows = Split(raw, ";")
+    ' New format uses Chr(29) (ASCII Group Separator) as action separator — safe in Excel
+    ' Named Range string formulas and never appears in range refs or script names.
+    ' Fall back to Chr(10) (transitional) then ";" (legacy) for old saved data.
+    Dim rowSep As String
+    If InStr(raw, Chr(29)) > 0 Then
+        rowSep = Chr(29)
+    ElseIf InStr(raw, Chr(10)) > 0 Then
+        rowSep = Chr(10)
+    Else
+        rowSep = ";"
+    End If
+
+    rows = Split(raw, rowSep)
     For i = LBound(rows) To UBound(rows)
-        If Len(rows(i)) > 0 Then
+        If Len(Trim$(rows(i))) > 0 Then
             cols = Split(rows(i), "|")
-            If UBound(cols) >= 3 Then
+            If UBound(cols) >= 1 Then
                 k = Trim$(cols(0))
                 If Len(k) > 0 Then
                     Set act = CreateObject("Scripting.Dictionary")
-                    act("script") = Trim$(cols(1))
-                    act("input") = Trim$(cols(2))
-                    act("output") = Trim$(cols(3))
-                    act("entireRow") = IIf(UBound(cols) >= 4, Trim$(cols(4)), "False")
-                    act("entreToEnd") = IIf(UBound(cols) >= 5, Trim$(cols(5)), "False")
+                    act("script") = ""
+                    act("input") = ""
+                    act("output") = ""
+                    act("entireRow") = "False"
+                    act("entreToEnd") = "False"
+                    If InStr(cols(1), "=") > 0 Then
+                        ' Named format: key=value pairs. input= and output= may repeat
+                        ' (multiple ranges as separate fields); accumulate with "; " join.
+                        Dim j As Long, kv() As String, fKey As String, fVal As String
+                        For j = 1 To UBound(cols)
+                            kv = Split(cols(j), "=", 2)
+                            If UBound(kv) >= 1 Then
+                                fKey = Trim$(kv(0))
+                                fVal = Trim$(kv(1))
+                                If fKey = "input" Or fKey = "output" Then
+                                    If Len(act(fKey)) = 0 Then
+                                        act(fKey) = fVal
+                                    Else
+                                        act(fKey) = act(fKey) & "; " & fVal
+                                    End If
+                                Else
+                                    act(fKey) = fVal
+                                End If
+                            End If
+                        Next j
+                    ElseIf UBound(cols) >= 3 Then
+                        ' Legacy positional format
+                        act("script") = Trim$(cols(1))
+                        act("input") = Trim$(cols(2))
+                        act("output") = Trim$(cols(3))
+                        act("entireRow") = IIf(UBound(cols) >= 4, Trim$(cols(4)), "False")
+                        act("entreToEnd") = IIf(UBound(cols) >= 5, Trim$(cols(5)), "False")
+                    End If
                     dict.Add k, act
                 End If
             End If
@@ -1233,7 +1273,19 @@ Public Sub SaveActionsForSheet(sheetName As String, dict As Object)
         eteVal = dict(k)("entreToEnd")
         If Len(eteVal) = 0 Then eteVal = "False"
         On Error GoTo EH
-        s = s & k & "|" & dict(k)("script") & "|" & dict(k)("input") & "|" & dict(k)("output") & "|" & erVal & "|" & eteVal & ";"
+        Dim inParts As Variant, outParts As Variant, p As Long
+        Dim actionStr As String
+        actionStr = k & "|script=" & dict(k)("script")
+        inParts = Split(dict(k)("input"), "; ")
+        For p = LBound(inParts) To UBound(inParts)
+            If Len(Trim$(inParts(p))) > 0 Then actionStr = actionStr & "|input=" & Trim$(inParts(p))
+        Next p
+        outParts = Split(dict(k)("output"), "; ")
+        For p = LBound(outParts) To UBound(outParts)
+            If Len(Trim$(outParts(p))) > 0 Then actionStr = actionStr & "|output=" & Trim$(outParts(p))
+        Next p
+        actionStr = actionStr & "|entireRow=" & erVal & "|entreToEnd=" & eteVal
+        s = s & actionStr & Chr(29)
     Next k
 
     SaveSheetValue wb, sheetName, "Actions", s
