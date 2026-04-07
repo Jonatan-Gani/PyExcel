@@ -72,6 +72,7 @@ Public Sub VerifyProjectVersion()
         AvailableVersion = addinVersion
         Debug.Print "[VerifyProjectVersion] No version found - assuming legacy project needs update to " & addinVersion
         RefreshEnableButton
+        ShowUpdatePrompt
         Exit Sub
     End If
 
@@ -91,6 +92,7 @@ Public Sub VerifyProjectVersion()
         AvailableVersion = addinVersion
         Debug.Print "[VerifyProjectVersion] Update available: " & projectVersion & " -> " & addinVersion
         RefreshEnableButton
+        ShowUpdatePrompt
     Else
         ' Project version >= addin version (downgrade scenario), do nothing
         UpdateAvailable = False
@@ -649,6 +651,20 @@ End Sub
 Private Sub RefreshEnableButton()
     On Error Resume Next
     If Not rib Is Nothing Then rib.InvalidateControl "btnEnablePyExcel"
+End Sub
+
+' Show update prompt (called automatically when update is detected)
+Private Sub ShowUpdatePrompt()
+    If Not RibbonIsEnabled Then Exit Sub
+    Dim result As VbMsgBoxResult
+    result = MsgBox("Update available: " & AvailableVersion & vbCrLf & vbCrLf & _
+                    "Update now?" & vbCrLf & "Click No to dismiss this update.", _
+                    vbYesNoCancel + vbQuestion, "PyExcel Update")
+    Select Case result
+        Case vbYes: RunManualUpdate
+        Case vbNo: DismissUpdate
+        ' Cancel: do nothing, keep indicator visible
+    End Select
 End Sub
 
 ' ==============================================================================

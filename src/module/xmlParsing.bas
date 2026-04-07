@@ -644,7 +644,7 @@ Private Function InferListType(ByRef data As Variant, ByVal isRow As Boolean, By
             v = data(idx, 1)
         End If
 
-        If IsEmpty(v) Then GoTo nextItem
+        If IsEmpty(v) Then GoTo NextItem
 
         anyNonBlank = True
         vt = VarType(v)
@@ -675,7 +675,7 @@ Private Function InferListType(ByRef data As Variant, ByVal isRow As Boolean, By
                 anyErrorish = True
                 Exit For
         End Select
-nextItem:
+NextItem:
     Next
 
     If Not anyNonBlank Then

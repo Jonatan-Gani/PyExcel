@@ -816,6 +816,56 @@ notfound:
 End Function
 
 
+' Cleans stale files from the Temp folder on every run.
+' Files modified today are left untouched.
+' Old .log files are moved to Archive\OldLogs\ instead of deleted.
+' All other old files are deleted.
+Public Sub CleanTempFolder(ByVal folderTemp As String, ByVal folderArchive As String)
+    On Error Resume Next
+
+    Dim fso As Object: Set fso = CreateObject("Scripting.FileSystemObject")
+    If Not fso.FolderExists(folderTemp) Then Exit Sub
+
+    Dim today As Date: today = Date
+    Dim logsFolder As String: logsFolder = folderArchive & "\OldLogs"
+
+    ' Collect all file paths before iterating to avoid modifying live collections
+    Dim col As New Collection
+    CollectTempFiles fso.GetFolder(folderTemp), col
+
+    Dim fp As Variant
+    For Each fp In col
+        If Not fso.fileExists(CStr(fp)) Then GoTo SkipFile
+
+        Dim fo As Object: Set fo = fso.GetFile(CStr(fp))
+        If DateValue(fo.DateLastModified) >= today Then GoTo SkipFile
+
+        If LCase$(fso.GetExtensionName(CStr(fp))) = "log" Then
+            ' Move old logs to Archive\OldLogs\
+            If Not fso.FolderExists(logsFolder) Then fso.CreateFolder logsFolder
+            Dim dst As String: dst = logsFolder & "\" & fso.GetFileName(CStr(fp))
+            If fso.fileExists(dst) Then fso.DeleteFile dst, True
+            fso.MoveFile CStr(fp), dst
+        Else
+            fso.DeleteFile CStr(fp), True
+        End If
+
+SkipFile:
+    Next fp
+End Sub
+
+Private Sub CollectTempFiles(ByVal folder As Object, ByRef col As Collection)
+    Dim f As Object
+    For Each f In folder.files
+        col.Add f.path
+    Next f
+    Dim sf As Object
+    For Each sf In folder.subFolders
+        CollectTempFiles sf, col
+    Next sf
+End Sub
+
+
 
 
 
@@ -836,7 +886,7 @@ Public Function PasteArtifactsToTargets(idMap As Object, artifacts As Object) As
         ' Verify if artifact is a valid object
         If Not IsObject(it) Then
             Debug.Print "  Skipping non-object item: "; TypeName(it)
-            GoTo nextItem
+            GoTo NextItem
         End If
 
         ' Print all keys of the artifact
@@ -845,7 +895,7 @@ Public Function PasteArtifactsToTargets(idMap As Object, artifacts As Object) As
         ' Validate required fields
         If Not it.Exists("id") Or Not it.Exists("type") Or Not it.Exists("abs") Then
             Debug.Print "  Skipping artifact (missing id/type/abs)."
-            GoTo nextItem
+            GoTo NextItem
         End If
 
         fpath = CStr(it("abs"))
@@ -854,7 +904,7 @@ Public Function PasteArtifactsToTargets(idMap As Object, artifacts As Object) As
         ' Check if mapping exists
         If Not idMap.Exists(id) Then
             Debug.Print "  Skipping artifact '" & id & "' (no mapping)."
-            GoTo nextItem
+            GoTo NextItem
         End If
 
         Debug.Print "  Artifact raw type=" & it("type")
@@ -864,7 +914,7 @@ Public Function PasteArtifactsToTargets(idMap As Object, artifacts As Object) As
         ' Validate mapping type
         If TypeName(idMap(id)) <> "Range" Then
             Debug.Print "  ERROR: mapping for '" & id & "' is not a Range, got " & TypeName(idMap(id))
-            GoTo nextItem
+            GoTo NextItem
         End If
 
         Set dstRng = idMap(id)
@@ -991,7 +1041,7 @@ Public Function PasteArtifactsToTargets(idMap As Object, artifacts As Object) As
                 Debug.Print "    [Case Else] Unknown artifact type='" & t & "' for id='" & id & "'"
         End Select
 
-nextItem:
+NextItem:
         Debug.Print String(80, "-")
     Next it
 
@@ -1003,6 +1053,8 @@ Fail:
     Debug.Print "Error in PasteArtifactsToTargets: " & Err.Description & " (id=" & id & ")"
     PasteArtifactsToTargets = False
 End Function
+
+
 
 
 

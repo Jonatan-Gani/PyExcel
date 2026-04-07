@@ -15,7 +15,7 @@ Attribute VB_PredeclaredId = True
 Attribute VB_Exposed = False
 Option Explicit
 
-Private hasLoaded As Boolean
+Private hasLoaded As Boolean      ' <<< THE ONLY FIX ADDED
 Private currentSheetName As String
 Private currentAction As String
 Private actionData As Object
@@ -79,11 +79,29 @@ Private Sub RefreshFromContext()
 
     ComboBoxScript.value = GetSheetValue(wb, currentSheetName, "cmbScript")
 
-    ' Configure 4-column listboxes: Name | Range | Sheet | Type
+    ' Configure 4-column listboxes and matching headers: Name | Range | Sheet | Type
+    Dim colWidths As String: colWidths = "60;80;65;40"
+
+    ListBoxInputHeader.ColumnCount = 4
+    ListBoxInputHeader.ColumnWidths = colWidths
+    ListBoxInputHeader.Clear
+    ListBoxInputHeader.AddItem "Name"
+    ListBoxInputHeader.List(0, 1) = "Range"
+    ListBoxInputHeader.List(0, 2) = "Sheet"
+    ListBoxInputHeader.List(0, 3) = "Type"
+
+    ListBoxOutputHeader.ColumnCount = 4
+    ListBoxOutputHeader.ColumnWidths = colWidths
+    ListBoxOutputHeader.Clear
+    ListBoxOutputHeader.AddItem "Name"
+    ListBoxOutputHeader.List(0, 1) = "Range"
+    ListBoxOutputHeader.List(0, 2) = "Sheet"
+    ListBoxOutputHeader.List(0, 3) = "Type"
+
     ListBoxInput.ColumnCount = 4
-    ListBoxInput.ColumnWidths = "60;80;65;40"
+    ListBoxInput.ColumnWidths = colWidths
     ListBoxOutput.ColumnCount = 4
-    ListBoxOutput.ColumnWidths = "60;80;65;40"
+    ListBoxOutput.ColumnWidths = colWidths
 
     ListBoxInput.Clear
     inputVals = Split(GetSheetValue(wb, currentSheetName, "txtPyInput"), ";")

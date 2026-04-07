@@ -254,6 +254,10 @@ Public Function Py(scriptName As String, srcRangeRef As String, dstRangeRef As S
     End If
     tStep = Timer
 
+    CleanTempFolder folderTemp, folderArchive
+    Debug.Print "t+", Format(Timer - tStep, "0.000"), " Temp folder cleaned"
+    tStep = Timer
+
     Debug.Print "t+", Format(Timer - tStep, "0.000"), " Serializing range: " & srcRangeRef
     inFile = SerializeRangeToTypedXML(srcRangeRef)
     Debug.Print "t+", Format(Timer - tStep, "0.000"), " SerializeRangeToTypedXML complete"
@@ -384,7 +388,14 @@ Public Function Py(scriptName As String, srcRangeRef As String, dstRangeRef As S
         ArchiveFile inFile, runFolder
         Debug.Print "t+", Format(Timer - tStep, "0.000"), " Input file archived"
     End If
-    
+
+    Dim logFile As String
+    logFile = folderTemp & "\py_" & scriptName & "_" & runId & ".log"
+    If fso.fileExists(logFile) Then
+        ArchiveFile logFile, runFolder
+        Debug.Print "t+", Format(Timer - tStep, "0.000"), " Log file archived"
+    End If
+
     TrimArchive folderArchive, 10
     Debug.Print "t+", Format(Timer - tStep, "0.000"), " Archive trimmed"
     tStep = Timer
