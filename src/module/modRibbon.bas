@@ -183,7 +183,6 @@ Public Function GetSheetValue(wb As Workbook, sheetName As String, ctrlId As Str
     ' Use resilient workbook and sheet references
     If wb Is Nothing Then Set wb = HostManager_GetCurrentWorkbook()
     If wb Is Nothing Then
-        Debug.Print "[GetSheetValue] Workbook reference is Nothing (after HostManager check)."
         Exit Function
     End If
     If LenB(sheetName) = 0 Then
@@ -192,18 +191,13 @@ Public Function GetSheetValue(wb As Workbook, sheetName As String, ctrlId As Str
         If Not tmpWS Is Nothing Then sheetName = tmpWS.name
     End If
 
-    Debug.Print "[GetSheetValue] wb=" & wb.name & " | sheet=" & sheetName & " | ctrlId=" & ctrlId
-
     ' Try to get the worksheet safely
     Set ws = Nothing
     On Error Resume Next
     Set ws = wb.Sheets(sheetName)
     On Error GoTo EH
 
-    If ws Is Nothing Then
-        Debug.Print "[GetSheetValue] Sheet '" & sheetName & "' not found in workbook '" & wb.name & "'."
-        Exit Function
-    End If
+    If ws Is Nothing Then Exit Function
 
     ' Try to get the named range within the sheet
     Set nm = Nothing
@@ -211,13 +205,9 @@ Public Function GetSheetValue(wb As Workbook, sheetName As String, ctrlId As Str
     Set nm = ws.Names(ctrlId)
     On Error GoTo EH
 
-    If nm Is Nothing Then
-        Debug.Print "[GetSheetValue] Name '" & ctrlId & "' not found on sheet '" & sheetName & "'."
-        Exit Function
-    End If
+    If nm Is Nothing Then Exit Function
 
     raw = nm.RefersTo
-    Debug.Print "[GetSheetValue] Raw value: " & raw
 
     ' Normalize the string result
     If Left$(raw, 1) = "=" Then raw = Mid$(raw, 2)
@@ -225,7 +215,6 @@ Public Function GetSheetValue(wb As Workbook, sheetName As String, ctrlId As Str
         raw = Mid$(raw, 2, Len(raw) - 2)
     End If
 
-    Debug.Print "[GetSheetValue] Final value: " & raw
     GetSheetValue = raw
     Exit Function
 

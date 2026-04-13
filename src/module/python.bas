@@ -516,9 +516,13 @@ Public Function RunPythonJob(script As String, tempFiles As Object, Optional inp
               "--run-id " & Q & runId & Q & " 2>&1"
 
     ' Pipe through PowerShell Tee-Object to display in terminal AND write to file
-    ' Use single quotes inside PowerShell for the file path to avoid quote escaping issues
+    ' Use [Console]::In.ReadLine() loop so PowerShell exits cleanly when the pipe closes
+    ' ($input can hang after the upstream process exits)
     Dim teeCmd As String
-    teeCmd = " | powershell -NoProfile -Command " & Q & "$input | Tee-Object -FilePath '" & logOut & "'" & Q
+    teeCmd = " | powershell -NoProfile -Command " & Q & _
+             "$f=[IO.StreamWriter]::new('" & logOut & "',$false,[Text.Encoding]::UTF8);" & _
+             "try{while(($l=[Console]::In.ReadLine())-ne $null){[Console]::Out.WriteLine($l);$f.WriteLine($l)}}" & _
+             "finally{$f.Close()}" & Q
 
     Dim pauseCmd As String
     If entreToEnd Then

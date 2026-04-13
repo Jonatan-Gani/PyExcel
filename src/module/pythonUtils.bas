@@ -886,7 +886,7 @@ Public Function PasteArtifactsToTargets(idMap As Object, artifacts As Object) As
         ' Verify if artifact is a valid object
         If Not IsObject(it) Then
             Debug.Print "  Skipping non-object item: "; TypeName(it)
-            GoTo NextItem
+            GoTo nextItem
         End If
 
         ' Print all keys of the artifact
@@ -895,7 +895,7 @@ Public Function PasteArtifactsToTargets(idMap As Object, artifacts As Object) As
         ' Validate required fields
         If Not it.Exists("id") Or Not it.Exists("type") Or Not it.Exists("abs") Then
             Debug.Print "  Skipping artifact (missing id/type/abs)."
-            GoTo NextItem
+            GoTo nextItem
         End If
 
         fpath = CStr(it("abs"))
@@ -904,7 +904,7 @@ Public Function PasteArtifactsToTargets(idMap As Object, artifacts As Object) As
         ' Check if mapping exists
         If Not idMap.Exists(id) Then
             Debug.Print "  Skipping artifact '" & id & "' (no mapping)."
-            GoTo NextItem
+            GoTo nextItem
         End If
 
         Debug.Print "  Artifact raw type=" & it("type")
@@ -914,7 +914,7 @@ Public Function PasteArtifactsToTargets(idMap As Object, artifacts As Object) As
         ' Validate mapping type
         If TypeName(idMap(id)) <> "Range" Then
             Debug.Print "  ERROR: mapping for '" & id & "' is not a Range, got " & TypeName(idMap(id))
-            GoTo NextItem
+            GoTo nextItem
         End If
 
         Set dstRng = idMap(id)
@@ -1041,7 +1041,7 @@ Public Function PasteArtifactsToTargets(idMap As Object, artifacts As Object) As
                 Debug.Print "    [Case Else] Unknown artifact type='" & t & "' for id='" & id & "'"
         End Select
 
-NextItem:
+nextItem:
         Debug.Print String(80, "-")
     Next it
 

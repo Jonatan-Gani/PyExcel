@@ -644,7 +644,7 @@ Private Function InferListType(ByRef data As Variant, ByVal isRow As Boolean, By
             v = data(idx, 1)
         End If
 
-        If IsEmpty(v) Then GoTo NextItem
+        If IsEmpty(v) Then GoTo nextItem
 
         anyNonBlank = True
         vt = VarType(v)
@@ -675,7 +675,7 @@ Private Function InferListType(ByRef data As Variant, ByVal isRow As Boolean, By
                 anyErrorish = True
                 Exit For
         End Select
-NextItem:
+nextItem:
     Next
 
     If Not anyNonBlank Then
@@ -714,7 +714,7 @@ Private Function SerializeListItem(ByVal v As Variant, ByVal listType As String)
         Case "bool"
             SerializeListItem = LCase$(CStr(CBool(v)))
         Case "int"
-            SerializeListItem = CStr(CLng(v))
+            SerializeListItem = CStr(CDec(v))
         Case "float"
             SerializeListItem = Format$(CDbl(v), "0.############################")
         Case Else
@@ -1076,7 +1076,7 @@ End Sub
 '        With targetRange.rows(1)
 '            .Font.Bold = True
 '            .Interior.Pattern = xlSolid
-'            .Interior.Color = RGB(143, 215, 225) ' #8FD7E1
+'            .Interior.Color = RGB(141, 176, 227) ' #8FD7E1
 '        End With
 '
 '
@@ -1418,7 +1418,7 @@ End Sub
 '        With targetRange.rows(1)
 '            .Font.Bold = True
 '            .Interior.pattern = xlSolid
-'            .Interior.Color = RGB(143, 215, 225)
+'            .Interior.Color = RGB(141, 176, 227)
 '            .Borders(xlEdgeBottom).LineStyle = xlContinuous
 '            .Borders(xlEdgeBottom).Weight = xlThin
 '            .Borders(xlEdgeBottom).Color = RGB(0, 0, 0)
@@ -1646,7 +1646,7 @@ Public Function PasteTypedXMLToRange(xmlString As String, dstRef As String) As B
                     Case "blank"
                         out(r + 1, c) = ""
                     Case "int"
-                        If LenB(val) > 0 And IsNumeric(val) Then out(r + 1, c) = CLng(val) Else out(r + 1, c) = 0
+                        If LenB(val) > 0 And IsNumeric(val) Then out(r + 1, c) = CDec(val) Else out(r + 1, c) = CDec(0)
                     Case "float"
                         If LenB(val) > 0 And IsNumeric(val) Then out(r + 1, c) = CDbl(val) Else out(r + 1, c) = 0#
                     Case "bool"
@@ -1704,7 +1704,7 @@ Public Function PasteTypedXMLToRange(xmlString As String, dstRef As String) As B
         With targetRange.rows(1)
             .Font.Bold = True
             .Interior.Pattern = xlSolid
-            .Interior.Color = RGB(143, 215, 225)
+            .Interior.Color = RGB(141, 176, 227)
             .Borders(xlEdgeBottom).lineStyle = xlContinuous
             .Borders(xlEdgeBottom).Weight = xlThin
             .Borders(xlEdgeBottom).Color = RGB(0, 0, 0)
