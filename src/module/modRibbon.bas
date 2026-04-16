@@ -1274,7 +1274,7 @@ Public Sub SaveActionsForSheet(sheetName As String, dict As Object)
             If Len(Trim$(outParts(p))) > 0 Then actionStr = actionStr & "|output=" & Trim$(outParts(p))
         Next p
         actionStr = actionStr & "|entireRow=" & erVal & "|entreToEnd=" & eteVal
-        s = s & actionStr & Chr(10)
+        s = s & actionStr & Chr(29)
     Next k
 
     SaveSheetValue wb, sheetName, "Actions", s

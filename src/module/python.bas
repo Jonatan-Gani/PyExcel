@@ -516,13 +516,12 @@ Public Function RunPythonJob(script As String, tempFiles As Object, Optional inp
               "--run-id " & Q & runId & Q & " 2>&1"
 
     ' Pipe through PowerShell Tee-Object to display in terminal AND write to file
-    ' Use [Console]::In.ReadLine() loop so PowerShell exits cleanly when the pipe closes
-    ' ($input can hang after the upstream process exits)
+    ' Uses Tee-Object (a core cmdlet) instead of .NET type constructors so that
+    ' the command works under PowerShell Constrained Language Mode (CLM),
+    ' which is common on enterprise machines with AppLocker/WDAC policies.
     Dim teeCmd As String
     teeCmd = " | powershell -NoProfile -Command " & Q & _
-             "$f=[IO.StreamWriter]::new('" & logOut & "',$false,[Text.Encoding]::UTF8);" & _
-             "try{while(($l=[Console]::In.ReadLine())-ne $null){[Console]::Out.WriteLine($l);$f.WriteLine($l)}}" & _
-             "finally{$f.Close()}" & Q
+             "$input | Tee-Object -FilePath '" & logOut & "'" & Q
 
     Dim pauseCmd As String
     If entreToEnd Then

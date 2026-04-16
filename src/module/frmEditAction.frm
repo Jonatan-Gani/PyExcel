@@ -15,13 +15,11 @@ Attribute VB_PredeclaredId = True
 Attribute VB_Exposed = False
 Option Explicit
 
-Private hasLoaded As Boolean      ' <<< THE ONLY FIX ADDED
+Private hasLoaded As Boolean
 Private currentSheetName As String
 Private currentAction As String
 Private actionData As Object
 Private scriptSelected As String
-Private rib As Object
-' (Whatever other module-level vars you have stay here)
 
 Private Sub UserForm_Initialize()
     On Error GoTo EH
@@ -143,6 +141,8 @@ End Sub
 
 
 Private Sub btnSave_Click()
+    On Error GoTo EH
+
     Dim wb As Workbook
     Dim ws As Worksheet
     Dim oldAction As String
@@ -154,7 +154,7 @@ Private Sub btnSave_Click()
     Dim i As Long
     Dim tempInput As String
     Dim tempOutput As String
-    
+
     Set wb = HostManager_GetCurrentWorkbook()
     Set ws = HostManager_GetCurrentSheet()
     
@@ -205,6 +205,7 @@ Private Sub btnSave_Click()
     act("script") = scriptVal
     act("input") = inputVal
     act("output") = outputVal
+    act("entireRow") = IIf(act.Exists("entireRow"), act("entireRow"), "False")
     act("entreToEnd") = IIf(EntreBox.value, "True", "False")
     Set actionData(newAction) = act
 
@@ -228,8 +229,13 @@ Private Sub btnSave_Click()
     End If
     
     Call RefreshRibbonValues
-    
+
     Unload Me
+    Exit Sub
+
+EH:
+    Debug.Print "[frmEditAction.btnSave_Click][ERROR] " & Err.Description
+    MsgBox "Error saving action: " & Err.Description, vbCritical
 End Sub
 
 
