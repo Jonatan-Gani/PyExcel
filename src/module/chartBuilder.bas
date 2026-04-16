@@ -1028,7 +1028,7 @@ Public Sub BuildChartFromXML(xmlPath As String, targetSheet As Worksheet, _
     doc.validateOnParse = False
     
     If Not doc.Load(xmlPath) Then
-        MsgBox "XML error: " & doc.ParseError.reason, vbCritical
+        MsgBox "XML error: " & doc.parseError.reason, vbCritical
         Exit Sub
     End If
 

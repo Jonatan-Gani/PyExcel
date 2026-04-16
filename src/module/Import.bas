@@ -421,7 +421,7 @@ End Function
 Private Function ReadExcel_COM(filePath As String, Optional ByRef numberFormats As Variant) As Variant
     On Error GoTo Fail
 
-    Dim srcWB As Workbook
+    Dim srcWb As Workbook
     Dim ws As Worksheet
     Dim sheetName As String
     Dim ur As Range
@@ -431,14 +431,14 @@ Private Function ReadExcel_COM(filePath As String, Optional ByRef numberFormats 
     Application.DisplayAlerts = False
 
     ' open in current instance, not a new Excel.Application
-    Set srcWB = Workbooks.Open(filePath, ReadOnly:=True)
+    Set srcWb = Workbooks.Open(filePath, ReadOnly:=True)
 
     ' pick a valid sheet name from that workbook
-    sheetName = PickSheetName(srcWB)
+    sheetName = PickSheetName(srcWb)
     If Len(sheetName) = 0 Then GoTo CLEANUP
 
     On Error Resume Next
-    Set ws = srcWB.Sheets(sheetName)
+    Set ws = srcWb.Sheets(sheetName)
     On Error GoTo Fail
     If ws Is Nothing Then
         MsgBox "Sheet not found: " & sheetName, vbExclamation
@@ -452,7 +452,7 @@ Private Function ReadExcel_COM(filePath As String, Optional ByRef numberFormats 
     numberFormats = ur.numberFormat
 
 CLEANUP:
-    srcWB.Close SaveChanges:=False
+    srcWb.Close SaveChanges:=False
     Application.ScreenUpdating = True
     Application.EnableEvents = True
     Application.DisplayAlerts = True
@@ -460,7 +460,7 @@ CLEANUP:
 
 Fail:
     On Error Resume Next
-    If Not srcWB Is Nothing Then srcWB.Close SaveChanges:=False
+    If Not srcWb Is Nothing Then srcWb.Close SaveChanges:=False
     Application.ScreenUpdating = True
     Application.EnableEvents = True
     Application.DisplayAlerts = True

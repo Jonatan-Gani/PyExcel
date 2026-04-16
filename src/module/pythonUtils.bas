@@ -117,7 +117,7 @@ Public Function ParseMetaXml(xmlPath As String) As Object
     dom.resolveExternals = False
     dom.SetProperty "SelectionLanguage", "XPath"
     If dom.Load(xmlPath) = False Then
-        Debug.Print "ParseMetaXml: load error " & dom.ParseError.reason
+        Debug.Print "ParseMetaXml: load error " & dom.parseError.reason
         GoTo Fail
     End If
 
@@ -230,9 +230,9 @@ Public Function ReadMetaStatus(xmlPath As String) As Object
     dom.SetProperty "SelectionLanguage", "XPath"
 
     If dom.Load(xmlPath) = False Then
-        Debug.Print "ReadMetaStatus: parse error -> " & dom.ParseError.reason & _
-                    " line=" & dom.ParseError.line & _
-                    " pos=" & dom.ParseError.linepos
+        Debug.Print "ReadMetaStatus: parse error -> " & dom.parseError.reason & _
+                    " line=" & dom.parseError.line & _
+                    " pos=" & dom.parseError.linepos
         Set ReadMetaStatus = Nothing
         Exit Function
     End If
@@ -241,7 +241,7 @@ Public Function ReadMetaStatus(xmlPath As String) As Object
         Debug.Print "ReadMetaStatus: documentElement is Nothing"
     Else
         Debug.Print "ReadMetaStatus: root=" & dom.DocumentElement.nodeName & _
-                    " version=" & dom.DocumentElement.GetAttribute("version")
+                    " version=" & dom.DocumentElement.getAttribute("version")
     End If
 
     Dim d As Object: Set d = CreateObject("Scripting.Dictionary")
@@ -506,7 +506,7 @@ Public Function LoadValueXml(path As String) As String
     dom.async = False: dom.validateOnParse = False: dom.resolveExternals = False
     dom.SetProperty "SelectionLanguage", "XPath"
     If dom.Load(path) = False Then
-        Debug.Print "LoadValueXml: parseError ->"; dom.ParseError.reason; " line="; dom.ParseError.line; " pos="; dom.ParseError.linepos
+        Debug.Print "LoadValueXml: parseError ->"; dom.parseError.reason; " line="; dom.parseError.line; " pos="; dom.parseError.linepos
         GoTo Fail
     End If
     Dim n As Object
@@ -528,7 +528,7 @@ Public Function LoadListXmlAsColumn(path As String) As Variant
     dom.async = False: dom.validateOnParse = False: dom.resolveExternals = False
     dom.SetProperty "SelectionLanguage", "XPath"
     If dom.Load(path) = False Then
-        Debug.Print "LoadListXmlAsColumn: parseError ->"; dom.ParseError.reason; " line="; dom.ParseError.line; " pos="; dom.ParseError.linepos
+        Debug.Print "LoadListXmlAsColumn: parseError ->"; dom.parseError.reason; " line="; dom.parseError.line; " pos="; dom.parseError.linepos
         GoTo Fail
     End If
     Set nodes = dom.SelectNodes("/list/item")

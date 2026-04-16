@@ -745,7 +745,7 @@ Private Function attr$(node As Object, ByVal name As String)
     ' Null-safe attribute getter. Returns "" if attribute is missing/null.
     Dim v As Variant
     On Error Resume Next
-    v = node.GetAttribute(name)
+    v = node.getAttribute(name)
     On Error GoTo 0
     If IsNull(v) Or IsEmpty(v) Then
         attr = ""
@@ -1489,7 +1489,7 @@ End Sub
 
 Private Function SafeAttr(n As Object, ByVal name As String) As String
     On Error Resume Next
-    Dim v As Variant: v = n.GetAttribute(name)
+    Dim v As Variant: v = n.getAttribute(name)
     If IsError(v) Or IsNull(v) Then
         SafeAttr = vbNullString
     Else
