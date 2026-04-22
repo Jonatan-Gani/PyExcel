@@ -874,7 +874,7 @@ Public Function PasteArtifactsToTargets(idMap As Object, artifacts As Object) As
 
     Dim didAny As Boolean: didAny = False
     Dim it As Object, id As String, t As String, fpath As String
-    Dim dstRng As Range, outXml As String, arr As Variant, sval As String
+    Dim dstRng As Range, outXml As String, arr As Variant, sVal As String
     Dim shp As shape, mime As String
 
     Debug.Print "PasteArtifactsToTargets: artifacts count=" & artifacts.count & ", idMap count=" & idMap.count
@@ -994,9 +994,9 @@ Public Function PasteArtifactsToTargets(idMap As Object, artifacts As Object) As
         
             Case "value"
                 Debug.Print "    [Case value] Reading value from " & fpath
-                sval = LoadValueXml(fpath)
-                Debug.Print "    Loaded value=" & sval
-                dstRng.value = sval
+                sVal = LoadValueXml(fpath)
+                Debug.Print "    Loaded value=" & sVal
+                dstRng.value = sVal
                 Debug.Print "    Pasted value '" & id & "'"
                 didAny = True
         

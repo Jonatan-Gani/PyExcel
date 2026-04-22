@@ -207,15 +207,21 @@ Public Function GetSheetValue(wb As Workbook, sheetName As String, ctrlId As Str
 
     If nm Is Nothing Then Exit Function
 
-    raw = nm.RefersTo
-
-    ' Normalize the string result
-    If Left$(raw, 1) = "=" Then raw = Mid$(raw, 2)
-    If Left$(raw, 1) = """" And right$(raw, 1) = """" Then
-        raw = Mid$(raw, 2, Len(raw) - 2)
+    ' Evaluate the formula to handle both simple ="val" and
+    ' concatenated ="chunk1"&"chunk2" formulas (for long strings)
+    Dim result As Variant
+    result = ws.Evaluate(ctrlId)
+    If IsError(result) Then
+        ' Fallback: parse RefersTo directly
+        raw = nm.RefersTo
+        If Left$(raw, 1) = "=" Then raw = Mid$(raw, 2)
+        If Left$(raw, 1) = """" And right$(raw, 1) = """" Then
+            raw = Mid$(raw, 2, Len(raw) - 2)
+        End If
+        GetSheetValue = raw
+    Else
+        GetSheetValue = CStr(result)
     End If
-
-    GetSheetValue = raw
     Exit Function
 
 EH:
@@ -259,9 +265,42 @@ Public Sub SaveSheetValue(wb As Workbook, sheetName As String, ctrlId As String,
     On Error GoTo EH
 
     ' Add the new name if value is not empty
+    ' Limits: string literals in formulas cap at 255 chars; RefersTo caps at 8192.
+    ' For long strings we build ="chunk1"&"chunk2"&... which supports up to ~7900 chars.
+    ' Old add-in versions read short strings fine (unchanged format).
+    ' Concatenated formulas are evaluated transparently by GetSheetValue.
     If Len(val) > 0 Then
-        ws.Names.Add name:=ctrlId, RefersTo:="=""" & Replace(val, """", """""") & """"
-        Debug.Print "[SaveSheetValue] Saved '" & ctrlId & "' = '" & val & "' to sheet '" & sheetName & "'."
+        Dim sVal As String: sVal = CStr(val)
+        If Len(sVal) <= 255 Then
+            ' Short value — simple formula, compatible with all versions
+            ws.Names.Add name:=ctrlId, RefersTo:="=""" & Replace(sVal, """", """""") & """"
+        Else
+            ' Long value — concatenated formula: ="chunk1"&"chunk2"&...
+            Dim formula As String, pos As Long, chunk As String, escaped As String
+            formula = "="
+            pos = 1
+            Do While pos <= Len(sVal)
+                If pos > 1 Then formula = formula & "&"
+                chunk = Mid$(sVal, pos, 255)
+                escaped = Replace(chunk, """", """""")
+                ' If escaping doubled quotes pushed this chunk's literal past 255,
+                ' shrink chunk until the escaped version fits
+                Do While Len(escaped) > 255
+                    chunk = Left$(chunk, Len(chunk) - 1)
+                    escaped = Replace(chunk, """", """""")
+                Loop
+                formula = formula & """" & escaped & """"
+                pos = pos + Len(chunk)
+            Loop
+            If Len(formula) > 8192 Then
+                Debug.Print "[SaveSheetValue] WARNING: value too long (" & Len(sVal) & " chars), formula exceeds 8192 limit."
+                MsgBox "Action data is too long to save (" & Len(sVal) & " chars). " & _
+                       "Try reducing the number of input/output ranges.", vbExclamation
+                Exit Sub
+            End If
+            ws.Names.Add name:=ctrlId, RefersTo:=formula
+        End If
+        Debug.Print "[SaveSheetValue] Saved '" & ctrlId & "' (" & Len(sVal) & " chars) to sheet '" & sheetName & "'."
     Else
         Debug.Print "[SaveSheetValue] Value empty — nothing saved for '" & ctrlId & "'."
     End If
@@ -272,7 +311,6 @@ EH:
     Debug.Print "[SaveSheetValue][ERROR] sheet='" & sheetName & "' ctrl='" & ctrlId & "' err=" & Err.Description
     Err.Clear
 End Sub
-
 
 
 ' ==============================================================

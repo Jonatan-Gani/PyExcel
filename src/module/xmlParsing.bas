@@ -1718,7 +1718,7 @@ Public Function PasteTypedXMLToRange(xmlString As String, dstRef As String) As B
                     Dim fillRng As Range
                     Set fillRng = targetRange.Cells(2, c).Resize(numRows, 1)
                     On Error Resume Next
-                    fillRng.Formula = a1Formula(c)   ' A1 only
+                    fillRng.formula = a1Formula(c)   ' A1 only
                     If Err.Number <> 0 Then
                         Debug.Print "Formula write failed in col " & c & ": " & a1Formula(c) & " (" & Err.Description & ")"
                         Err.Clear
@@ -1735,12 +1735,12 @@ Public Function PasteTypedXMLToRange(xmlString As String, dstRef As String) As B
             For c = 1 To numCols
                 If Not isA1(c) Then
                     If LCase$(types(c)) = "string" And c - 1 < colNodeList.Length Then
-                        Dim sval As String: sval = SafeText(colNodeList.Item(c - 1).text)
-                        If LenB(sval) > 0 And Left$(sval, 1) = "=" Then
+                        Dim sVal As String: sVal = SafeText(colNodeList.Item(c - 1).text)
+                        If LenB(sVal) > 0 And Left$(sVal, 1) = "=" Then
                             On Error Resume Next
-                            targetRange.Cells(r + 1, c).Formula = sval
+                            targetRange.Cells(r + 1, c).formula = sVal
                             If Err.Number <> 0 Then
-                                Debug.Print "Inline formula write failed R" & r & "C" & c & ": " & sval & " (" & Err.Description & ")"
+                                Debug.Print "Inline formula write failed R" & r & "C" & c & ": " & sVal & " (" & Err.Description & ")"
                                 Err.Clear
                             End If
                             On Error GoTo 0
