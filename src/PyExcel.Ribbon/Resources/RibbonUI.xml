@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  PyExcel v2 ribbon definition. Ported verbatim from
+  src/Ribbon/RibbonUI.xml in the v1 codebase. Callback names are unchanged
+  so a side-by-side diff against v1 is trivial; every callback resolves to
+  a method on PyExcel.Ribbon.PyExcelRibbon.
+
+  Note that customLogo is now embedded via PyExcelRibbon.LoadImage(),
+  not via the old Excel-DNA imageMso indirection.
+-->
+<customUI xmlns="http://schemas.microsoft.com/office/2009/07/customui"
+          onLoad="RibbonOnLoad"
+          loadImage="LoadImage">
+    <ribbon>
+        <tabs>
+            <tab id="tabPython" label="Python">
+                <group id="grpMain" label="Main">
+                    <button id="btnEnablePyExcel" label="Enable PyExcel" imageMso="FileSaveAs" onAction="OnEnablePyExcel"/>
+                    <button id="btnOpenExplorer" label="Open In Explorer" imageMso="FolderOpen" onAction="OnOpenExplorer" getEnabled="RibbonEnabled"/>
+                    <button id="btnReadMe" label="Read Me" imageMso="Help" onAction="OnReadMe" getEnabled="RibbonEnabled"/>
+                </group>
+                <group id="grpPython" label="Python">
+                    <button id="btnRun" label="Run" size="large" image="customLogo" onAction="OnRunPython" getEnabled="RibbonEnabled"/>
+                    <button id="btnEdit" label="Edit" size="large" imageMso="DatabaseSwitchboardManager" onAction="OnEditPython" getEnabled="RibbonEnabled"/>
+                    <comboBox id="cmbScript" label="Script" sizeString="XXXXXXXXXXXXXXXXXX" getItemCount="GetScriptCount" getItemLabel="GetScriptLabel" getText="GetScriptText" onChange="OnScriptChange" getEnabled="RibbonEnabled"/>
+                    <editBox id="txtPyInput" label="Input" sizeString="XXXXXXXXXXXXXXXXXXXX" getText="GetPyInput" onChange="OnPyInputChange" getEnabled="RibbonEnabled"/>
+                    <editBox id="txtPyOutput" label="Output" sizeString="XXXXXXXXXXXXXXXXXXXX" getText="GetPyOutput" onChange="OnPyOutputChange" getEnabled="RibbonEnabled"/>
+                    <comboBox id="cmbActions" getItemCount="GetActionCount" getItemLabel="GetActionLabel" getText="GetActionText" onChange="OnActionChange" sizeString="XXXXXXXXXXXXXXX" getEnabled="RibbonEnabled"/>
+                    <buttonGroup id="bgExample">
+                        <button id="btnAdd" label="Add" imageMso="DataFormAddRecord" onAction="OnAddAction" getEnabled="RibbonEnabled"/>
+                        <button id="btnEditAction" label="Edit" imageMso="EditQuery" onAction="OnEditAction" getEnabled="RibbonEnabled"/>
+                    </buttonGroup>
+                    <button id="btnDelete" label="Delete Action" imageMso="CancelRequest" onAction="OnDeleteAction" getEnabled="RibbonEnabled"/>
+                </group>
+                <group id="grpImport" label="Import">
+                    <button id="btnImport" label="Import" size="large" imageMso="Export" onAction="OnImport" getEnabled="RibbonEnabled"/>
+                    <editBox id="txtImportInput" label="Source" getText="GetImportInput" sizeString="XXXXXXXXXXXXXXXXXXXX" onChange="OnImportInputChange" getEnabled="RibbonEnabled"/>
+                    <editBox id="txtImportOutput" label="Destination" getText="GetImportOutput" sizeString="XXXXXXXXXXXXXXXXXXXX" onChange="OnImportOutputChange" getEnabled="RibbonEnabled"/>
+                    <button id="btnEditImport" label="Edit" imageMso="EditQuery" size="large" onAction="OnEditImport" getEnabled="RibbonEnabled"/>
+                </group>
+                <group id="grpExport" label="Export">
+                    <button id="btnExport" label="Export" size="large" imageMso="Import" onAction="OnExport" getEnabled="RibbonEnabled"/>
+                    <editBox id="txtExportInput" label="Source" getText="GetExportInput" sizeString="XXXXXXXXXXXXXXXXXXXX" onChange="OnExportInputChange" getEnabled="RibbonEnabled"/>
+                    <editBox id="txtExportOutput" label="Destination" getText="GetExportOutput" sizeString="XXXXXXXXXXXXXXXXXXXX" onChange="OnExportOutputChange" getEnabled="RibbonEnabled"/>
+                    <button id="btnEditExport" label="Edit" imageMso="EditQuery" size="large" onAction="OnEditExport" getEnabled="RibbonEnabled"/>
+                </group>
+                <group id="grpPaste" label="Paste">
+                    <button id="btnPaste" label="Paste" size="large" imageMso="Paste" onAction="OnPaste" getEnabled="RibbonEnabled"/>
+                    <editBox id="txtPasteOutput" label="Destination" getText="GetPasteOutput" onChange="OnPasteOutputChange" sizeString="XXXXXXXXXXXXXXXXXXXX" getEnabled="RibbonEnabled"/>
+                    <button id="btnEditPaste" label="Edit" imageMso="EditQuery" size="large" onAction="OnEditPaste" getEnabled="RibbonEnabled"/>
+                </group>
+            </tab>
+        </tabs>
+    </ribbon>
+</customUI>

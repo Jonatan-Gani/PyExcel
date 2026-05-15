@@ -1,0 +1,30 @@
+<!--
+  Shared MSBuild settings for every project in the PyExcel solution.
+  See https://learn.microsoft.com/visualstudio/msbuild/customize-by-directory
+-->
+<Project>
+  <PropertyGroup>
+    <!-- The plan locks v2.0 to .NET Framework 4.8 for in-proc .xll loading -->
+    <!-- with zero install prereqs. Pure libraries multi-target netstandard2.0 -->
+    <!-- so cross-platform CI can build them on Linux without the net48 -->
+    <!-- targeting pack. Override <TargetFrameworks> per project as needed. -->
+    <LangVersion>10.0</LangVersion>
+    <Nullable>enable</Nullable>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <NoWarn>$(NoWarn);CS1591</NoWarn>
+
+    <!-- Versioning. Bumps here flow into every assembly. -->
+    <Version>2.0.0-alpha</Version>
+    <AssemblyVersion>2.0.0.0</AssemblyVersion>
+    <FileVersion>2.0.0.0</FileVersion>
+
+    <Authors>PyExcel contributors</Authors>
+    <Product>PyExcel</Product>
+    <Copyright>Copyright (c) PyExcel contributors</Copyright>
+
+    <!-- Build determinism: same inputs always produce the same DLL. -->
+    <Deterministic>true</Deterministic>
+    <ContinuousIntegrationBuild Condition="'$(CI)' == 'true'">true</ContinuousIntegrationBuild>
+  </PropertyGroup>
+</Project>

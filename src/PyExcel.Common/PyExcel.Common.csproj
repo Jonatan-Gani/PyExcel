@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <!--
+      Multi-target so this project builds on Linux CI (netstandard2.0) and
+      consumes correctly into net48 .xll assemblies in the main solution.
+      Nothing in here references Excel COM, ExcelDna, or WinForms; everything
+      that does lives in higher-level projects.
+    -->
+    <TargetFrameworks>net48;netstandard2.0</TargetFrameworks>
+    <RootNamespace>PyExcel.Common</RootNamespace>
+    <AssemblyName>PyExcel.Common</AssemblyName>
+    <Platforms>x64;AnyCPU</Platforms>
+  </PropertyGroup>
+
+</Project>

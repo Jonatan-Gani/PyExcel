@@ -1,0 +1,31 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <!--
+      net48 only — this project produces the actual .xll, which requires the
+      in-proc .NET Framework hosting model that Excel-DNA targets. The .NET 6+
+      out-of-process loader is a different story and explicitly out of scope
+      for v2.0 per the plan.
+    -->
+    <TargetFramework>net48</TargetFramework>
+    <RootNamespace>PyExcel.Addin</RootNamespace>
+    <AssemblyName>PyExcel.Addin</AssemblyName>
+    <Platforms>x64</Platforms>
+    <PlatformTarget>x64</PlatformTarget>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!--
+      ExcelDna.AddIn pulls in ExcelDna.Integration and wires up the build
+      target that produces the .xll. Version pinned to a 1.8.x release;
+      bump deliberately, never via wildcard, so packaging stays reproducible.
+    -->
+    <PackageReference Include="ExcelDna.AddIn" Version="1.8.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\PyExcel.Common\PyExcel.Common.csproj" />
+    <ProjectReference Include="..\PyExcel.Ribbon\PyExcel.Ribbon.csproj" />
+  </ItemGroup>
+
+</Project>

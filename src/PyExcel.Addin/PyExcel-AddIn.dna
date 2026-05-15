@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Excel-DNA add-in descriptor. Read by Excel when it loads the .xll.
+
+  RuntimeVersion="v4.0" matches our net48 target. The CLR Bridge will load
+  this assembly and call AddIn.AutoOpen()/AutoClose() at the appropriate
+  lifecycle points. See PyExcel.Addin.AddIn.cs for those entry points.
+
+  CustomUI is wired via the Ribbon class registered in PyExcel.Ribbon,
+  not here — Excel-DNA discovers it via the assembly attribute
+  [assembly: ExternalLibrary] / [ExcelRibbon]-derived classes.
+-->
+<DnaLibrary Name="PyExcel" RuntimeVersion="v4.0">
+  <ExternalLibrary Path="PyExcel.Addin.dll"
+                   ExplicitExports="false"
+                   LoadFromBytes="true"
+                   Pack="true" />
+</DnaLibrary>

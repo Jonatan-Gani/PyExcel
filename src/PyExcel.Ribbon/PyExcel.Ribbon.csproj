@@ -1,0 +1,27 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net48</TargetFramework>
+    <RootNamespace>PyExcel.Ribbon</RootNamespace>
+    <AssemblyName>PyExcel.Ribbon</AssemblyName>
+    <Platforms>x64</Platforms>
+    <PlatformTarget>x64</PlatformTarget>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!--
+      ExcelDna.Integration only — we don't produce a .xll here, the Addin
+      project does. We just need ExcelRibbon and IRibbonControl types.
+    -->
+    <PackageReference Include="ExcelDna.Integration" Version="1.8.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\PyExcel.Common\PyExcel.Common.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Include="Resources\RibbonUI.xml" />
+  </ItemGroup>
+
+</Project>
