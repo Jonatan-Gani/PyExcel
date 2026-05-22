@@ -90,7 +90,7 @@ kernel's lifetime is owned and deterministic.
 - [ ] `PyExcel.Kernel.Client` — typed API: `RunRequest`, `RunResult`, `Progress`, `Cancel`, `Log` over frames.
 - [ ] Python `supervisor.py` — accept the pipe connection, dispatch frames to workers.
 - [ ] Python `worker.py` — run one job: receive request → execute → reply.
-- [ ] Python `arrow_io.py` — DataFrame ↔ Arrow IPC stream.
+- [ ] Python `arrow_io.py` — DataFrame / list / scalar ↔ Arrow IPC stream (everything marshals as Arrow).
 - [ ] Bounded/malformed-frame handling on the C# side (mirror the `framing.py` test suite).
 
 **Exit criteria.** C# spawns the kernel, completes a `HELLO`/`PING`/`PONG`
@@ -107,7 +107,7 @@ sheets/workbooks never shows stale values.
 **Deliverables.** `PyExcel.State`, an `AppEventSink`.
 
 - [ ] `StateService` — per-workbook enabled flag, current sheet, host-workbook registry. One source of truth (no module globals).
-- [ ] Persist per-workbook state (decide storage — see *Open decisions*).
+- [ ] Persist per-workbook state as a `CustomXMLPart` on the workbook.
 - [ ] `AppEventSink` — `WorkbookOpen`/`Activate`/`SheetActivate` → update state + invalidate ribbon.
 - [ ] Wire `RibbonEnabled` / all `getEnabled` to `StateService` (replace the hardcoded `false`).
 - [ ] `FileSystemWatcher` on `userScripts/` → refresh the Script dropdown.
@@ -274,9 +274,11 @@ Typosquat removal ✅ · UTF-16 requirements ✅ · dependency slimming · perso
 - [ ] Every phase lands with tests; track coverage of `PyExcel.Excel`, `PyExcel.Bridge`, and the kernel.
 - [ ] Code review on every PR against the *Definition of production-grade*.
 
-## Open decisions
+## Decisions (resolved)
 
-1. **Chart transport** — kernel emits a JSON chart spec in the `RUN_RESULT` frame, `PyExcel.ChartBuilder` builds the Excel chart? *(Recommended — consistent with the framing protocol.)*
-2. **Lists / scalars** — carry as small Arrow batches, or as JSON in the frame `meta`? *(JSON is simpler for tiny payloads.)*
-3. **Per-workbook state storage** — defined names, or a hidden sheet? Affects Phase 3 and the Phase 9 migration.
-4. **`PyExcel.Forms` UI tech** — WinForms (lower friction with Excel-DNA, matches existing layouts) vs WPF.
+These were open; now settled. Recorded here as the source of truth.
+
+1. **Chart transport — JSON chart spec.** The kernel converts Plotly figures to a JSON chart spec carried in the `RUN_RESULT` frame; `PyExcel.ChartBuilder` builds the native Excel chart from it. No XML layer. *(Phase 6)*
+2. **List/scalar transport — everything as Arrow.** Lists become 1-column Arrow batches and scalars 1×1 batches — one uniform marshalling path with full type fidelity, including timestamps. *(Phase 2 `arrow_io.py`, Phase 4)*
+3. **State storage — `CustomXMLPart`.** Per-workbook state is stored as a workbook-attached `CustomXMLPart`: invisible, no length limits, no Name Manager clutter. Phase 9 needs a converter that reads v1's defined Names and writes the new part. *(Phase 3, Phase 9)*
+4. **Forms UI — WinForms.** The 9 dialogs are rebuilt as WinForms — lowest hosting friction with Excel-DNA, near 1:1 with the existing layouts. *(Phase 8)*
