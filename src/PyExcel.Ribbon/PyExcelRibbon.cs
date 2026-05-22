@@ -65,7 +65,7 @@ public class PyExcelRibbon : ExcelRibbon
         _log.Info("Ribbon loaded");
     }
 
-    public object? LoadImage(string imageName)
+    public override object? LoadImage(string imageName)
     {
         // imageName="customLogo" — load the embedded PNG. Phase 1 returns
         // null so Excel falls back to no image; Phase 8 will ship the PNG
