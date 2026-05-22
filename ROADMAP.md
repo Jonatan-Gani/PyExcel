@@ -21,6 +21,17 @@ single kernel package (it must stay Python — it runs user `transform()` code).
 | Python | `tools.py` + `xmlParsing.py` (~3.7k lines, ~60% dead) | one `pyexcel.kernel` package |
 | Distribution | `PyExcel.xlam` | `PyExcel-AddIn64.xll` |
 
+## Status & progress log
+
+**Current position:** Phase 0 ✅ · Phase 1 ✅ · **next up: Phase 2.**
+
+Terse running record (newest first) so a new session can pick up where work stopped:
+
+- **2026-05-22 — Phase 0 complete.** Removed the personal-data `__main__` block and trailing dead code from `xmlParsing.py`; replaced the bloated root `requirements.txt` with the minimal v2-kernel set; added `.github/workflows/ci.yml`; confirmed the v1-frozen policy below.
+- **2026-05-22 — Planning.** Repo audited; `ARCHITECTURE.md` and this roadmap written; version/phase mismatches reconciled; the four architecture decisions resolved.
+
+**v1 maintenance policy:** v1 (`PyExcel.xlam`) is frozen while v2 is built — security and critical-data-loss fixes only, no new features. It remains the shipping product until Phase 9 cutover.
+
 ## Definition of production-grade (the bar every phase must clear)
 
 A phase delivery is complete only when **all** of these hold for the code it adds:
@@ -60,10 +71,10 @@ Make the repo internally consistent and remove what must never reach v2.
 - [x] Re-encode `src/embedded/requirements.txt` from UTF-16 to UTF-8.
 - [x] Reconcile version strings (`README.md`) and phase numbers (`docs/v2-build.md`, C# `// PHASE` comments).
 - [x] Add `ARCHITECTURE.md` and this `ROADMAP.md` as the canonical reference docs.
-- [ ] **Strip personal data** — delete the `if __name__ == "__main__"` block (~570 lines, hardcoded author coursework path) from `src/embedded/xmlParsing.py`.
-- [ ] **Slim dependencies** — replace the 155-package root `requirements.txt` (jupyterlab, pygame, yt-dlp, telegram-bot, Flask, …) with the minimal set the kernel needs; resolve it against `src/embedded/requirements.txt` into one canonical UTF-8 list. Add `pyarrow` (v2 IPC needs it). Audit the two `git+https` deps.
-- [ ] **Decide v1 maintenance policy** — confirm v1 stays frozen (security fixes only) while v2 is built; no new v1 features.
-- [ ] Add a CI workflow (see *Cross-cutting* below) so every subsequent phase is gated.
+- [x] **Strip personal data** — removed the `__main__` test block and trailing commented-out dead code from `src/embedded/xmlParsing.py` (1941 → 762 lines).
+- [x] **Slim dependencies** — root `requirements.txt` is now the minimal v2-kernel set (`pandas numpy pyarrow plotly matplotlib`); the author-specific `git+https` deps are dropped. `src/embedded/requirements.txt` stays as v1's frozen install set until Phase 9.
+- [x] **v1 maintenance policy** — confirmed frozen: security / critical-data-loss fixes only, no new features (see *Status & progress log*).
+- [x] **CI workflow** — `.github/workflows/ci.yml`: Linux builds the `netstandard2.0` slice + runs `pytest`; Windows builds the full solution.
 
 ---
 
@@ -254,14 +265,14 @@ quoting/injection · multi-chunk base64 extraction corruption · UTF-16
 
 ### Fix now — handled in Phase 0
 
-Typosquat removal ✅ · UTF-16 requirements ✅ · dependency slimming · personal-data removal.
+Typosquat removal ✅ · UTF-16 requirements ✅ · dependency slimming ✅ · personal-data removal ✅
 
 ## Cut list — delete, do not migrate (~3,000+ lines)
 
 - [ ] `xmlParsing.bas` — entire file (Arrow replaces it).
 - [ ] `chartBuilder.bas` lines ~2–1010 — dead alternate engine.
 - [ ] `tools.py` — ~1,200 commented-out legacy lines.
-- [ ] `xmlParsing.py` — ~485 commented lines + the ~570-line `__main__` block.
+- [x] `xmlParsing.py` — ~485 commented lines + the ~570-line `__main__` block. *(done — Phase 0)*
 - [ ] `frmEditActionOLD.frm/.frx`; commented blocks in the three `frmEdit*` forms; the `CAppEvents.cls` duplicate.
 - [ ] `Import.bas ReadExcel_ADO` (~100 dead lines); unused helpers across modules.
 - [ ] Most of `Update.bas` (SmartClean / manifest / version-name machinery).
