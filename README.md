@@ -1,6 +1,9 @@
 # PyExcel
 
-**Version:** 20260422_212123
+**Status:** v1 (`PyExcel.xlam`, VBA) is the current shipping add-in. v2 (`.xll`, .NET) is in active development.
+**Version:** v1 build `20260422_212123` · v2 target `2.0.0-alpha`
+
+> **Contributors:** [`ARCHITECTURE.md`](ARCHITECTURE.md) maps the whole codebase; [`ROADMAP.md`](ROADMAP.md) is the task list and path to a production-grade v2.
 
 A Windows Excel add-in that runs Python scripts against workbook ranges in an isolated project environment. Each run serializes selected ranges to typed XML, spawns the Python interpreter against a user-authored `transform(inputs)` function, polls a `meta.xml` status file for completion, then writes the returned tables, lists, scalars, and figures back to Excel. Runs are non-reactive and self-contained: nothing executes until the user clicks **Run**, and every run is archived to disk.
 
@@ -147,6 +150,9 @@ By default outputs spill from the cell in the **Output** field. To route specifi
 - **Actions** are saved (script, input, output) triples persisted on the workbook so a run can be replayed with one click.
 
 ## Repository layout
+
+> This shows the **v1** source tree. For the full repository map — including the
+> v2 .NET projects and the v2 Python kernel — see [`ARCHITECTURE.md`](ARCHITECTURE.md).
 
 ```
 PyExcel.xlam            Compiled Excel add-in — load this in Excel

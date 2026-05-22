@@ -45,10 +45,11 @@ public sealed class AddIn : IExcelAddIn
                 return;
             }
 
-            // Phase 1 stops here. Subsequent phases will add:
-            //   _appEventSink = new AppEventSink(_log);
-            //   _kernelSupervisor = new KernelSupervisor(_log);
-            //   _stateService = new StateService(_log);
+            // Phase 1 stops here. Subsequent phases bring services online
+            // (see ROADMAP.md for the canonical phase plan):
+            //   Phase 2: _kernelSupervisor = new KernelSupervisor(_log);
+            //   Phase 3: _stateService = new StateService(_log);
+            //   Phase 3: _appEventSink = new AppEventSink(_log);
         }
         catch (Exception ex)
         {

@@ -81,7 +81,6 @@ openpyxl==3.1.2
 orjson==3.11.3
 overrides==7.7.0
 packaging==23.2
-panadas==0.2
 pandas==2.1.1
 pandas-datareader==0.10.0
 pandocfilters==1.5.1

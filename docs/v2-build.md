@@ -1,8 +1,9 @@
 # PyExcel v2 — Build & Project Layout
 
 This document describes how to build PyExcel v2 from source. v2 is the
-.NET / Excel-DNA rewrite of the v1 `.xlam`; the canonical architecture is
-in the planning document referenced from the project README.
+.NET / Excel-DNA rewrite of the v1 `.xlam`. The canonical codebase map is
+[`ARCHITECTURE.md`](../ARCHITECTURE.md); the phased build plan and task list
+is [`ROADMAP.md`](../ROADMAP.md).
 
 ## Solution layout
 
@@ -21,12 +22,14 @@ PyExcel/
 │   └── kernel/                       pytest, cross-platform
 ├── docs/
 │   └── v2-build.md                   This file
-└── build/                            Sign + pack scripts (in progress)
+└── build/                            Sign + pack scripts (planned — not yet created)
 ```
 
-Phases 2–8 add: `PyExcel.Bridge`, `PyExcel.Kernel.Client`, `PyExcel.Excel`,
-`PyExcel.State`, `PyExcel.ChartBuilder`, `PyExcel.Setup`, `PyExcel.Forms`,
-and the corresponding test projects.
+Phases 2–9 build out `PyExcel.Bridge`, `PyExcel.Kernel.Client`, `PyExcel.State`,
+`PyExcel.Excel`, `PyExcel.ChartBuilder`, `PyExcel.Setup`, `PyExcel.Forms`, and the
+Python kernel, then retire v1. **[`ROADMAP.md`](../ROADMAP.md) is the single
+source of truth for phase numbering, scope, and task status** — the `// PHASE n`
+comments in the C# must be kept in sync with it.
 
 ## Prerequisites (Windows, for producing the `.xll`)
 
@@ -84,7 +87,7 @@ Phase 1 exit gate (manual):
 
 If `PyExcelEnabled` is checked anywhere in Excel state from a v1 workbook,
 that workbook will fail the v2 `RibbonEnabled` guard — Phase 1 doesn't yet
-include the v1→v2 migration (Phase 3 work).
+include the v1→v2 migration (Phase 9 work).
 
 ## Project targeting summary
 

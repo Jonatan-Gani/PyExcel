@@ -24,7 +24,7 @@ namespace PyExcel.Ribbon;
 /// SAFE-1 (ribbon callbacks never touch the pipe) is structurally enforced
 /// in this file: there is no field of type <c>KernelSupervisor</c>,
 /// <c>NamedPipeClientStream</c>, or anything pipe-related. When the bridge
-/// is added (Phase 4), the OnRunPython callback will enqueue work to a
+/// is added (Phase 2), the OnRunPython callback will enqueue work to a
 /// background service via a thread-safe queue and return immediately —
 /// it must not block, and it must not synchronously read from the pipe.
 /// </remarks>
@@ -68,7 +68,7 @@ public class PyExcelRibbon : ExcelRibbon
     public object? LoadImage(string imageName)
     {
         // imageName="customLogo" — load the embedded PNG. Phase 1 returns
-        // null so Excel falls back to no image; Phase 6 will ship the PNG
+        // null so Excel falls back to no image; Phase 8 will ship the PNG
         // as an EmbeddedResource and return a System.Drawing.Bitmap here.
         if (string.Equals(imageName, "customLogo", StringComparison.Ordinal))
         {
@@ -108,7 +108,7 @@ public class PyExcelRibbon : ExcelRibbon
             // Phase 1 deliverable: show the readme. We pop a MessageBox
             // rather than launching the user's text editor because the
             // file-association resolution requires Shell APIs we haven't
-            // ported yet; that lives in PyExcel.Common.Shell in Phase 7.
+            // ported yet; that lives in PyExcel.Common.Shell in Phase 5.
             const string text =
                 "PyExcel v2.0 (alpha)\n\n" +
                 "This is the .NET rewrite of the PyExcel add-in. Phase 1 — " +
