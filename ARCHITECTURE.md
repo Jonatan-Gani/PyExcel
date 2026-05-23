@@ -68,6 +68,10 @@ PyExcel/
 │   ├── Ribbon/                   v1: RibbonUI.xml + customLogo.png
 │   ├── PyExcel.Common/           v2: logging + shared types (net48 + netstandard2.0)
 │   │   └── Logging/                ILog, FileLog, NullLog
+│   ├── PyExcel.Bridge/           v2: frame transport (net48 + netstandard2.0)
+│   │   ├── Framing.cs              Encode/decode wire frames
+│   │   ├── FrameType.cs / Frame.cs / FramingExceptions.cs
+│   │   └── CanonicalJson.cs        Stdlib JSON encoder mirroring Python's json.dumps
 │   ├── PyExcel.Ribbon/           v2: ExcelRibbon subclass + Resources/RibbonUI.xml (net48)
 │   └── PyExcel.Addin/            v2: .xll entry point — AddIn.cs + PyExcel-AddIn.dna (net48)
 │
@@ -77,9 +81,14 @@ PyExcel/
 │       └── kernel/
 │           └── framing.py          Wire framing protocol (done + tested)
 │
-├── tests/                        ── v2 TESTS (pytest, cross-platform) ──
+├── tests/                        ── v2 TESTS (pytest + xUnit, cross-platform) ──
 │   ├── conftest.py                 Puts embedded/ on sys.path
-│   └── kernel/test_framing.py
+│   ├── kernel/                     Python tests (pytest)
+│   │   ├── test_framing.py           Framing roundtrip + malformed-frame suite
+│   │   └── test_cross_language_vectors.py   Golden hex vectors, paired with C#
+│   └── PyExcel.Bridge.Tests/       C# tests (xUnit, net8.0)
+│       ├── FramingTests.cs           Port of test_framing.py
+│       └── CrossLanguageVectorsTests.cs   Paired with test_cross_language_vectors.py
 │
 └── docs/
     └── v2-build.md               v2 build commands + Phase 1 exit gate
@@ -120,7 +129,7 @@ C# side talks to it over a **named pipe**.
 | `PyExcel.Common` | Logging (`ILog`), shared types | Phase 1 ✅ |
 | `PyExcel.Ribbon` | Ribbon callbacks, `RibbonUI.xml` | Phase 1 skeleton ✅ |
 | `PyExcel.Addin` | `.xll` entry point, service lifetime | Phase 1 skeleton ✅ |
-| `PyExcel.Bridge` | Frame transport, named pipe, `KernelSupervisor` | Phase 2 |
+| `PyExcel.Bridge` | Frame transport, named pipe, `KernelSupervisor` | Phase 2 — framing ✅, transport+supervisor pending |
 | `PyExcel.Kernel.Client` | Typed run/cancel/progress API over frames | Phase 2 |
 | `PyExcel.State` | Workbook registry, enabled state, ribbon state | Phase 3 |
 | `PyExcel.Excel` | Range ↔ Arrow marshalling, paste, import/export | Phase 4–5 |
@@ -170,9 +179,11 @@ both encode and decode to bound memory against a malformed peer.
 
 ## Build & test
 
-Cross-platform (Linux/macOS — what CI should run):
+Cross-platform (Linux/macOS — what CI runs):
 ```bash
 dotnet build src/PyExcel.Common/PyExcel.Common.csproj --framework netstandard2.0 -c Release
+dotnet build src/PyExcel.Bridge/PyExcel.Bridge.csproj  --framework netstandard2.0 -c Release
+dotnet test  tests/PyExcel.Bridge.Tests/PyExcel.Bridge.Tests.csproj -c Release
 pytest tests/
 ```
 Windows (produces the `.xll`):
@@ -181,7 +192,7 @@ dotnet restore PyExcel.sln
 dotnet build PyExcel.sln -c Release --no-restore
 ```
 Full build prerequisites and the Phase 1 exit gate are in [`docs/v2-build.md`](docs/v2-build.md).
-There is **no CI pipeline yet** — adding one is a cross-cutting task in `ROADMAP.md`.
+The CI workflow is `.github/workflows/ci.yml` — Linux runs the cross-platform commands above and Windows builds the full solution.
 
 ## Conventions
 

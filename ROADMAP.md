@@ -23,10 +23,11 @@ single kernel package (it must stay Python — it runs user `transform()` code).
 
 ## Status & progress log
 
-**Current position:** Phase 0 ✅ · Phase 1 ✅ · **next up: Phase 2.**
+**Current position:** Phase 0 ✅ · Phase 1 ✅ · Phase 2 in progress (framing landed).
 
 Terse running record (newest first) so a new session can pick up where work stopped:
 
+- **2026-05-23 — Phase 2 step 1: framing.** Added `PyExcel.Bridge` (multi-target `net48`/`netstandard2.0`) with `Framing.cs` + a stdlib `CanonicalJson` encoder/decoder, mirroring `framing.py` byte-for-byte. Added `PyExcel.Bridge.Tests` (xUnit, net8.0) with the Python test-suite ported 1:1, plus cross-language golden hex vectors (`test_cross_language_vectors.py` ↔ `CrossLanguageVectorsTests.cs`) that pin the on-wire format. CI now builds the netstandard slice on Linux and runs `dotnet test`.
 - **2026-05-22 — Phase 0 complete.** Removed the personal-data `__main__` block and trailing dead code from `xmlParsing.py`; replaced the bloated root `requirements.txt` with the minimal v2-kernel set; added `.github/workflows/ci.yml`; confirmed the v1-frozen policy below.
 - **2026-05-22 — Planning.** Repo audited; `ARCHITECTURE.md` and this roadmap written; version/phase mismatches reconciled; the four architecture decisions resolved.
 
@@ -94,15 +95,15 @@ kernel's lifetime is owned and deterministic.
 **Deliverables.** `PyExcel.Bridge`, `PyExcel.Kernel.Client`, and the Python
 `pyexcel.kernel` package (`supervisor.py`, `worker.py`, `arrow_io.py`, `__main__.py`).
 
-- [ ] `PyExcel.Bridge/Framing.cs` — mirror `framing.py` byte-for-byte (same frame layout, bounds, determinism).
-- [ ] Cross-language conformance tests: frames encoded in C# decode in Python and vice versa.
+- [x] `PyExcel.Bridge/Framing.cs` — mirror `framing.py` byte-for-byte (same frame layout, bounds, determinism).
+- [x] Cross-language conformance tests: frames encoded in C# decode in Python and vice versa (golden hex vectors pin the wire format on both sides).
+- [x] Bounded/malformed-frame handling on the C# side (mirror the `framing.py` test suite).
 - [ ] Named-pipe transport with a SID/ACL check (reject non-owner connections → `ERROR` frame).
 - [ ] `KernelSupervisor` — spawn `python -m pyexcel.kernel` with an **argv array** (no `cmd /c` string), `HELLO` handshake, `PING`/`PONG` health checks, deterministic kill on `AutoClose` / crash / hang.
 - [ ] `PyExcel.Kernel.Client` — typed API: `RunRequest`, `RunResult`, `Progress`, `Cancel`, `Log` over frames.
 - [ ] Python `supervisor.py` — accept the pipe connection, dispatch frames to workers.
 - [ ] Python `worker.py` — run one job: receive request → execute → reply.
 - [ ] Python `arrow_io.py` — DataFrame / list / scalar ↔ Arrow IPC stream (everything marshals as Arrow).
-- [ ] Bounded/malformed-frame handling on the C# side (mirror the `framing.py` test suite).
 
 **Exit criteria.** C# spawns the kernel, completes a `HELLO`/`PING`/`PONG`
 round-trip, and kills it cleanly on shutdown. Framing conformance tests pass in

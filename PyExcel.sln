@@ -8,6 +8,10 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "PyExcel.Addin", "src\PyExce
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "PyExcel.Ribbon", "src\PyExcel.Ribbon\PyExcel.Ribbon.csproj", "{6F3C2C4E-1A1A-4E5D-9C7E-1F4C2D9E5A03}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "PyExcel.Bridge", "src\PyExcel.Bridge\PyExcel.Bridge.csproj", "{6F3C2C4E-1A1A-4E5D-9C7E-1F4C2D9E5A04}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "PyExcel.Bridge.Tests", "tests\PyExcel.Bridge.Tests\PyExcel.Bridge.Tests.csproj", "{6F3C2C4E-1A1A-4E5D-9C7E-1F4C2D9E5A05}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|x64 = Debug|x64
@@ -26,6 +30,14 @@ Global
 		{6F3C2C4E-1A1A-4E5D-9C7E-1F4C2D9E5A03}.Debug|x64.Build.0 = Debug|x64
 		{6F3C2C4E-1A1A-4E5D-9C7E-1F4C2D9E5A03}.Release|x64.ActiveCfg = Release|x64
 		{6F3C2C4E-1A1A-4E5D-9C7E-1F4C2D9E5A03}.Release|x64.Build.0 = Release|x64
+		{6F3C2C4E-1A1A-4E5D-9C7E-1F4C2D9E5A04}.Debug|x64.ActiveCfg = Debug|x64
+		{6F3C2C4E-1A1A-4E5D-9C7E-1F4C2D9E5A04}.Debug|x64.Build.0 = Debug|x64
+		{6F3C2C4E-1A1A-4E5D-9C7E-1F4C2D9E5A04}.Release|x64.ActiveCfg = Release|x64
+		{6F3C2C4E-1A1A-4E5D-9C7E-1F4C2D9E5A04}.Release|x64.Build.0 = Release|x64
+		{6F3C2C4E-1A1A-4E5D-9C7E-1F4C2D9E5A05}.Debug|x64.ActiveCfg = Debug|x64
+		{6F3C2C4E-1A1A-4E5D-9C7E-1F4C2D9E5A05}.Debug|x64.Build.0 = Debug|x64
+		{6F3C2C4E-1A1A-4E5D-9C7E-1F4C2D9E5A05}.Release|x64.ActiveCfg = Release|x64
+		{6F3C2C4E-1A1A-4E5D-9C7E-1F4C2D9E5A05}.Release|x64.Build.0 = Release|x64
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

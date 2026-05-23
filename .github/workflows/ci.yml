@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   linux:
-    name: Common (netstandard2.0) + kernel tests
+    name: Cross-platform (netstandard2.0 + kernel tests)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -23,6 +23,16 @@ jobs:
         run: >-
           dotnet build src/PyExcel.Common/PyExcel.Common.csproj
           --framework netstandard2.0 --configuration Release
+
+      - name: Build PyExcel.Bridge (netstandard2.0)
+        run: >-
+          dotnet build src/PyExcel.Bridge/PyExcel.Bridge.csproj
+          --framework netstandard2.0 --configuration Release
+
+      - name: Test PyExcel.Bridge (framing conformance)
+        run: >-
+          dotnet test tests/PyExcel.Bridge.Tests/PyExcel.Bridge.Tests.csproj
+          --configuration Release
 
       - uses: actions/setup-python@v5
         with:
@@ -49,3 +59,6 @@ jobs:
 
       - name: Build
         run: dotnet build PyExcel.sln --configuration Release --no-restore
+
+      - name: Test
+        run: dotnet test tests/PyExcel.Bridge.Tests/PyExcel.Bridge.Tests.csproj --configuration Release --no-build
