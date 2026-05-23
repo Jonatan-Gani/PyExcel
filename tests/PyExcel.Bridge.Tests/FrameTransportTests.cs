@@ -148,10 +148,16 @@ public class FrameTransportTests
     [Fact]
     public void NamedPipe_Connect_ToNonexistent_Throws()
     {
-        // No server listening on this name — expect TimeoutException.
+        // No server listening on this name — Windows raises TimeoutException
+        // after WaitNamedPipe expires, Linux raises IOException when the
+        // socket path is missing past the timeout. Accept either.
         var pipeName = "pyexcel-test-noserver-" + Guid.NewGuid().ToString("N");
-        Assert.Throws<TimeoutException>(() =>
+        var ex = Record.Exception(() =>
             FrameTransport.ConnectNamedPipe(pipeName, connectTimeoutMs: 200));
+        Assert.NotNull(ex);
+        Assert.True(
+            ex is TimeoutException || ex is IOException,
+            $"expected TimeoutException or IOException, got {ex.GetType().FullName}: {ex.Message}");
     }
 
     [Fact]
