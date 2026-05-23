@@ -54,7 +54,7 @@ var result = client.Run(new RunRequest {
 ```
 
 Failures throw `KernelException` with `.Code` (one of `BadRequest`,
-`ModuleNotFound`, `ModuleExecError`, `FunctionNotFound`,
+`ModuleNotFound`, `ModuleLoadError`, `ModuleExecError`, `FunctionNotFound`,
 `FunctionNotCallable`, `BadInput`, `BadReturnType`, `Exception`),
 `.PythonType`, `.Message`, `.PythonTraceback`, `.DurationMs`.
 
