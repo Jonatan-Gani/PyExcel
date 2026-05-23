@@ -30,6 +30,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\PyExcel.Bridge\PyExcel.Bridge.csproj" />
+    <ProjectReference Include="..\..\src\PyExcel.Kernel.Client\PyExcel.Kernel.Client.csproj" />
   </ItemGroup>
 
 </Project>

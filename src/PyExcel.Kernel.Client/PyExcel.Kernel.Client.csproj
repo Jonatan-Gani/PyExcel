@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <!--
+      The typed kernel API. Wraps PyExcel.Bridge's KernelSupervisor with
+      RunRequest/RunResult/Progress/Log/Cancel types so .xll-side callers
+      don't deal in raw Frame meta dictionaries.
+
+      Multi-targets to match PyExcel.Bridge: net48 for the .xll, netstandard2.0
+      for the Linux CI build.
+    -->
+    <TargetFrameworks>net48;netstandard2.0</TargetFrameworks>
+    <RootNamespace>PyExcel.Kernel.Client</RootNamespace>
+    <AssemblyName>PyExcel.Kernel.Client</AssemblyName>
+    <Platforms>x64;AnyCPU</Platforms>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\PyExcel.Bridge\PyExcel.Bridge.csproj" />
+  </ItemGroup>
+
+</Project>

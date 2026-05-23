@@ -41,7 +41,12 @@ jobs:
           dotnet build src/PyExcel.Bridge/PyExcel.Bridge.csproj
           --framework netstandard2.0 --configuration Release
 
-      - name: Test PyExcel.Bridge (framing + kernel integration)
+      - name: Build PyExcel.Kernel.Client (netstandard2.0)
+        run: >-
+          dotnet build src/PyExcel.Kernel.Client/PyExcel.Kernel.Client.csproj
+          --framework netstandard2.0 --configuration Release
+
+      - name: Test PyExcel.Bridge (framing + kernel + client integration)
         run: >-
           dotnet test tests/PyExcel.Bridge.Tests/PyExcel.Bridge.Tests.csproj
           --configuration Release

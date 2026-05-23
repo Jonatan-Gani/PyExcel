@@ -3,7 +3,12 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.IO.Pipes;
+using System.Runtime.CompilerServices;
+using System.Threading;
 using System.Threading.Tasks;
+
+[assembly: InternalsVisibleTo("PyExcel.Kernel.Client")]
+[assembly: InternalsVisibleTo("PyExcel.Bridge.Tests")]
 
 namespace PyExcel.Bridge;
 
@@ -20,10 +25,18 @@ namespace PyExcel.Bridge;
 ///   4. HELLO handshake — server sends HELLO first, client replies with
 ///      HELLO carrying its protocol version. Mismatch fails the handshake.
 ///
-/// The instance is single-threaded with respect to the kernel: callers must
-/// not invoke <see cref="Ping"/> / <see cref="Shutdown"/> concurrently from
-/// different threads. (The named pipe is a single byte stream and the
-/// protocol assumes strict request/response ordering.)
+/// <para>Concurrency model:</para>
+/// <list type="bullet">
+///   <item><c>ExchangeSemaphore</c> serialises high-level request/response
+///     sequences — only one of <see cref="Ping"/>, <see cref="Shutdown"/>,
+///     or a <c>PyExcel.Kernel.Client.KernelClient.Run</c> runs at a time.</item>
+///   <item><c>WriteLock</c> guards each individual <c>WriteFrame</c> call
+///     so byte writes never interleave on the pipe.</item>
+///   <item><c>ReadLock</c> guards each individual <c>ReadFrame</c> call.</item>
+/// </list>
+/// <para>The split lets fire-and-forget frames (the CANCEL frame sent by
+/// <c>KernelClient.Cancel</c>) acquire only the write lock — so they can
+/// fire while a <c>Run</c> is parked in a read.</para>
 ///
 /// Disposal is the canonical cleanup path: best-effort SHUTDOWN frame,
 /// short wait for the child to exit, then <see cref="Process.Kill()"/> if
@@ -35,8 +48,19 @@ public sealed class KernelSupervisor : IDisposable
     private readonly Process _process;
     private readonly NamedPipeServerStream _pipe;
     private readonly FrameTransport _transport;
-    private readonly object _ioLock = new();
+    private readonly SemaphoreSlim _exchange = new(1, 1);
+    private readonly object _readLock = new();
+    private readonly object _writeLock = new();
     private bool _disposed;
+
+    // Internal accessors used by PyExcel.Kernel.Client. The split-lock
+    // pattern means callers must lock the right lock for each call:
+    // WriteLock for any WriteFrame, ReadLock for any ReadFrame, and
+    // ExchangeSemaphore around any multi-frame request/response sequence.
+    internal FrameTransport Transport => _transport;
+    internal object ReadLock => _readLock;
+    internal object WriteLock => _writeLock;
+    internal SemaphoreSlim ExchangeSemaphore => _exchange;
 
     public string PipeName { get; }
     public Process Process => _process;
@@ -125,15 +149,24 @@ public sealed class KernelSupervisor : IDisposable
         ThrowIfDisposed();
         if (timeoutMs <= 0) throw new ArgumentOutOfRangeException(nameof(timeoutMs));
 
-        lock (_ioLock)
+        if (!_exchange.Wait(timeoutMs))
+            throw new TimeoutException($"another exchange held the kernel for {timeoutMs}ms");
+        try
         {
             var nonce = Guid.NewGuid().ToString("N");
             var sw = Stopwatch.StartNew();
-            _transport.WriteFrame(
-                FrameType.Ping,
-                new Dictionary<string, object?> { { "nonce", nonce } });
+            lock (_writeLock)
+            {
+                _transport.WriteFrame(
+                    FrameType.Ping,
+                    new Dictionary<string, object?> { { "nonce", nonce } });
+            }
 
-            var reply = ReadFrameWithTimeout(timeoutMs);
+            Frame reply;
+            lock (_readLock)
+            {
+                reply = ReadFrameWithTimeout(timeoutMs);
+            }
             sw.Stop();
 
             if (reply.Type != FrameType.Pong)
@@ -144,6 +177,10 @@ public sealed class KernelSupervisor : IDisposable
                     $"PONG nonce mismatch: sent {nonce}, got {echo}");
 
             return sw.Elapsed;
+        }
+        finally
+        {
+            _exchange.Release();
         }
     }
 
@@ -158,13 +195,18 @@ public sealed class KernelSupervisor : IDisposable
         ThrowIfDisposed();
         if (timeoutMs <= 0) throw new ArgumentOutOfRangeException(nameof(timeoutMs));
 
-        lock (_ioLock)
+        if (!_exchange.Wait(timeoutMs))
+            throw new TimeoutException($"another exchange held the kernel for {timeoutMs}ms");
+        try
         {
             try
             {
-                _transport.WriteFrame(
-                    FrameType.Shutdown,
-                    new Dictionary<string, object?>());
+                lock (_writeLock)
+                {
+                    _transport.WriteFrame(
+                        FrameType.Shutdown,
+                        new Dictionary<string, object?>());
+                }
             }
             catch
             {
@@ -173,6 +215,10 @@ public sealed class KernelSupervisor : IDisposable
             }
 
             return _process.WaitForExit(timeoutMs);
+        }
+        finally
+        {
+            _exchange.Release();
         }
     }
 
@@ -187,9 +233,12 @@ public sealed class KernelSupervisor : IDisposable
         {
             try
             {
-                _transport.WriteFrame(
-                    FrameType.Shutdown,
-                    new Dictionary<string, object?>());
+                lock (_writeLock)
+                {
+                    _transport.WriteFrame(
+                        FrameType.Shutdown,
+                        new Dictionary<string, object?>());
+                }
             }
             catch { /* pipe may already be torn down */ }
 
@@ -200,6 +249,11 @@ public sealed class KernelSupervisor : IDisposable
         try { _transport.Dispose(); } catch { /* swallow */ }
         try { _pipe.Dispose(); } catch { /* swallow */ }
         try { _process.Dispose(); } catch { /* swallow */ }
+        // _exchange is intentionally not disposed: a Run that's still in
+        // its finally block trying to Release() must not see ObjectDisposedException
+        // piled on top of the pipe error it's already handling. SemaphoreSlim
+        // has no managed resources to leak when AvailableWaitHandle was never
+        // accessed (we don't access it).
     }
 
     // -------------------------------------------------------------------------
@@ -305,12 +359,17 @@ public sealed class KernelSupervisor : IDisposable
         return ReadFrameWithDeadline(_transport, DateTime.UtcNow.AddMilliseconds(timeoutMs));
     }
 
-    private static Frame ReadFrameWithDeadline(FrameTransport transport, DateTime deadline)
+    internal static Frame ReadFrameWithDeadline(FrameTransport transport, DateTime deadline)
     {
         // ReadFrame is blocking; we approximate a deadline by running it on a
         // worker task and racing against a delay. On timeout the underlying
         // stream is still alive (the read just keeps waiting in the
         // background) — the calling Dispose path will tear it down.
+        //
+        // Callers from other types in this assembly (or PyExcel.Kernel.Client
+        // via InternalsVisibleTo) must hold KernelSupervisor.ReadLock around
+        // this call: two concurrent ReadFrame calls on the same pipe corrupt
+        // the receive position.
         var task = Task.Run(transport.ReadFrame);
         var remaining = (int)Math.Max(1, (deadline - DateTime.UtcNow).TotalMilliseconds);
         if (!task.Wait(remaining))
