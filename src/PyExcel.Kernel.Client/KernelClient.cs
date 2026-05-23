@@ -195,8 +195,13 @@ public sealed class KernelClient
         if (req.Kwargs is { Count: > 0 })
         {
             // Re-pack as a plain Dictionary so the canonical-JSON encoder
-            // walks it without trying to introspect the original type.
-            meta["kwargs"] = new Dictionary<string, object?>(req.Kwargs);
+            // walks it as an object via its IDictionary branch.
+            // (IReadOnlyDictionary does not implement the non-generic
+            // IDictionary interface, and netstandard2.0's Dictionary doesn't
+            // have an IEnumerable<KeyValuePair> constructor, so we copy.)
+            var copy = new Dictionary<string, object?>(req.Kwargs.Count);
+            foreach (var kv in req.Kwargs) copy[kv.Key] = kv.Value;
+            meta["kwargs"] = copy;
         }
         return meta;
     }
