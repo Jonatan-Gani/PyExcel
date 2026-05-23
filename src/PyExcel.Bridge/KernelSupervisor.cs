@@ -5,8 +5,10 @@ using System.IO;
 using System.IO.Pipes;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+#if NETFRAMEWORK
 using System.Security.AccessControl;
 using System.Security.Principal;
+#endif
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -272,12 +274,19 @@ public sealed class KernelSupervisor : IDisposable
     private static NamedPipeServerStream CreatePipeServer(string pipeName)
     {
         const int maxInstances = 1;
-        const int inBufferSize = 0;
-        const int outBufferSize = 0;
         const PipeOptions options = PipeOptions.Asynchronous;
 
+#if NETFRAMEWORK
         if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
         {
+            // Build a DACL granting our user — and only our user — full
+            // access to the pipe. A wrong-user process gets
+            // ERROR_ACCESS_DENIED at CreateFile time before any bytes flow.
+            //
+            // .NET Framework's NamedPipeServerStream has the PipeSecurity
+            // constructor overload built into the BCL; on netstandard2.0
+            // those Windows-only ACL types aren't shipped, and that build
+            // is Linux-CI-only, so we skip the DACL there.
             var ps = new PipeSecurity();
             var currentUser = WindowsIdentity.GetCurrent().User
                 ?? throw new InvalidOperationException(
@@ -287,16 +296,17 @@ public sealed class KernelSupervisor : IDisposable
                 PipeAccessRights.FullControl,
                 AccessControlType.Allow));
 
-            return NamedPipeServerStreamAcl.Create(
+            return new NamedPipeServerStream(
                 pipeName,
                 PipeDirection.InOut,
                 maxInstances,
                 PipeTransmissionMode.Byte,
                 options,
-                inBufferSize,
-                outBufferSize,
-                ps);
+                inBufferSize: 0,
+                outBufferSize: 0,
+                pipeSecurity: ps);
         }
+#endif
 
         return new NamedPipeServerStream(
             pipeName,
