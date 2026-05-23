@@ -100,7 +100,7 @@ kernel's lifetime is owned and deterministic.
 - [x] `PyExcel.Bridge/Framing.cs` — mirror `framing.py` byte-for-byte (same frame layout, bounds, determinism).
 - [x] Cross-language conformance tests: frames encoded in C# decode in Python and vice versa (golden hex vectors pin the wire format on both sides).
 - [x] Bounded/malformed-frame handling on the C# side (mirror the `framing.py` test suite).
-- [x] Named-pipe transport — POSIX side complete (C# `NamedPipeServerStream` ↔ Python `socket(AF_UNIX)` against `/tmp/CoreFxPipe_<name>`). Windows client (`_winapi`/`ctypes`) + per-connection SID/ACL check still pending.
+- [x] Named-pipe transport — POSIX side (C# `NamedPipeServerStream` ↔ Python `socket(AF_UNIX)` against `/tmp/CoreFxPipe_<name>`) and Windows side (C# named pipe with a DACL granting only the current-user SID ↔ Python `_winapi` client against `\\.\pipe\<name>`). Wrong-user processes get `ERROR_ACCESS_DENIED` at connect time before any frame bytes cross the boundary.
 - [x] `KernelSupervisor` — spawns `python -m pyexcel.kernel` via argv (no shell), `HELLO` handshake with protocol-version check, `Ping`/`Shutdown` API, deterministic kill on `Dispose`. PING/PONG health-check loop on a background timer is a separate item.
 - [x] `PyExcel.Kernel.Client` — typed API: `RunRequest`/`RunResult`/`KernelException`, `ProgressReceived`/`LogReceived` events, sync `Run` + async `RunAsync`, and a fire-and-forget `Cancel` that uses only the write lock so it can fire while a `Run` is parked in a read. Requires a dual-lock refactor of `KernelSupervisor` (exchange semaphore + separate read/write locks) — done in the same change.
 - [x] Python `supervisor.py` — connects to the pipe, runs the HELLO/PING/PONG/SHUTDOWN loop. Worker dispatch is a follow-up.

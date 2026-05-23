@@ -64,6 +64,17 @@ jobs:
         with:
           dotnet-version: '8.0.x'
 
+      # Python is required for the integration tests: KernelSupervisorTests
+      # and KernelClientTests both spawn `python -m pyexcel.kernel` and
+      # exercise the Win32 named-pipe client end-to-end.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install Python kernel dependencies
+        run: python -m pip install --upgrade pip pyarrow pandas numpy
+        shell: pwsh
+
       - name: Restore
         run: dotnet restore PyExcel.sln
 

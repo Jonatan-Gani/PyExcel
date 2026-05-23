@@ -13,4 +13,16 @@
     <Platforms>x64;AnyCPU</Platforms>
   </PropertyGroup>
 
+  <ItemGroup>
+    <!--
+      Windows pipe DACL support. ``NamedPipeServerStreamAcl.Create`` is the
+      cross-target API for opening a pipe with a PipeSecurity; on net48 the
+      ACL bits are built in but the static factory is in this package; on
+      netstandard2.0 the package supplies the whole thing. The actual ACL is
+      applied at runtime only on Windows (see KernelSupervisor.cs); the
+      Linux build still references the type but never executes the path.
+    -->
+    <PackageReference Include="System.IO.Pipes.AccessControl" Version="5.0.0" />
+  </ItemGroup>
+
 </Project>

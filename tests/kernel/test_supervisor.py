@@ -7,8 +7,11 @@ in, then drive the HELLO / PING / SHUTDOWN protocol from this side. This
 gives us confidence in the Python half independent of the C# integration
 test, which exercises the same path from the other direction.
 
-Skipped on Windows: the transport for ``win32`` is still a TODO (see
-``pyexcel.kernel.transport``).
+Skipped on Windows: this test plays the C# *server* role from Python, which
+would require reimplementing the server side of the named-pipe protocol
+via ``_winapi.CreateNamedPipe``. The C# integration tests (under
+``tests/PyExcel.Bridge.Tests``) cover the Windows side end-to-end by
+running the real C# server against the Python client.
 """
 
 from __future__ import annotations
@@ -36,7 +39,8 @@ from pyexcel.kernel.framing import (
 
 pytestmark = pytest.mark.skipif(
     sys.platform == "win32",
-    reason="windows named-pipe transport not implemented in Phase 2 step 3",
+    reason="this test acts as the C# server; reimplementing that side from "
+    "Python on Windows is out of scope (covered by the C# integration tests)",
 )
 
 

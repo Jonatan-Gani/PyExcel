@@ -11,9 +11,8 @@ namespace PyExcel.Bridge.Tests;
 
 /// <summary>
 /// End-to-end tests for <see cref="KernelClient"/> against a real Python
-/// kernel subprocess. Mirrors <see cref="KernelSupervisorTests"/>'s
-/// platform handling — skipped on Windows until the Win32 transport
-/// lands.
+/// kernel subprocess. Runs on Linux and Windows — the Python transport
+/// handles both backends.
 ///
 /// <para>The tests deliberately avoid encoding Arrow payloads on the C#
 /// side: <c>tests/kernel/test_arrow_io.py</c> already exercises the
@@ -39,7 +38,6 @@ public class KernelClientTests
     [Fact]
     public void Run_Null_Request_Throws()
     {
-        if (ShouldSkipForPlatform()) return;
         using var fixture = new KernelFixture();
         var client = new KernelClient(fixture.Supervisor);
         Assert.Throws<ArgumentNullException>(() => client.Run(null!));
@@ -48,7 +46,6 @@ public class KernelClientTests
     [Fact]
     public void Run_Empty_Script_Throws()
     {
-        if (ShouldSkipForPlatform()) return;
         using var fixture = new KernelFixture();
         var client = new KernelClient(fixture.Supervisor);
         Assert.Throws<ArgumentException>(() =>
@@ -58,7 +55,6 @@ public class KernelClientTests
     [Fact]
     public void Cancel_Rejects_Empty_RunId()
     {
-        if (ShouldSkipForPlatform()) return;
         using var fixture = new KernelFixture();
         var client = new KernelClient(fixture.Supervisor);
         Assert.Throws<ArgumentException>(() => client.Cancel(""));
@@ -72,7 +68,6 @@ public class KernelClientTests
     [Fact]
     public void Run_Returns_Payload_When_Function_Returns_Value()
     {
-        if (ShouldSkipForPlatform()) return;
         using var fixture = new KernelFixture();
         var script = fixture.WriteScript("const.py",
             "def transform():\n    return 42\n");
@@ -89,7 +84,6 @@ public class KernelClientTests
     [Fact]
     public void Run_Returns_Empty_Payloads_When_Function_Returns_None()
     {
-        if (ShouldSkipForPlatform()) return;
         using var fixture = new KernelFixture();
         var script = fixture.WriteScript("none.py",
             "def transform():\n    return None\n");
@@ -105,7 +99,6 @@ public class KernelClientTests
     [Fact]
     public void Run_Passes_Kwargs_Through_Canonical_Json()
     {
-        if (ShouldSkipForPlatform()) return;
         using var fixture = new KernelFixture();
         // Use kwargs to encode a value the script can spit back out via a
         // side-channel file. Avoids needing Arrow encode on the C# side.
@@ -135,7 +128,6 @@ public class KernelClientTests
     [Fact]
     public void Run_Echoes_Custom_RunId()
     {
-        if (ShouldSkipForPlatform()) return;
         using var fixture = new KernelFixture();
         var script = fixture.WriteScript("id.py",
             "def transform():\n    return 1\n");
@@ -152,7 +144,6 @@ public class KernelClientTests
     [Fact]
     public void Run_Auto_Generates_RunId_When_Omitted()
     {
-        if (ShouldSkipForPlatform()) return;
         using var fixture = new KernelFixture();
         var script = fixture.WriteScript("auto.py",
             "def transform():\n    return 1\n");
@@ -166,7 +157,6 @@ public class KernelClientTests
     [Fact]
     public void Run_Honours_Custom_Function_Name()
     {
-        if (ShouldSkipForPlatform()) return;
         using var fixture = new KernelFixture();
         var sentinel = Path.Combine(fixture.ScratchDir, "which_function.txt");
         var script = fixture.WriteScript("custom.py",
@@ -184,7 +174,6 @@ public class KernelClientTests
     [Fact]
     public void Run_Sequential_Calls_Reuse_Kernel()
     {
-        if (ShouldSkipForPlatform()) return;
         using var fixture = new KernelFixture();
         var counter = Path.Combine(fixture.ScratchDir, "count.txt");
         var script = fixture.WriteScript("counter.py",
@@ -211,7 +200,6 @@ public class KernelClientTests
     [Fact]
     public void Run_Propagates_User_Exception_As_KernelException()
     {
-        if (ShouldSkipForPlatform()) return;
         using var fixture = new KernelFixture();
         var script = fixture.WriteScript("boom.py",
             "def transform():\n    raise ValueError('no good')\n");
@@ -230,7 +218,6 @@ public class KernelClientTests
     [Fact]
     public void Run_Missing_Script_Yields_ModuleNotFound()
     {
-        if (ShouldSkipForPlatform()) return;
         using var fixture = new KernelFixture();
         var client = new KernelClient(fixture.Supervisor);
 
@@ -243,7 +230,6 @@ public class KernelClientTests
     [Fact]
     public void Run_Function_Not_Found_Yields_FunctionNotFound()
     {
-        if (ShouldSkipForPlatform()) return;
         using var fixture = new KernelFixture();
         var script = fixture.WriteScript("noxform.py",
             "def something_else():\n    return 1\n");
@@ -262,7 +248,6 @@ public class KernelClientTests
     [Fact]
     public async Task RunAsync_Happy_Path_Returns_Result()
     {
-        if (ShouldSkipForPlatform()) return;
         using var fixture = new KernelFixture();
         var script = fixture.WriteScript("async.py",
             "def transform():\n    return 'ok'\n");
@@ -276,7 +261,6 @@ public class KernelClientTests
     [Fact]
     public async Task RunAsync_Surfaces_KernelException()
     {
-        if (ShouldSkipForPlatform()) return;
         using var fixture = new KernelFixture();
         var script = fixture.WriteScript("async_boom.py",
             "def transform():\n    raise RuntimeError('async-failure')\n");
@@ -361,10 +345,5 @@ public class KernelClientTests
             dir = dir.Parent;
         }
         return null;
-    }
-
-    private static bool ShouldSkipForPlatform()
-    {
-        return RuntimeInformation.IsOSPlatform(OSPlatform.Windows);
     }
 }

@@ -4,6 +4,9 @@ using System.Diagnostics;
 using System.IO;
 using System.IO.Pipes;
 using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
+using System.Security.AccessControl;
+using System.Security.Principal;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -106,12 +109,18 @@ public sealed class KernelSupervisor : IDisposable
         // PipeOptions.Asynchronous: required for overlapped I/O on Windows
         // even when we use the synchronous Read/Write APIs; without it, a
         // concurrent ReadFrame + WriteFrame on the same pipe deadlocks.
-        var pipe = new NamedPipeServerStream(
-            pipeName,
-            PipeDirection.InOut,
-            maxNumberOfServerInstances: 1,
-            transmissionMode: PipeTransmissionMode.Byte,
-            options: PipeOptions.Asynchronous);
+        //
+        // On Windows we also attach a DACL restricting the pipe to the
+        // current user's SID. That way a process running under any other
+        // user — including LocalSystem — can't connect to a kernel meant
+        // for us and inject frames. The plain constructor on Windows would
+        // leave the pipe open to "Everyone" by default.
+        //
+        // POSIX has no NamedPipe DACL concept; .NET's pipe maps to a Unix
+        // socket file under /tmp and process-credential checks live at the
+        // filesystem layer. (Tightening the socket file mode is tracked
+        // separately.)
+        NamedPipeServerStream pipe = CreatePipeServer(pipeName);
 
         Process? proc = null;
         try
@@ -259,6 +268,43 @@ public sealed class KernelSupervisor : IDisposable
     // -------------------------------------------------------------------------
     // Internals
     // -------------------------------------------------------------------------
+
+    private static NamedPipeServerStream CreatePipeServer(string pipeName)
+    {
+        const int maxInstances = 1;
+        const int inBufferSize = 0;
+        const int outBufferSize = 0;
+        const PipeOptions options = PipeOptions.Asynchronous;
+
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+        {
+            var ps = new PipeSecurity();
+            var currentUser = WindowsIdentity.GetCurrent().User
+                ?? throw new InvalidOperationException(
+                    "could not resolve the current Windows user SID for pipe DACL");
+            ps.AddAccessRule(new PipeAccessRule(
+                currentUser,
+                PipeAccessRights.FullControl,
+                AccessControlType.Allow));
+
+            return NamedPipeServerStreamAcl.Create(
+                pipeName,
+                PipeDirection.InOut,
+                maxInstances,
+                PipeTransmissionMode.Byte,
+                options,
+                inBufferSize,
+                outBufferSize,
+                ps);
+        }
+
+        return new NamedPipeServerStream(
+            pipeName,
+            PipeDirection.InOut,
+            maxInstances,
+            PipeTransmissionMode.Byte,
+            options);
+    }
 
     private static Process StartChild(string pythonExecutable, string pythonPath, string pipeName)
     {

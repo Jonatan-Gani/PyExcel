@@ -9,20 +9,15 @@ namespace PyExcel.Bridge.Tests;
 /// <summary>
 /// End-to-end test: KernelSupervisor spawns a real
 /// <c>python -m pyexcel.kernel</c>, runs the HELLO handshake, exercises
-/// PING/PONG, and shuts down cleanly with exit code 0.
-///
-/// Skipped on Windows for now — the Python transport layer's Win32
-/// named-pipe client isn't implemented yet (the kernel currently only has
-/// the POSIX/AF_UNIX backend). The Windows CI job still validates the
-/// non-integration tests in this assembly.
+/// PING/PONG, and shuts down cleanly with exit code 0. Runs on Linux
+/// (AF_UNIX socket under /tmp) and Windows (named pipe under \\.\pipe\)
+/// — the Python transport handles both backends.
 /// </summary>
 public class KernelSupervisorTests
 {
     [Fact]
     public void Spawn_Handshake_Ping_Shutdown_RoundTrip()
     {
-        if (ShouldSkipForPlatform()) return;
-
         var python = DiscoverPython();
         var pythonPath = DiscoverEmbeddedPath();
         Assert.False(string.IsNullOrEmpty(python),
@@ -48,8 +43,6 @@ public class KernelSupervisorTests
     [Fact]
     public void Multiple_Pings_All_Succeed()
     {
-        if (ShouldSkipForPlatform()) return;
-
         var python = DiscoverPython();
         var pythonPath = DiscoverEmbeddedPath();
         Assert.False(string.IsNullOrEmpty(python), "python not found");
@@ -73,8 +66,6 @@ public class KernelSupervisorTests
     [Fact]
     public void Dispose_Without_Shutdown_Still_Reaps_Process()
     {
-        if (ShouldSkipForPlatform()) return;
-
         var python = DiscoverPython();
         var pythonPath = DiscoverEmbeddedPath();
         Assert.False(string.IsNullOrEmpty(python), "python not found");
@@ -147,17 +138,5 @@ public class KernelSupervisorTests
             dir = dir.Parent;
         }
         return null;
-    }
-
-    /// <summary>
-    /// Returns true if the test should bail (pass silently) on this platform.
-    /// xUnit 2.x has no in-test dynamic skip; the pragmatic alternative is
-    /// an early return that reports as a pass. The Windows CI lane still
-    /// runs every non-integration test in this assembly via the same
-    /// dotnet-test invocation.
-    /// </summary>
-    private static bool ShouldSkipForPlatform()
-    {
-        return RuntimeInformation.IsOSPlatform(OSPlatform.Windows);
     }
 }
