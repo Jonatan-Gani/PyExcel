@@ -8,9 +8,9 @@
     <Platforms>x64;AnyCPU</Platforms>
     <!-- The Windows solution builds with Platform=x64 (the only platform in
          the .sln); without this, MSBuild appends `x64\` to the output path
-         and `dotnet test --no-build` then can't find the test DLL at the
-         default `bin/Release/net8.0/` location. Pin both platforms to the
-         same path. -->
+         and `dotnet test` with the no-build flag then cannot find the test
+         DLL at the default `bin/Release/net8.0/` location. Pin both
+         platforms to the same path. -->
     <AppendPlatformToOutputPath>false</AppendPlatformToOutputPath>
     <!-- Test code does not ship in the .xll; xUnit analyzers and our own
          test scaffolding produce warnings that the production-grade bar
