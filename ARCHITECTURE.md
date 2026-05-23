@@ -71,7 +71,9 @@ PyExcel/
 │   ├── PyExcel.Bridge/           v2: frame transport (net48 + netstandard2.0)
 │   │   ├── Framing.cs              Encode/decode wire frames
 │   │   ├── FrameType.cs / Frame.cs / FramingExceptions.cs
-│   │   └── CanonicalJson.cs        Stdlib JSON encoder mirroring Python's json.dumps
+│   │   ├── CanonicalJson.cs        Stdlib JSON encoder mirroring Python's json.dumps
+│   │   ├── FrameTransport.cs       Stream/named-pipe framing wrapper
+│   │   └── KernelSupervisor.cs     Spawn + HELLO/PING/SHUTDOWN over the pipe
 │   ├── PyExcel.Ribbon/           v2: ExcelRibbon subclass + Resources/RibbonUI.xml (net48)
 │   └── PyExcel.Addin/            v2: .xll entry point — AddIn.cs + PyExcel-AddIn.dna (net48)
 │
@@ -79,7 +81,10 @@ PyExcel/
 │   └── pyexcel/
 │       ├── __init__.py
 │       └── kernel/
-│           └── framing.py          Wire framing protocol (done + tested)
+│           ├── framing.py          Wire framing protocol (done + tested)
+│           ├── transport.py        AF_UNIX (POSIX) / win32 (TODO) pipe client
+│           ├── supervisor.py       HELLO + PING/PONG + SHUTDOWN event loop
+│           └── __main__.py         `python -m pyexcel.kernel` entry point
 │
 ├── tests/                        ── v2 TESTS (pytest + xUnit, cross-platform) ──
 │   ├── conftest.py                 Puts embedded/ on sys.path
@@ -88,7 +93,9 @@ PyExcel/
 │   │   └── test_cross_language_vectors.py   Golden hex vectors, paired with C#
 │   └── PyExcel.Bridge.Tests/       C# tests (xUnit, net8.0)
 │       ├── FramingTests.cs           Port of test_framing.py
-│       └── CrossLanguageVectorsTests.cs   Paired with test_cross_language_vectors.py
+│       ├── CrossLanguageVectorsTests.cs   Paired with test_cross_language_vectors.py
+│       ├── FrameTransportTests.cs    MemoryStream + real named-pipe roundtrips
+│       └── KernelSupervisorTests.cs  Integration: spawn python, HELLO/PING/SHUTDOWN
 │
 └── docs/
     └── v2-build.md               v2 build commands + Phase 1 exit gate
@@ -129,7 +136,7 @@ C# side talks to it over a **named pipe**.
 | `PyExcel.Common` | Logging (`ILog`), shared types | Phase 1 ✅ |
 | `PyExcel.Ribbon` | Ribbon callbacks, `RibbonUI.xml` | Phase 1 skeleton ✅ |
 | `PyExcel.Addin` | `.xll` entry point, service lifetime | Phase 1 skeleton ✅ |
-| `PyExcel.Bridge` | Frame transport, named pipe, `KernelSupervisor` | Phase 2 — framing ✅, transport+supervisor pending |
+| `PyExcel.Bridge` | Frame transport, named pipe, `KernelSupervisor` | Phase 2 — framing ✅, transport ✅, supervisor ✅ (POSIX; win32 client pending) |
 | `PyExcel.Kernel.Client` | Typed run/cancel/progress API over frames | Phase 2 |
 | `PyExcel.State` | Workbook registry, enabled state, ribbon state | Phase 3 |
 | `PyExcel.Excel` | Range ↔ Arrow marshalling, paste, import/export | Phase 4–5 |

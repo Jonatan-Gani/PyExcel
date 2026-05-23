@@ -1,13 +1,17 @@
 """PyExcel v2 kernel: persistent supervisor + worker model.
 
-Phase 1 ships only the framing primitive. Subsequent phases add:
+Modules:
 
-* ``supervisor.py`` — accepts pipe connections from the C# client, dispatches
-  Run requests to a worker process, watchdogs the parent PID.
-* ``worker.py`` — imports user scripts, invokes their ``@job``-decorated
-  functions, returns Arrow IPC payloads.
-* ``transport.py`` — Windows named-pipe server-side wrapper.
-
-The framing protocol is the lowest layer everything else builds on; it is
-intentionally pure stdlib and bounded so a malformed peer cannot crash us.
+* :mod:`pyexcel.kernel.framing` — the wire format (length-prefixed binary
+  frames + canonical JSON meta). Pure stdlib, bounded against malformed
+  peers, mirrored byte-for-byte by ``PyExcel.Bridge/Framing.cs``.
+* :mod:`pyexcel.kernel.transport` — POSIX (AF_UNIX) / Windows (named pipe)
+  client wrappers. The C# ``KernelSupervisor`` owns the pipe server; we
+  connect into it.
+* :mod:`pyexcel.kernel.supervisor` — the in-process event loop. Performs
+  the HELLO handshake, then dispatches PING/PONG and SHUTDOWN. The
+  worker / RUN_REQUEST plumbing land in subsequent Phase 2 steps.
+* :mod:`pyexcel.kernel.__main__` — the ``python -m pyexcel.kernel`` entry
+  point. Parses argv, opens the transport, hands control to the
+  supervisor.
 """

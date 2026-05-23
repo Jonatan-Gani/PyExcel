@@ -19,6 +19,15 @@ jobs:
         with:
           dotnet-version: '8.0.x'
 
+      # Python is set up before `dotnet test` so the KernelSupervisor
+      # integration tests can spawn `python -m pyexcel.kernel`.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install pytest
+        run: python -m pip install --upgrade pip pytest
+
       - name: Build PyExcel.Common (netstandard2.0)
         run: >-
           dotnet build src/PyExcel.Common/PyExcel.Common.csproj
@@ -29,17 +38,10 @@ jobs:
           dotnet build src/PyExcel.Bridge/PyExcel.Bridge.csproj
           --framework netstandard2.0 --configuration Release
 
-      - name: Test PyExcel.Bridge (framing conformance)
+      - name: Test PyExcel.Bridge (framing + kernel integration)
         run: >-
           dotnet test tests/PyExcel.Bridge.Tests/PyExcel.Bridge.Tests.csproj
           --configuration Release
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-
-      - name: Install pytest
-        run: python -m pip install --upgrade pip pytest
 
       - name: Run kernel tests
         run: pytest tests/ -v

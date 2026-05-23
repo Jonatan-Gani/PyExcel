@@ -23,10 +23,12 @@ single kernel package (it must stay Python — it runs user `transform()` code).
 
 ## Status & progress log
 
-**Current position:** Phase 0 ✅ · Phase 1 ✅ · Phase 2 in progress (framing landed).
+**Current position:** Phase 0 ✅ · Phase 1 ✅ · Phase 2 in progress (framing + transport + HELLO/PING handshake landed; SID/ACL check + worker/run pipeline still ahead).
 
 Terse running record (newest first) so a new session can pick up where work stopped:
 
+- **2026-05-23 — Phase 2 step 3: KernelSupervisor + python entry point.** Added `KernelSupervisor.cs` (C# owns the named-pipe server, spawns `python -m pyexcel.kernel --pipe <name>` via argv, runs HELLO handshake with protocol-version check, exposes `Ping`/`Shutdown`, and force-kills on dispose so no orphaned python.exe). Added `embedded/pyexcel/kernel/{transport.py, supervisor.py, __main__.py}` — POSIX/AF_UNIX client connecting to `/tmp/CoreFxPipe_<name>` (matches .NET's pipe-on-Linux path), supervisor event loop handling HELLO/PING/PONG/SHUTDOWN, ERROR reply for not-yet-supported frames. Tests: 3 C# integration tests (round-trip + 10×PING + dispose-without-shutdown) and 3 pytest tests (handshake roundtrip, protocol-mismatch rejection, ERROR-after-unsupported-frame keeps loop alive). CI workflow reordered so Python is set up before `dotnet test` (integration tests spawn python). Windows transport stub raises `NotImplementedError` — landing alongside the Windows kernel CI slice in a later step.
+- **2026-05-23 — Phase 2 step 2: FrameTransport (stream + named-pipe).** Added `FrameTransport.cs` wrapping any `Stream` (MemoryStream for tests, `NamedPipeClientStream` for production) with synchronous `ReadFrame`/`WriteFrame` and a `ConnectNamedPipe` static factory. Added `FrameTransportTests.cs` covering MemoryStream roundtrip, dispose semantics, oversize rejection, and a real Windows-named-pipe/Linux-Unix-domain-socket roundtrip pairing client to in-process server.
 - **2026-05-23 — Phase 2 step 1: framing.** Added `PyExcel.Bridge` (multi-target `net48`/`netstandard2.0`) with `Framing.cs` + a stdlib `CanonicalJson` encoder/decoder, mirroring `framing.py` byte-for-byte. Added `PyExcel.Bridge.Tests` (xUnit, net8.0) with the Python test-suite ported 1:1, plus cross-language golden hex vectors (`test_cross_language_vectors.py` ↔ `CrossLanguageVectorsTests.cs`) that pin the on-wire format. CI now builds the netstandard slice on Linux and runs `dotnet test`.
 - **2026-05-22 — Phase 0 complete.** Removed the personal-data `__main__` block and trailing dead code from `xmlParsing.py`; replaced the bloated root `requirements.txt` with the minimal v2-kernel set; added `.github/workflows/ci.yml`; confirmed the v1-frozen policy below.
 - **2026-05-22 — Planning.** Repo audited; `ARCHITECTURE.md` and this roadmap written; version/phase mismatches reconciled; the four architecture decisions resolved.
@@ -98,10 +100,10 @@ kernel's lifetime is owned and deterministic.
 - [x] `PyExcel.Bridge/Framing.cs` — mirror `framing.py` byte-for-byte (same frame layout, bounds, determinism).
 - [x] Cross-language conformance tests: frames encoded in C# decode in Python and vice versa (golden hex vectors pin the wire format on both sides).
 - [x] Bounded/malformed-frame handling on the C# side (mirror the `framing.py` test suite).
-- [ ] Named-pipe transport with a SID/ACL check (reject non-owner connections → `ERROR` frame).
-- [ ] `KernelSupervisor` — spawn `python -m pyexcel.kernel` with an **argv array** (no `cmd /c` string), `HELLO` handshake, `PING`/`PONG` health checks, deterministic kill on `AutoClose` / crash / hang.
+- [x] Named-pipe transport — POSIX side complete (C# `NamedPipeServerStream` ↔ Python `socket(AF_UNIX)` against `/tmp/CoreFxPipe_<name>`). Windows client (`_winapi`/`ctypes`) + per-connection SID/ACL check still pending.
+- [x] `KernelSupervisor` — spawns `python -m pyexcel.kernel` via argv (no shell), `HELLO` handshake with protocol-version check, `Ping`/`Shutdown` API, deterministic kill on `Dispose`. PING/PONG health-check loop on a background timer is a separate item.
 - [ ] `PyExcel.Kernel.Client` — typed API: `RunRequest`, `RunResult`, `Progress`, `Cancel`, `Log` over frames.
-- [ ] Python `supervisor.py` — accept the pipe connection, dispatch frames to workers.
+- [x] Python `supervisor.py` — connects to the pipe, runs the HELLO/PING/PONG/SHUTDOWN loop. Worker dispatch is a follow-up.
 - [ ] Python `worker.py` — run one job: receive request → execute → reply.
 - [ ] Python `arrow_io.py` — DataFrame / list / scalar ↔ Arrow IPC stream (everything marshals as Arrow).
 

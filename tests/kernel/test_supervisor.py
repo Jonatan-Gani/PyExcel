@@ -1,0 +1,206 @@
+"""End-to-end test for the kernel supervisor loop.
+
+We act as the C# side — create a Unix-domain socket where .NET's
+``NamedPipeServerStream`` would put it on POSIX
+(``$TMPDIR/CoreFxPipe_<name>``), spawn ``python -m pyexcel.kernel`` to dial
+in, then drive the HELLO / PING / SHUTDOWN protocol from this side. This
+gives us confidence in the Python half independent of the C# integration
+test, which exercises the same path from the other direction.
+
+Skipped on Windows: the transport for ``win32`` is still a TODO (see
+``pyexcel.kernel.transport``).
+"""
+
+from __future__ import annotations
+
+import os
+import socket
+import subprocess
+import sys
+import tempfile
+import threading
+import time
+import uuid
+from pathlib import Path
+
+import pytest
+
+from pyexcel.kernel.framing import (
+    PROTOCOL_VERSION,
+    FrameType,
+    encode_frame,
+    read_frame,
+)
+
+pytestmark = pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="windows named-pipe transport not implemented in Phase 2 step 3",
+)
+
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+EMBEDDED = REPO_ROOT / "embedded"
+
+
+def _pipe_path(pipe_name: str) -> str:
+    return os.path.join(tempfile.gettempdir(), f"CoreFxPipe_{pipe_name}")
+
+
+class _Server:
+    """Minimal AF_UNIX server that pretends to be C# KernelSupervisor."""
+
+    def __init__(self, pipe_name: str) -> None:
+        self.pipe_name = pipe_name
+        self.path = _pipe_path(pipe_name)
+        self._listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        # Clean up any stale socket file from an aborted previous run.
+        try:
+            os.unlink(self.path)
+        except FileNotFoundError:
+            pass
+        self._listener.bind(self.path)
+        self._listener.listen(1)
+        self._conn: socket.socket | None = None
+
+    def accept(self, timeout_s: float = 5.0) -> None:
+        self._listener.settimeout(timeout_s)
+        self._conn, _ = self._listener.accept()
+        self._conn.settimeout(timeout_s)
+
+    def send(self, frame_type: FrameType, meta: dict) -> None:
+        assert self._conn is not None
+        self._conn.sendall(encode_frame(frame_type, meta))
+
+    def recv(self):
+        assert self._conn is not None
+
+        def read_exact(n: int) -> bytes:
+            buf = bytearray()
+            while len(buf) < n:
+                chunk = self._conn.recv(n - len(buf))
+                if not chunk:
+                    return bytes(buf)
+                buf.extend(chunk)
+            return bytes(buf)
+
+        return read_frame(read_exact)
+
+    def close(self) -> None:
+        for s in (self._conn, self._listener):
+            if s is None:
+                continue
+            try:
+                s.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
+            s.close()
+        try:
+            os.unlink(self.path)
+        except FileNotFoundError:
+            pass
+
+
+def _spawn_kernel(pipe_name: str) -> subprocess.Popen:
+    env = os.environ.copy()
+    env["PYTHONPATH"] = str(EMBEDDED) + os.pathsep + env.get("PYTHONPATH", "")
+    env["PYTHONUNBUFFERED"] = "1"
+    return subprocess.Popen(
+        [sys.executable, "-X", "utf8", "-m", "pyexcel.kernel", "--pipe", pipe_name],
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+
+
+def _drain(proc: subprocess.Popen, timeout_s: float = 5.0) -> tuple[int, str, str]:
+    try:
+        out, err = proc.communicate(timeout=timeout_s)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        out, err = proc.communicate()
+    return proc.returncode, out.decode(errors="replace"), err.decode(errors="replace")
+
+
+def test_kernel_handshake_ping_shutdown_roundtrip():
+    pipe_name = "pyexcel-test-" + uuid.uuid4().hex
+    server = _Server(pipe_name)
+    proc = _spawn_kernel(pipe_name)
+
+    try:
+        server.accept(timeout_s=5.0)
+
+        # Handshake: server (us) sends HELLO first.
+        server.send(FrameType.HELLO, {"protocol": PROTOCOL_VERSION})
+        client_hello = server.recv()
+        assert client_hello.type is FrameType.HELLO
+        assert client_hello.meta == {"protocol": PROTOCOL_VERSION}
+
+        # PING/PONG with nonce echo.
+        server.send(FrameType.PING, {"nonce": "n1"})
+        pong = server.recv()
+        assert pong.type is FrameType.PONG
+        assert pong.meta == {"nonce": "n1"}
+
+        # SHUTDOWN -> clean exit (return code 0).
+        server.send(FrameType.SHUTDOWN, {})
+        rc, _, err = _drain(proc, timeout_s=5.0)
+        assert rc == 0, f"kernel exited with {rc}; stderr={err!r}"
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait(timeout=2)
+        server.close()
+
+
+def test_kernel_rejects_wrong_protocol_in_hello():
+    pipe_name = "pyexcel-test-" + uuid.uuid4().hex
+    server = _Server(pipe_name)
+    proc = _spawn_kernel(pipe_name)
+
+    try:
+        server.accept(timeout_s=5.0)
+        server.send(FrameType.HELLO, {"protocol": PROTOCOL_VERSION + 999})
+
+        # Kernel should reply with ERROR then exit non-zero. The order
+        # depends on how fast the OS flushes — we only assert end state.
+        rc, _, err = _drain(proc, timeout_s=5.0)
+        assert rc != 0, "kernel should exit non-zero on protocol mismatch"
+        assert "protocol mismatch" in err.lower() or "handshake" in err.lower()
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait(timeout=2)
+        server.close()
+
+
+def test_kernel_unsupported_frame_returns_error_and_keeps_running():
+    pipe_name = "pyexcel-test-" + uuid.uuid4().hex
+    server = _Server(pipe_name)
+    proc = _spawn_kernel(pipe_name)
+
+    try:
+        server.accept(timeout_s=5.0)
+        server.send(FrameType.HELLO, {"protocol": PROTOCOL_VERSION})
+        _ = server.recv()  # client HELLO
+
+        # RUN_REQUEST isn't implemented in Phase 2 step 3 — the kernel should
+        # respond with ERROR but stay in its loop, ready for the next frame.
+        server.send(FrameType.RUN_REQUEST, {"job": "noop"})
+        err_frame = server.recv()
+        assert err_frame.type is FrameType.ERROR
+        assert "unsupported" in err_frame.meta.get("reason", "").lower()
+
+        # Loop is intact: a PING still gets a PONG.
+        server.send(FrameType.PING, {"nonce": "after-error"})
+        pong = server.recv()
+        assert pong.type is FrameType.PONG
+        assert pong.meta == {"nonce": "after-error"}
+
+        server.send(FrameType.SHUTDOWN, {})
+        rc, _, err = _drain(proc, timeout_s=5.0)
+        assert rc == 0, f"kernel exited with {rc}; stderr={err!r}"
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait(timeout=2)
+        server.close()
