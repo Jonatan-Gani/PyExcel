@@ -263,7 +263,7 @@ public sealed class KernelSupervisor : IDisposable
             throw new TimeoutException(
                 $"kernel did not connect to pipe within {timeoutMs}ms");
 
-        if (proc.HasExited && !connectTask.IsCompletedSuccessfully)
+        if (proc.HasExited && connectTask.Status != TaskStatus.RanToCompletion)
         {
             // Drain any stderr the child produced — usually a Python traceback
             // explaining why pyexcel.kernel couldn't be loaded.
