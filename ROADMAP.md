@@ -23,10 +23,16 @@ single kernel package (it must stay Python — it runs user `transform()` code).
 
 ## Status & progress log
 
-**Current position:** Phase 0 ✅ · Phase 1 ✅ · Phase 2 in progress (framing + transport + HELLO/PING handshake landed; SID/ACL check + worker/run pipeline still ahead).
+**Current position:** Phase 0 ✅ · Phase 1 ✅ · Phase 2 ✅ · **Phase 3 / Phase 4 next.** A focused brief for the next session — what shipped, the public APIs, what Phase 4 still has to build — is in [`docs/phase4-handoff.md`](docs/phase4-handoff.md).
 
 Terse running record (newest first) so a new session can pick up where work stopped:
 
+- **2026-05-23 — Phase 2 complete.** Shipped the rest of the kernel data plane in one session, both CI lanes green on `ae0b4f0`:
+  - `arrow_io.py` — shape-preserving Arrow IPC for DataFrame / Series / list / tuple / 1-D-or-2-D numpy / scalar, with `pyexcel-shape` and `pyexcel-orientation` schema metadata so the host can reconstruct cell geometry. 39 pytest tests.
+  - `worker.py` — pure `run_job(meta, payloads) -> JobOutcome`; loads the user script (mtime-cached), decodes Arrow payloads, calls the target function, replies with `RUN_RESULT` or a typed `ERROR` (8 stable codes from `BadRequest` through `Exception`). 23 unit tests + 2 e2e supervisor tests.
+  - `PyExcel.Kernel.Client` — new assembly. Typed `RunRequest` / `RunResult` / `KernelException`, `ProgressReceived` / `LogReceived` events, sync `Run` + async `RunAsync`, fire-and-forget `Cancel`. Required a dual-lock refactor of `KernelSupervisor` (`ExchangeSemaphore` + separate read/write locks) so Cancel can fire while a Run is parked in a read. 15 C# integration tests against a real Python subprocess.
+  - Windows named-pipe transport — Python `_winapi` client against `\\.\pipe\<name>` with retry on `ERROR_PIPE_BUSY` / `ERROR_FILE_NOT_FOUND`. C# side now sets a DACL granting only the current-user SID at pipe creation (net48 only — netstandard2.0 is Linux-only in CI, so the DACL block is `#if NETFRAMEWORK`).
+  - CI: Windows lane now installs Python 3.12 + pyarrow/pandas/numpy and runs the C# integration tests against the Win32 transport. Both lanes green; Phase 2 exit criteria fully met.
 - **2026-05-23 — Phase 2 step 3: KernelSupervisor + python entry point.** Added `KernelSupervisor.cs` (C# owns the named-pipe server, spawns `python -m pyexcel.kernel --pipe <name>` via argv, runs HELLO handshake with protocol-version check, exposes `Ping`/`Shutdown`, and force-kills on dispose so no orphaned python.exe). Added `embedded/pyexcel/kernel/{transport.py, supervisor.py, __main__.py}` — POSIX/AF_UNIX client connecting to `/tmp/CoreFxPipe_<name>` (matches .NET's pipe-on-Linux path), supervisor event loop handling HELLO/PING/PONG/SHUTDOWN, ERROR reply for not-yet-supported frames. Tests: 3 C# integration tests (round-trip + 10×PING + dispose-without-shutdown) and 3 pytest tests (handshake roundtrip, protocol-mismatch rejection, ERROR-after-unsupported-frame keeps loop alive). CI workflow reordered so Python is set up before `dotnet test` (integration tests spawn python). Windows transport stub raises `NotImplementedError` — landing alongside the Windows kernel CI slice in a later step.
 - **2026-05-23 — Phase 2 step 2: FrameTransport (stream + named-pipe).** Added `FrameTransport.cs` wrapping any `Stream` (MemoryStream for tests, `NamedPipeClientStream` for production) with synchronous `ReadFrame`/`WriteFrame` and a `ConnectNamedPipe` static factory. Added `FrameTransportTests.cs` covering MemoryStream roundtrip, dispose semantics, oversize rejection, and a real Windows-named-pipe/Linux-Unix-domain-socket roundtrip pairing client to in-process server.
 - **2026-05-23 — Phase 2 step 1: framing.** Added `PyExcel.Bridge` (multi-target `net48`/`netstandard2.0`) with `Framing.cs` + a stdlib `CanonicalJson` encoder/decoder, mirroring `framing.py` byte-for-byte. Added `PyExcel.Bridge.Tests` (xUnit, net8.0) with the Python test-suite ported 1:1, plus cross-language golden hex vectors (`test_cross_language_vectors.py` ↔ `CrossLanguageVectorsTests.cs`) that pin the on-wire format. CI now builds the netstandard slice on Linux and runs `dotnet test`.
@@ -133,6 +139,11 @@ workbook updates every ribbon field correctly; state survives a save/reopen.
 ---
 
 ## Phase 4 — Excel marshalling & first run (the thin slice)
+
+> **Handoff brief:** [`docs/phase4-handoff.md`](docs/phase4-handoff.md) —
+> what Phase 2 shipped (public APIs, wire contract, known gaps) and what
+> Phase 4 still has to build (C#-side Arrow encoder, `=PY.RUN` UDF,
+> short-term kernel lifecycle). Read that first.
 
 **Objective.** Prove one full run works end to end — this de-risks the pipe,
 Arrow, COM interop, and the threading model in a single slice before going wide.
