@@ -10,9 +10,15 @@ Lifecycle of a kernel process:
        wrong on the wire exits 1 so the supervisor on the other end can
        detect the death and re-spawn.
 
-Phase 2 step 3 wires up the minimum that proves the round-trip works
-end-to-end: HELLO, PING/PONG, SHUTDOWN. RUN_REQUEST / RUN_RESULT / worker
-process management arrive in subsequent steps.
+Frames handled in-loop:
+
+* ``HELLO`` — handshake (server speaks first, we mirror back).
+* ``PING`` — answered with ``PONG`` echoing any ``nonce`` meta.
+* ``RUN_REQUEST`` — delegated to :mod:`pyexcel.kernel.worker` and answered
+  inline with either ``RUN_RESULT`` or ``ERROR`` depending on outcome.
+* ``SHUTDOWN`` — clean exit with code 0.
+
+Anything else gets an ``ERROR`` reply and the loop stays alive.
 """
 
 from __future__ import annotations
@@ -20,6 +26,7 @@ from __future__ import annotations
 import sys
 from typing import NoReturn
 
+from . import worker
 from .framing import (
     PROTOCOL_VERSION,
     Frame,
@@ -31,8 +38,13 @@ from .framing import (
 from .transport import FrameTransport, TransportError, connect
 
 
-def _send(transport: FrameTransport, frame_type: FrameType, meta: dict) -> None:
-    transport.write_all(encode_frame(frame_type, meta))
+def _send(
+    transport: FrameTransport,
+    frame_type: FrameType,
+    meta: dict,
+    payloads: tuple = (),
+) -> None:
+    transport.write_all(encode_frame(frame_type, meta, payloads))
 
 
 def _recv(transport: FrameTransport) -> Frame:
@@ -84,11 +96,17 @@ def _dispatch(transport: FrameTransport, frame: Frame) -> bool:
         _send(transport, FrameType.PONG, {"nonce": nonce})
         return True
 
+    if frame.type is FrameType.RUN_REQUEST:
+        outcome = worker.run_job(frame.meta, frame.payloads)
+        reply_type = FrameType.RUN_RESULT if outcome.success else FrameType.ERROR
+        _send(transport, reply_type, outcome.meta, tuple(outcome.payloads))
+        return True
+
     if frame.type is FrameType.SHUTDOWN:
         return False
 
-    # Everything else is unimplemented until later steps. Reply with ERROR
-    # rather than silently ignoring — the C# side will surface this in tests.
+    # Anything not in the dispatch table above (CANCEL, LIST_JOBS, …) gets a
+    # polite ERROR rather than silent drop. The C# side surfaces this in tests.
     _send(
         transport,
         FrameType.ERROR,

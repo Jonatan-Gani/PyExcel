@@ -11,9 +11,13 @@ Modules:
 * :mod:`pyexcel.kernel.arrow_io` — Arrow IPC marshalling for the data
   plane. Encodes DataFrame / list / scalar payloads with shape metadata
   so the host can spill back into the right cell geometry.
+* :mod:`pyexcel.kernel.worker` — pure ``run_job(meta, payloads) -> JobOutcome``.
+  Loads the user's script, calls the target function, marshals the result
+  back. Caches user modules by absolute path + mtime so unchanged scripts
+  don't re-import on every call.
 * :mod:`pyexcel.kernel.supervisor` — the in-process event loop. Performs
-  the HELLO handshake, then dispatches PING/PONG and SHUTDOWN. The
-  worker / RUN_REQUEST plumbing land in subsequent Phase 2 steps.
+  the HELLO handshake, then dispatches PING/PONG, RUN_REQUEST (via
+  :mod:`worker`), and SHUTDOWN.
 * :mod:`pyexcel.kernel.__main__` — the ``python -m pyexcel.kernel`` entry
   point. Parses argv, opens the transport, hands control to the
   supervisor.

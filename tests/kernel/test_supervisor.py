@@ -18,6 +18,7 @@ import socket
 import subprocess
 import sys
 import tempfile
+import textwrap
 import threading
 import time
 import uuid
@@ -25,6 +26,7 @@ from pathlib import Path
 
 import pytest
 
+from pyexcel.kernel import arrow_io
 from pyexcel.kernel.framing import (
     PROTOCOL_VERSION,
     FrameType,
@@ -173,7 +175,7 @@ def test_kernel_rejects_wrong_protocol_in_hello():
         server.close()
 
 
-def test_kernel_unsupported_frame_returns_error_and_keeps_running():
+def test_kernel_run_request_with_bad_meta_returns_error_and_keeps_running():
     pipe_name = "pyexcel-test-" + uuid.uuid4().hex
     server = _Server(pipe_name)
     proc = _spawn_kernel(pipe_name)
@@ -183,12 +185,12 @@ def test_kernel_unsupported_frame_returns_error_and_keeps_running():
         server.send(FrameType.HELLO, {"protocol": PROTOCOL_VERSION})
         _ = server.recv()  # client HELLO
 
-        # RUN_REQUEST isn't implemented in Phase 2 step 3 — the kernel should
-        # respond with ERROR but stay in its loop, ready for the next frame.
-        server.send(FrameType.RUN_REQUEST, {"job": "noop"})
+        # RUN_REQUEST missing 'script' → worker returns ERROR/BadRequest.
+        server.send(FrameType.RUN_REQUEST, {"run_id": "bad"})
         err_frame = server.recv()
         assert err_frame.type is FrameType.ERROR
-        assert "unsupported" in err_frame.meta.get("reason", "").lower()
+        assert err_frame.meta["code"] == "BadRequest"
+        assert err_frame.meta["run_id"] == "bad"
 
         # Loop is intact: a PING still gets a PONG.
         server.send(FrameType.PING, {"nonce": "after-error"})
@@ -199,6 +201,93 @@ def test_kernel_unsupported_frame_returns_error_and_keeps_running():
         server.send(FrameType.SHUTDOWN, {})
         rc, _, err = _drain(proc, timeout_s=5.0)
         assert rc == 0, f"kernel exited with {rc}; stderr={err!r}"
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait(timeout=2)
+        server.close()
+
+
+def test_kernel_run_request_executes_user_script_end_to_end(tmp_path):
+    # Write a real .py script and drive the kernel through one full
+    # RUN_REQUEST -> RUN_RESULT exchange. This is the integration sibling
+    # of the unit tests in test_worker.py.
+    script = tmp_path / "double.py"
+    script.write_text(textwrap.dedent("""
+        def transform(x):
+            return x * 2
+    """))
+
+    pipe_name = "pyexcel-test-" + uuid.uuid4().hex
+    server = _Server(pipe_name)
+    proc = _spawn_kernel(pipe_name)
+
+    try:
+        server.accept(timeout_s=5.0)
+        server.send(FrameType.HELLO, {"protocol": PROTOCOL_VERSION})
+        _ = server.recv()  # client HELLO
+
+        # Send the job: one Arrow-encoded scalar argument.
+        payload = arrow_io.encode(21)
+        encoded = encode_frame(
+            FrameType.RUN_REQUEST,
+            {"run_id": "job-1", "script": str(script)},
+            (payload,),
+        )
+        server._conn.sendall(encoded)  # type: ignore[union-attr]
+
+        result = server.recv()
+        assert result.type is FrameType.RUN_RESULT, (
+            f"got {result.type.name}; meta={result.meta!r}"
+        )
+        assert result.meta["run_id"] == "job-1"
+        assert "duration_ms" in result.meta
+        assert len(result.payloads) == 1
+        assert arrow_io.decode(result.payloads[0]) == 42
+
+        server.send(FrameType.SHUTDOWN, {})
+        rc, _, err = _drain(proc, timeout_s=5.0)
+        assert rc == 0, f"kernel exited with {rc}; stderr={err!r}"
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait(timeout=2)
+        server.close()
+
+
+def test_kernel_run_request_user_exception_produces_error_frame(tmp_path):
+    script = tmp_path / "boom.py"
+    script.write_text(textwrap.dedent("""
+        def transform(x):
+            raise ValueError(f"no good: {x}")
+    """))
+
+    pipe_name = "pyexcel-test-" + uuid.uuid4().hex
+    server = _Server(pipe_name)
+    proc = _spawn_kernel(pipe_name)
+
+    try:
+        server.accept(timeout_s=5.0)
+        server.send(FrameType.HELLO, {"protocol": PROTOCOL_VERSION})
+        _ = server.recv()
+
+        encoded = encode_frame(
+            FrameType.RUN_REQUEST,
+            {"run_id": "job-2", "script": str(script)},
+            (arrow_io.encode(99),),
+        )
+        server._conn.sendall(encoded)  # type: ignore[union-attr]
+
+        err_frame = server.recv()
+        assert err_frame.type is FrameType.ERROR
+        assert err_frame.meta["code"] == "Exception"
+        assert err_frame.meta["type"] == "ValueError"
+        assert "99" in err_frame.meta["message"]
+        assert "boom.py" in err_frame.meta["traceback"]
+
+        server.send(FrameType.SHUTDOWN, {})
+        rc, _, _ = _drain(proc, timeout_s=5.0)
+        assert rc == 0
     finally:
         if proc.poll() is None:
             proc.kill()
