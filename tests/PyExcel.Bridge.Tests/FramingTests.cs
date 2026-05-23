@@ -210,7 +210,7 @@ public class FramingTests
     public void DecodeRejectsOversizeAnnouncement()
     {
         const int cap = 1024;
-        const uint announcedBody = 10 * 1024 * 1024;
+        uint announcedBody = 10 * 1024 * 1024;
         var bogus = new byte[4];
         bogus[0] = (byte)announcedBody;
         bogus[1] = (byte)(announcedBody >> 8);
