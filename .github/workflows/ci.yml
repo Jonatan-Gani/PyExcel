@@ -25,8 +25,11 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Install pytest
-        run: python -m pip install --upgrade pip pytest
+      - name: Install Python kernel dependencies
+        # Kernel runtime requires pyarrow/pandas/numpy (see requirements.txt).
+        # plotly/matplotlib are intentionally excluded until worker.py needs them —
+        # they add ~150 MB to the CI install for no test benefit yet.
+        run: python -m pip install --upgrade pip pytest pyarrow pandas numpy
 
       - name: Build PyExcel.Common (netstandard2.0)
         run: >-
