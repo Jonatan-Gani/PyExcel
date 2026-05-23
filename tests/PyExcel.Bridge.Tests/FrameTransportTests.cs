@@ -118,7 +118,7 @@ public class FrameTransportTests
 
         var serverTask = Task.Run(async () =>
         {
-            await server.WaitForConnectionAsync().ConfigureAwait(false);
+            await server.WaitForConnectionAsync();
             // Server reads the client's HELLO, replies with PONG.
             var hello = Framing.ReadFrame(server);
             Assert.Equal(FrameType.Hello, hello.Type);
@@ -142,7 +142,7 @@ public class FrameTransportTests
             Assert.Equal("client", pong.Meta["echo"]);
         }
 
-        await serverTask.ConfigureAwait(false);
+        await serverTask;
     }
 
     [Fact]
@@ -168,13 +168,13 @@ public class FrameTransportTests
 
         var serverTask = Task.Run(async () =>
         {
-            await server.WaitForConnectionAsync().ConfigureAwait(false);
+            await server.WaitForConnectionAsync();
             // Drop the connection without sending anything.
             server.Disconnect();
         });
 
         using var client = FrameTransport.ConnectNamedPipe(pipeName, connectTimeoutMs: 5000);
-        await serverTask.ConfigureAwait(false);
+        await serverTask;
 
         // Reading from a closed peer raises TruncatedFrameException on the
         // first read (no length prefix arrived).
