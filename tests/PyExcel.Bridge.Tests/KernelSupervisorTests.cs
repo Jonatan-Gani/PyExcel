@@ -81,17 +81,32 @@ public class KernelSupervisorTests
         Assert.False(string.IsNullOrEmpty(pythonPath), "embedded path not found");
 
         var sup = KernelSupervisor.StartPython(python!, pythonPath!);
-        var proc = sup.Process;
-        Assert.False(proc.HasExited);
+        var pid = sup.Process.Id;
+        Assert.False(sup.Process.HasExited);
 
         sup.Dispose();
 
-        // Dispose sends a best-effort SHUTDOWN then waits briefly; either way
-        // the process must be gone by the time Dispose returns. This is the
-        // "no orphaned python.exe after Excel closes" guarantee from the
-        // roadmap, exercised in the unhappy path where the caller forgot to
-        // call Shutdown explicitly.
-        Assert.True(proc.HasExited, "child process still alive after Dispose");
+        // Dispose disposes the underlying Process object too — the captured
+        // reference is no longer queryable. Verify the OS process is gone by
+        // looking it up by PID. This is the "no orphaned python.exe after
+        // Excel closes" guarantee from the roadmap, exercised in the unhappy
+        // path where the caller forgot to call Shutdown explicitly.
+        Assert.False(IsProcessAlive(pid),
+            $"python child (pid {pid}) still alive after KernelSupervisor.Dispose");
+    }
+
+    private static bool IsProcessAlive(int pid)
+    {
+        try
+        {
+            using var probe = System.Diagnostics.Process.GetProcessById(pid);
+            return !probe.HasExited;
+        }
+        catch (ArgumentException)
+        {
+            // No process with that PID — it's been reaped, which is what we want.
+            return false;
+        }
     }
 
     // -------------------------------------------------------------------------
