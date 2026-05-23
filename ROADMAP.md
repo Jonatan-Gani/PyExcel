@@ -105,7 +105,7 @@ kernel's lifetime is owned and deterministic.
 - [ ] `PyExcel.Kernel.Client` — typed API: `RunRequest`, `RunResult`, `Progress`, `Cancel`, `Log` over frames.
 - [x] Python `supervisor.py` — connects to the pipe, runs the HELLO/PING/PONG/SHUTDOWN loop. Worker dispatch is a follow-up.
 - [ ] Python `worker.py` — run one job: receive request → execute → reply.
-- [ ] Python `arrow_io.py` — DataFrame / list / scalar ↔ Arrow IPC stream (everything marshals as Arrow).
+- [x] Python `arrow_io.py` — DataFrame / list / scalar ↔ Arrow IPC stream. Shape (`table`/`vector`/`scalar`) and vector orientation are carried as Arrow schema metadata so the host can spill back into the right cell geometry.
 
 **Exit criteria.** C# spawns the kernel, completes a `HELLO`/`PING`/`PONG`
 round-trip, and kills it cleanly on shutdown. Framing conformance tests pass in

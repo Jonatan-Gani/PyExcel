@@ -8,6 +8,9 @@ Modules:
 * :mod:`pyexcel.kernel.transport` — POSIX (AF_UNIX) / Windows (named pipe)
   client wrappers. The C# ``KernelSupervisor`` owns the pipe server; we
   connect into it.
+* :mod:`pyexcel.kernel.arrow_io` — Arrow IPC marshalling for the data
+  plane. Encodes DataFrame / list / scalar payloads with shape metadata
+  so the host can spill back into the right cell geometry.
 * :mod:`pyexcel.kernel.supervisor` — the in-process event loop. Performs
   the HELLO handshake, then dispatches PING/PONG and SHUTDOWN. The
   worker / RUN_REQUEST plumbing land in subsequent Phase 2 steps.
