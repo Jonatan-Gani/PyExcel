@@ -63,22 +63,31 @@ Implementation reference: Excel-DNA's
 or `Application` COM via `ExcelDnaUtil.Application`. Lifetime is the
 add-in lifetime (`AutoOpen` → `AutoClose`).
 
-### 3. CustomXMLPart persistence (~150 lines)
+### 3. CustomXMLPart persistence
 
-On `WorkbookBeforeSave`: serialise `StateService.Get(key)` to XML,
-write it to the workbook's CustomXMLPart collection (delete previous
-PyExcel part first). On `WorkbookOpen`: find the part by namespace,
-deserialise back into the StateService.
+**Codec half done.** `WorkbookStateCodec.Serialize` /
+`WorkbookStateCodec.Deserialize` (in `src/PyExcel.State/`) handle the
+XML round-trip. Schema: root `<pyexcel state-version="1"
+xmlns="urn:pyexcel:state:1">` carrying `<enabled>`, optional
+`<selected-script>` / `<py-input>` / `<py-output>` /
+`<selected-action>`, and an `<actions>` list of `<action>` elements
+(each with `name`/`script`/`input`/`output` attributes and an optional
+`<kwargs>` child whose ordering is deterministic on serialise so a
+no-op save doesn't churn the workbook's binary diff). Persisted
+fields: `Enabled`, `SelectedScript`, `PyInput`, `PyOutput`,
+`SelectedActionName`, `Actions`. Transient (NOT persisted):
+`WorkbookKey` (caller supplies on Deserialize), `CurrentSheet`,
+`AvailableScripts`. 15 round-trip + error-path tests in
+`WorkbookStateCodecTests.cs`. Bumping the schema means bumping the
+`urn:pyexcel:state:N` namespace AND
+`WorkbookStateCodec.SchemaVersion`.
 
-XML schema decision: keep it human-readable but versioned —
-`<pyexcel state-version="1">` at the root, child elements
-`<scripts>`, `<actions>`, etc. Don't reuse XAML or any complex
-serialiser; hand-roll with `XDocument` so the round-trip is auditable
-in tests.
-
-Pure XML codec **is** testable on Linux (no COM); split it so the
-serializer lives in `PyExcel.State` and the COM-bound "find the part,
-read it, write it" lives in a Windows-only `WorkbookStatePersister`.
+**COM half still to do:** Windows-only `WorkbookStatePersister` that
+on `WorkbookBeforeSave` calls `Serialize`, writes the result into the
+workbook's `CustomXMLPart` collection (deleting any existing
+`urn:pyexcel:state:1` part first), and on `WorkbookOpen` finds the
+part by namespace and calls `Deserialize` back into the
+`StateService`. Lives in `PyExcel.Addin` under `#if NETFRAMEWORK`.
 
 ### 4. UDF → kernel cancellation bridge (~80 lines)
 
@@ -166,7 +175,7 @@ mention only for traceability.
 |---|---|---|
 | #1 `ExcelWorkbookContext` | ❌ | COM-bound; manual smoke test |
 | #2 `AppEventSink` | ❌ | COM events; manual smoke test |
-| #3 CustomXMLPart codec | ✅ (codec only) | Split serialiser into `PyExcel.State`; the read/write live on Windows |
+| #3 CustomXMLPart codec | ✅ landed | `WorkbookStateCodec` + 15 tests; COM read/write part still to do |
 | #4 UDF cancel bridge | ⚠️ | Async flow testable via fake ExcelAsyncUtil; the real flow needs Excel |
 | #5 Progress UI | ❌ | WinForms; manual |
 | #6 Ribbon range parser | ✅ landed | `RibbonRangeParser` + 15 tests |
@@ -179,7 +188,7 @@ mention only for traceability.
 
 1. ~~**#6 Ribbon range parser**~~ — done, see `RibbonRangeParser.cs`.
 2. **#1 ExcelWorkbookContext** — small, mechanical. (~1 commit)
-3. **#3 CustomXMLPart codec** (serialiser only, Linux-tested) — (~1 commit)
+3. ~~**#3 CustomXMLPart codec**~~ (codec only) — done, see `WorkbookStateCodec.cs`. COM persister still to do.
 4. **#2 AppEventSink** + COM-side CustomXMLPart persistence + smoke
    test in Excel. **This is the milestone that unlocks the Phase 3
    exit criteria.** (~2 commits)
