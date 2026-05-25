@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <!--
+      Per-workbook state — the single source of truth for the ribbon.
+      Multi-targets net48 (production .xll) and netstandard2.0 (Linux CI)
+      so the pure-logic core (StateService, WorkbookState,
+      ScriptDirectoryWatcher) builds and tests cross-platform.
+
+      Anything COM-bound (Excel.Application event sink → updates,
+      CustomXMLPart serialisation → write/read on a real workbook)
+      lives under #if NETFRAMEWORK so the netstandard build doesn't see it.
+    -->
+    <TargetFrameworks>net48;netstandard2.0</TargetFrameworks>
+    <RootNamespace>PyExcel.State</RootNamespace>
+    <AssemblyName>PyExcel.State</AssemblyName>
+    <Platforms>x64;AnyCPU</Platforms>
+  </PropertyGroup>
+
+</Project>

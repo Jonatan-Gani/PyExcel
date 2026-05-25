@@ -5,6 +5,7 @@ using System.Runtime.InteropServices;
 using ExcelDna.Integration;
 using ExcelDna.Integration.CustomUI;
 using PyExcel.Common.Logging;
+using PyExcel.State;
 
 namespace PyExcel.Ribbon;
 
@@ -63,6 +64,43 @@ public class PyExcelRibbon : ExcelRibbon
     {
         _ribbon = ribbon;
         _log.Info("Ribbon loaded");
+        // Subscribe to state changes so the ribbon redraws when the
+        // active workbook's state mutates. We queue Invalidate onto the
+        // macro queue rather than calling it inline — state changes can
+        // originate from a FileSystemWatcher worker thread, and
+        // IRibbonUI is COM-affine.
+        PyExcelServices.State.StateChanged += OnStateChanged;
+    }
+
+    private void OnStateChanged(object? sender, StateChangedEventArgs e)
+    {
+        if (_ribbon is null) return;
+        // Skip work if the change is to a workbook other than the active
+        // one — most cells of the ribbon only render the active workbook.
+        var activeKey = PyExcelServices.WorkbookContext.CurrentWorkbookKey;
+        if (activeKey is not null
+            && !string.Equals(activeKey, e.WorkbookKey, StringComparison.Ordinal))
+        {
+            return;
+        }
+        try
+        {
+            ExcelAsyncUtil.QueueAsMacro(() => _ribbon?.Invalidate());
+        }
+        catch (Exception ex)
+        {
+            _log.Error("Ribbon Invalidate queue failed", ex);
+        }
+    }
+
+    /// <summary>Read the state for the currently-active workbook,
+    /// returning <see cref="WorkbookState.Empty"/> if no workbook is
+    /// active so every getter has a well-defined value to read.</summary>
+    private WorkbookState ActiveState()
+    {
+        var key = PyExcelServices.WorkbookContext.CurrentWorkbookKey;
+        if (key is null) return WorkbookState.Empty("<no-workbook>");
+        return PyExcelServices.State.Get(key);
     }
 
     public override object? LoadImage(string imageName)
@@ -82,13 +120,7 @@ public class PyExcelRibbon : ExcelRibbon
     // modRibbon.bas. Returns false until Phase 3 lands the StateService.
     // -------------------------------------------------------------------------
 
-    public bool RibbonEnabled(IRibbonControl control)
-    {
-        // PHASE 3: read from StateService — has the active workbook been
-        // Enabled? For now: false everywhere except the bootstrap buttons
-        // (which the XML omits from getEnabled wiring).
-        return false;
-    }
+    public bool RibbonEnabled(IRibbonControl control) => ActiveState().Enabled;
 
     // -------------------------------------------------------------------------
     // Main group
@@ -136,34 +168,79 @@ public class PyExcelRibbon : ExcelRibbon
     public void OnEditPython(IRibbonControl control)
         => StubAction(control, "OnEditPython", "modRibbon.bas:1400 — shells the user's editor");
 
-    public int GetScriptCount(IRibbonControl control) => 0;
-    public string GetScriptLabel(IRibbonControl control, int index) => string.Empty;
-    public string GetScriptText(IRibbonControl control) => string.Empty;
+    public int GetScriptCount(IRibbonControl control) => ActiveState().AvailableScripts.Count;
+
+    public string GetScriptLabel(IRibbonControl control, int index)
+    {
+        var scripts = ActiveState().AvailableScripts;
+        return index >= 0 && index < scripts.Count ? scripts[index] : string.Empty;
+    }
+
+    public string GetScriptText(IRibbonControl control) => ActiveState().SelectedScript ?? string.Empty;
+
     public void OnScriptChange(IRibbonControl control, string text)
-        => StubChange(control, "OnScriptChange", "modRibbon.bas:1159", text);
+    {
+        var key = PyExcelServices.WorkbookContext.CurrentWorkbookKey;
+        if (key is null) return;
+        PyExcelServices.State.SetSelectedScript(key, string.IsNullOrEmpty(text) ? null : text);
+    }
 
-    public string GetPyInput(IRibbonControl control) => string.Empty;
+    public string GetPyInput(IRibbonControl control) => ActiveState().PyInput ?? string.Empty;
+
     public void OnPyInputChange(IRibbonControl control, string text)
-        => StubChange(control, "OnPyInputChange", "modRibbon.bas:980", text);
+    {
+        var key = PyExcelServices.WorkbookContext.CurrentWorkbookKey;
+        if (key is null) return;
+        PyExcelServices.State.SetPyInput(key, text);
+    }
 
-    public string GetPyOutput(IRibbonControl control) => string.Empty;
+    public string GetPyOutput(IRibbonControl control) => ActiveState().PyOutput ?? string.Empty;
+
     public void OnPyOutputChange(IRibbonControl control, string text)
-        => StubChange(control, "OnPyOutputChange", "modRibbon.bas:1023", text);
+    {
+        var key = PyExcelServices.WorkbookContext.CurrentWorkbookKey;
+        if (key is null) return;
+        PyExcelServices.State.SetPyOutput(key, text);
+    }
 
-    public int GetActionCount(IRibbonControl control) => 0;
-    public string GetActionLabel(IRibbonControl control, int index) => string.Empty;
-    public string GetActionText(IRibbonControl control) => string.Empty;
+    public int GetActionCount(IRibbonControl control) => ActiveState().Actions.Count;
+
+    public string GetActionLabel(IRibbonControl control, int index)
+    {
+        var actions = ActiveState().Actions;
+        return index >= 0 && index < actions.Count ? actions[index].Name : string.Empty;
+    }
+
+    public string GetActionText(IRibbonControl control)
+        => ActiveState().SelectedAction?.Name ?? string.Empty;
+
     public void OnActionChange(IRibbonControl control, string text)
-        => StubChange(control, "OnActionChange", "modRibbon.bas:1683", text);
+    {
+        var key = PyExcelServices.WorkbookContext.CurrentWorkbookKey;
+        if (key is null) return;
+        PyExcelServices.State.SetSelectedAction(key, string.IsNullOrEmpty(text) ? null : text);
+    }
 
     public void OnAddAction(IRibbonControl control)
-        => StubAction(control, "OnAddAction", "modRibbon.bas:1340 — shows EditActionForm");
+        => StubAction(control, "OnAddAction",
+            "modRibbon.bas:1340 — shows EditActionForm. " +
+            "Phase 8 ships the form; Phase 3 wires StateService.AddAction once it returns.");
 
     public void OnEditAction(IRibbonControl control)
-        => StubAction(control, "OnEditAction", "modRibbon.bas:1447 — shows EditActionForm pre-populated");
+        => StubAction(control, "OnEditAction",
+            "modRibbon.bas:1447 — shows EditActionForm pre-populated. " +
+            "Phase 8 ships the form; Phase 3 wires StateService.AddAction (upserts) once it returns.");
 
     public void OnDeleteAction(IRibbonControl control)
-        => StubAction(control, "OnDeleteAction", "modRibbon.bas:1736 — removes action from state");
+    {
+        // Unlike Add/Edit, Delete needs no form — we can wire it now.
+        var key = PyExcelServices.WorkbookContext.CurrentWorkbookKey;
+        if (key is null) { _log.Info("OnDeleteAction: no active workbook"); return; }
+        var selected = PyExcelServices.State.Get(key).SelectedActionName;
+        if (selected is null) { _log.Info("OnDeleteAction: no action selected"); return; }
+        PyExcelServices.State.DeleteAction(key, selected);
+        _log.Info($"OnDeleteAction: removed '{selected}' from workbook '{key}'");
+    }
 
     // -------------------------------------------------------------------------
     // Import group
