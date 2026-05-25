@@ -396,22 +396,33 @@ public static class ArrowMarshal
     /// <summary>
     /// Read one cell from an Arrow array, boxing it for transit through
     /// Excel's <c>object?[,]</c> grid. Returns null for null entries.
+    ///
+    /// <para>Numeric types are coerced to <see cref="double"/> on the way
+    /// out — symmetric with the encode side, which sends every numeric
+    /// (int / long / float / decimal / …) through the <see cref="DoubleArray"/>
+    /// path. This matches Excel's "every number is a double" model, so a
+    /// Python script that returns <c>42</c> spills as <c>42.0</c> rather
+    /// than crashing the host's downstream <c>double</c> arithmetic.</para>
     /// </summary>
     private static object? ReadCell(IArrowArray array, int index)
     {
         if (array.IsNull(index)) return null;
+        // Use Values[index] for primitive numeric types instead of
+        // GetValue(index), which returns Nullable<T>. We've already
+        // ruled out the null case above, so the direct buffer access
+        // is both safe and lets us cast to double without an unwrap dance.
         return array switch
         {
-            DoubleArray d => (object?)d.GetValue(index),
-            FloatArray f => f.GetValue(index),
-            Int64Array i64 => i64.GetValue(index),
-            Int32Array i32 => i32.GetValue(index),
-            Int16Array i16 => i16.GetValue(index),
-            Int8Array i8 => i8.GetValue(index),
-            UInt64Array u64 => u64.GetValue(index),
-            UInt32Array u32 => u32.GetValue(index),
-            UInt16Array u16 => u16.GetValue(index),
-            UInt8Array u8 => u8.GetValue(index),
+            DoubleArray d => (object?)d.Values[index],
+            FloatArray f => (object?)(double)f.Values[index],
+            Int64Array i64 => (object?)(double)i64.Values[index],
+            Int32Array i32 => (object?)(double)i32.Values[index],
+            Int16Array i16 => (object?)(double)i16.Values[index],
+            Int8Array i8 => (object?)(double)i8.Values[index],
+            UInt64Array u64 => (object?)(double)u64.Values[index],
+            UInt32Array u32 => (object?)(double)u32.Values[index],
+            UInt16Array u16 => (object?)(double)u16.Values[index],
+            UInt8Array u8 => (object?)(double)u8.Values[index],
             BooleanArray b => b.GetValue(index),
             StringArray s => s.GetString(index),
             _ => array.GetType().Name,  // last-ditch: surface the type name
