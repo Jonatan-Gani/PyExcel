@@ -70,13 +70,15 @@ public static class PyRunFunction
     {
         // ExcelAsyncUtil.Run dispatches the work to a background thread,
         // returns #N/A immediately, and refreshes the cell when the
-        // worker completes. The `parameters` array is used as the cache
+        // worker completes. The parameter tuple is used as the cache
         // key — identical inputs short-circuit to the cached result
-        // rather than re-spawning a job.
+        // rather than re-spawning a job. Positional args here because
+        // the ExcelDna 1.8.0 signature uses different parameter names
+        // than I'd guessed, and positions are the stable contract.
         return ExcelAsyncUtil.Run(
-            functionName: "PY.RUN",
-            parameters: new object?[] { script, input, function },
-            function: () => RunSynchronously(script, input, function));
+            "PY.RUN",
+            new object[] { script, input, function },
+            () => RunSynchronously(script, input, function));
     }
 
     /// <summary>
