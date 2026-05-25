@@ -27,6 +27,7 @@ single kernel package (it must stay Python — it runs user `transform()` code).
 
 Terse running record (newest first) so a new session can pick up where work stopped:
 
+- **2026-05-25 — Phase 4 step 7: `RibbonRangeParser`.** Pure-logic parser for the ribbon's Input / Output text fields. Accepts the `prices=A1:C10; signals=D1:D10` multi-binding syntax plus the existing anonymous `A1:C10` form; returns an ordered list of `RangeBinding(Name?, RangeText)` records. Whitespace tolerance around separators and `=`; empty entries (trailing/leading/double `;`) silently skipped. Malformed input throws `FormatException`: empty name before `=`, empty range after `=`, or duplicate name (case-sensitive — matches the rest of the codebase). 15 unit tests in `RibbonRangeParserTests.cs`. Unblocks #7 (`OnRunPython` ribbon button) per `docs/phase3-and-4-completion.md`.
 - **2026-05-24 — Phase 3 foundation: state + ribbon wiring + script watcher.** New `PyExcel.State` assembly (multi-targets net48 + netstandard2.0, no Excel-DNA dependency in the core so it tests cross-platform).
   - `StateService` — process-wide registry of immutable `WorkbookState` records keyed by workbook id, single coarse lock for mutation, `StateChanged` event for ribbon-invalidation hooks. Typed helpers for every ribbon edit (SetEnabled / SetSelectedScript / AddAction (upsert) / DeleteAction / …).
   - `WorkbookState` + `RibbonAction` records — immutable, with-clone-based mutation, `SelectedAction` convenience accessor.

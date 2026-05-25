@@ -112,21 +112,24 @@ The kernel currently emits no `PROGRESS` frames. Add a
 can call; supervisor sends it as `PROGRESS` over the wire. C# side is
 already wired (`KernelClient.ProgressReceived` event fires).
 
-### 6. Ribbon Input/Output `{name}=Range` parser (~80 lines)
+### 6. Ribbon Input/Output `{name}=Range` parser ✅
 
-Phase 4 spec item: the ribbon's Input field accepts a syntax like
-`prices=A1:C10; signals=D1:D10` to bind multiple named inputs into one
-PY.RUN call. Today the UDF takes a single positional `input` argument.
+Landed on `claude/dreamy-mayer-Ud10y` — `RibbonRangeParser.Parse` in
+`src/PyExcel.State/RibbonRangeParser.cs` returns an ordered list of
+`RangeBinding(Name?, RangeText)` records. Handles anonymous bindings
+(`A1:C10`), named bindings (`prices=A1:C10`), and the
+semicolon-separated multi-binding syntax
+(`prices=A1:C10; signals=D1:D10`). Empty / whitespace-only input maps
+to an empty list; malformed entries (empty name, empty range,
+duplicate name) throw `FormatException`. 15 unit tests in
+`tests/PyExcel.Bridge.Tests/RibbonRangeParserTests.cs`.
 
-Parse → dictionary of `{name: range-text}`. The dispatcher then calls
-`PyRun.Execute` with each range as a positional arg AND the names as
-metadata so the user's `transform(prices, signals)` function signature
-matches.
-
-This shifts `PyRun.Execute`'s signature from one input to `params
-object?[] inputs` (the kernel side already accepts arbitrary positional
-args). Modest refactor; cover with a parser test + an e2e test using a
-two-arg Python function.
+Still to do: shift `PyRun.Execute`'s signature from one input to
+`params object?[] inputs` so the dispatcher can wire each
+`RangeBinding` as a positional arg to the user's transform function.
+That refactor is bundled with #7 (`OnRunPython`) since the ribbon
+button is the only caller that benefits today — the UDF stays
+single-positional.
 
 ### 7. `OnRunPython` ribbon button (~100 lines)
 
@@ -166,7 +169,7 @@ mention only for traceability.
 | #3 CustomXMLPart codec | ✅ (codec only) | Split serialiser into `PyExcel.State`; the read/write live on Windows |
 | #4 UDF cancel bridge | ⚠️ | Async flow testable via fake ExcelAsyncUtil; the real flow needs Excel |
 | #5 Progress UI | ❌ | WinForms; manual |
-| #6 Ribbon range parser | ✅ | Pure-logic; unit-testable |
+| #6 Ribbon range parser | ✅ landed | `RibbonRangeParser` + 15 tests |
 | #7 OnRunPython | ⚠️ | Dispatcher logic yes; range read/write via COM no |
 | #8 Forms | ❌ | Phase 8 |
 
@@ -174,7 +177,7 @@ mention only for traceability.
 
 ## Suggested order for the next session
 
-1. **#6 Ribbon range parser** — pure logic, well-scoped, unlocks #7. (~1 commit)
+1. ~~**#6 Ribbon range parser**~~ — done, see `RibbonRangeParser.cs`.
 2. **#1 ExcelWorkbookContext** — small, mechanical. (~1 commit)
 3. **#3 CustomXMLPart codec** (serialiser only, Linux-tested) — (~1 commit)
 4. **#2 AppEventSink** + COM-side CustomXMLPart persistence + smoke
