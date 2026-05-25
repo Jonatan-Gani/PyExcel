@@ -27,6 +27,7 @@ single kernel package (it must stay Python — it runs user `transform()` code).
 
 Terse running record (newest first) so a new session can pick up where work stopped:
 
+- **2026-05-24 — Phase 4 step 2: `=PY.RUN` UDF.** Added `PyRunFunction.cs` (net48-only, `#if NETFRAMEWORK` so the netstandard2.0 / Linux CI slice ignores it). ExcelDna.Integration 1.8.0 conditional package reference for the net48 target. The UDF is a small translation layer over `PyRun.Execute` — Excel sentinel arguments map to `null`, the `PyRun.EmptyResult` sentinel maps to `ExcelEmpty.Value`, `KernelException` is rendered as `#VALUE!` in the cell with the Python traceback logged via `Trace.WriteLine`. Synchronous in this slice; async/progress/cancel (SAFE-1) and the ribbon button are separate Phase 4 items. No automated test coverage on this file alone — exercising `[ExcelFunction]` needs an actual Excel instance — but the dispatch core it delegates to is covered by `PyRunTests`' 13 end-to-end cases.
 - **2026-05-24 — Phase 4 step 1: marshalling + dispatch core.** New `PyExcel.Excel` assembly (multi-target net48 + netstandard2.0, Apache.Arrow 18.0.0). Three pieces:
   - `ArrowMarshal` — C# half of the kernel data plane. `EncodeTable` / `EncodeVector` / `EncodeScalar` / `PeekShape` / `Decode`. Schema metadata (`pyexcel-shape`, `pyexcel-orientation`) matches `arrow_io.py` byte-for-byte. Per-column type inference (double/bool/string with string fallback for mixed), nulls preserved. 23 unit tests.
   - `PythonResolver` + `KernelHost` — discovery (env var → workbook venv → PATH) plus a process-wide `Lazy<KernelClient>` whose first access boots the kernel and whose `Dispose` is the add-in unload hook. Phase 3 will move ownership to per-workbook state.
@@ -161,7 +162,9 @@ Arrow, COM interop, and the threading model in a single slice before going wide.
 - [x] `KernelHost` — process-wide `Lazy<KernelClient>` lifecycle wrapper for Phase 4. First `Client` access boots the kernel; idempotent `Dispose` for the add-in unload hook. Phase 3 will replace this with per-workbook ownership in `StateService`.
 - [x] `PythonResolver` — three-tier discovery: `PYEXCEL_PYTHON` env var → `<workbook>/.pyexcel-venv/{Scripts,bin}/python` → PATH fallback. Plus `ResolveEmbeddedPath()` walking up from `AppContext.BaseDirectory` to find `embedded/pyexcel/kernel/__main__.py`.
 - [ ] Parse the Input/Output ribbon fields, including the `{name}=Range` syntax.
-- [ ] Wire the `=PY.RUN` UDF (net48-only Excel-DNA wrapper around `PyRun.Execute`) and the `OnRunPython` ribbon button handler. **SAFE-1**: enqueue and return; never block the callback.
+- [x] `=PY.RUN(script, input, [function])` Excel-DNA UDF (net48-only) — thin wrapper around `PyRun.Execute` that translates Excel-DNA sentinel args (`ExcelMissing`/`ExcelEmpty`/`ExcelError`) to plain .NET shapes, threads errors back as `#VALUE!` with the full Python traceback logged to `Trace`. Synchronous for now; the SAFE-1 async / progress / cancel layer is a separate item.
+- [ ] `OnRunPython` ribbon button handler (same dispatch core as the UDF, called from the button event).
+- [ ] **SAFE-1**: enqueue and return; never block the calc thread (async-UDF variant + ribbon button).
 - [ ] Non-blocking progress UI driven by `PROGRESS` frames, with a working **Cancel**.
 - [ ] Archive a run (inputs, outputs, log); retention cap.
 - [ ] Surface kernel errors (full traceback, script name, log path) clearly to the user.

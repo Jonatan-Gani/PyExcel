@@ -17,6 +17,15 @@
 
   <ItemGroup>
     <PackageReference Include="Apache.Arrow" Version="18.0.0" />
+    <!--
+      Excel-DNA is net48-only (production .xll) — there's no
+      netstandard2.0 distribution and we wouldn't use it on Linux CI
+      anyway. PyRunFunction.cs is #if NETFRAMEWORK so the
+      netstandard2.0 build doesn't see the ExcelFunction attribute or
+      ExcelError types at all.
+    -->
+    <PackageReference Include="ExcelDna.Integration" Version="1.8.0"
+                      Condition="'$(TargetFramework)' == 'net48'" />
     <ProjectReference Include="..\PyExcel.Bridge\PyExcel.Bridge.csproj" />
     <ProjectReference Include="..\PyExcel.Kernel.Client\PyExcel.Kernel.Client.csproj" />
   </ItemGroup>
