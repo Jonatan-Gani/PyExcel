@@ -1,0 +1,427 @@
+using System;
+using System.Collections.Generic;
+using System.IO;
+using Apache.Arrow;
+using Apache.Arrow.Ipc;
+using Apache.Arrow.Types;
+
+namespace PyExcel.Excel;
+
+/// <summary>
+/// Arrow IPC marshalling — the C# half of the kernel data plane. Encodes
+/// values originating from Excel ranges (object[,] / object[] / scalar)
+/// into Arrow IPC streams that <c>pyexcel.kernel.arrow_io</c> decodes on
+/// the kernel side, and inversely decodes streams produced by the kernel
+/// back to shapes Excel-DNA can spill.
+///
+/// <para>Wire-format compatibility with <c>arrow_io.py</c> is the whole
+/// point of this class. The shape and orientation hints live as Arrow
+/// schema metadata under fixed keys:</para>
+///
+/// <code>
+///   pyexcel-shape       = "table" | "vector" | "scalar"
+///   pyexcel-orientation = "row" | "column"   (vectors only)
+/// </code>
+///
+/// <para>Streams without a <c>pyexcel-shape</c> key decode as a table,
+/// matching the Python side's behaviour for buffers produced by external
+/// Arrow writers.</para>
+///
+/// <para>Type handling for <c>object?[,]</c> inputs is per-column: the
+/// builder scans each column and picks the most specific Arrow type that
+/// fits every value — double / boolean / string, with string acting as the
+/// fallback for mixed-type or non-primitive columns. Nulls are preserved
+/// throughout.</para>
+/// </summary>
+public static class ArrowMarshal
+{
+    // Schema-metadata keys (must match arrow_io.py).
+    private const string MetaShapeKey = "pyexcel-shape";
+    private const string MetaOrientKey = "pyexcel-orientation";
+
+    // Wire values.
+    private const string ShapeTable = "table";
+    private const string ShapeVector = "vector";
+    private const string ShapeScalar = "scalar";
+    private const string OrientRow = "row";
+    private const string OrientColumn = "column";
+
+    // -----------------------------------------------------------------------
+    // Encode
+    // -----------------------------------------------------------------------
+
+    /// <summary>
+    /// Encode a 2-D rectangular range as a table-shaped Arrow IPC stream.
+    /// Column types are inferred per column from the cell values; mixed-type
+    /// columns fall back to string with each value stringified via
+    /// <see cref="object.ToString"/>.
+    /// </summary>
+    /// <param name="values">Row-major 2-D array. <c>values[r, c]</c> is the
+    /// cell at row r, column c. Each cell may be double / string / bool /
+    /// null; other types are coerced via <c>ToString()</c>.</param>
+    /// <param name="columnNames">Optional column header names. If null or
+    /// the wrong length, columns are named "0", "1", … positionally.</param>
+    public static byte[] EncodeTable(object?[,] values, IReadOnlyList<string>? columnNames = null)
+    {
+        if (values is null) throw new ArgumentNullException(nameof(values));
+        var rows = values.GetLength(0);
+        var cols = values.GetLength(1);
+
+        var fields = new Field[cols];
+        var arrays = new IArrowArray[cols];
+        for (var c = 0; c < cols; c++)
+        {
+            var column = new object?[rows];
+            for (var r = 0; r < rows; r++) column[r] = values[r, c];
+            arrays[c] = BuildColumn(column, out var type);
+            var name = columnNames is { } cn && c < cn.Count && cn[c] is { } n ? n : c.ToString();
+            fields[c] = new Field(name, type, nullable: true);
+        }
+
+        var schema = BuildSchema(fields, ShapeTable, orientation: null);
+        return WriteStream(schema, arrays, rows);
+    }
+
+    /// <summary>
+    /// Encode a 1-D sequence as a vector-shaped Arrow IPC stream. Type
+    /// inference is the same as for a single column of
+    /// <see cref="EncodeTable"/>.
+    /// </summary>
+    public static byte[] EncodeVector(
+        object?[] values,
+        ArrowOrientation orientation = ArrowOrientation.Column)
+    {
+        if (values is null) throw new ArgumentNullException(nameof(values));
+
+        var array = BuildColumn(values, out var type);
+        var fields = new[] { new Field("0", type, nullable: true) };
+        var schema = BuildSchema(fields, ShapeVector, OrientationToWire(orientation));
+        return WriteStream(schema, new[] { array }, values.Length);
+    }
+
+    /// <summary>
+    /// Encode a single value as a scalar-shaped Arrow IPC stream. The
+    /// resulting buffer is a 1×1 record batch carrying the value's inferred
+    /// Arrow type.
+    /// </summary>
+    public static byte[] EncodeScalar(object? value)
+    {
+        var array = BuildColumn(new[] { value }, out var type);
+        var fields = new[] { new Field("0", type, nullable: true) };
+        var schema = BuildSchema(fields, ShapeScalar, orientation: null);
+        return WriteStream(schema, new[] { array }, length: 1);
+    }
+
+    // -----------------------------------------------------------------------
+    // Decode
+    // -----------------------------------------------------------------------
+
+    /// <summary>
+    /// Peek at a buffer's shape metadata without materialising the data.
+    /// Used by the host to decide spill geometry before allocating cells.
+    /// </summary>
+    public static (ArrowShape Shape, ArrowOrientation? Orientation) PeekShape(byte[] buffer)
+    {
+        if (buffer is null) throw new ArgumentNullException(nameof(buffer));
+        using var ms = new MemoryStream(buffer, writable: false);
+        using var reader = new ArrowStreamReader(ms);
+        var schema = reader.Schema;
+        return ReadShape(schema);
+    }
+
+    /// <summary>
+    /// Decode any Arrow IPC stream produced by either <see cref="ArrowMarshal"/>
+    /// or <c>arrow_io.py</c>. Returns one of:
+    /// <list type="bullet">
+    ///   <item><c>object?[,]</c> for shape=table</item>
+    ///   <item><c>object?[]</c> for shape=vector</item>
+    ///   <item>Unwrapped scalar value for shape=scalar</item>
+    /// </list>
+    /// Buffers without a <c>pyexcel-shape</c> metadata key decode as table,
+    /// matching the Python side's defensive default for external Arrow
+    /// writers.
+    /// </summary>
+    public static object? Decode(byte[] buffer)
+    {
+        if (buffer is null) throw new ArgumentNullException(nameof(buffer));
+        using var ms = new MemoryStream(buffer, writable: false);
+        using var reader = new ArrowStreamReader(ms);
+        var batches = ReadAllBatches(reader);
+        try
+        {
+            var (shape, _) = ReadShape(reader.Schema);
+            return shape switch
+            {
+                ArrowShape.Scalar => DecodeScalar(batches),
+                ArrowShape.Vector => DecodeVector(batches),
+                _ => DecodeTable(batches),
+            };
+        }
+        finally
+        {
+            foreach (var b in batches) b.Dispose();
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Column type inference + array builders
+    // -----------------------------------------------------------------------
+
+    /// <summary>
+    /// Build a typed Arrow array for one column of values. Sets
+    /// <paramref name="arrowType"/> to the inferred Arrow type so the
+    /// caller can construct the matching <see cref="Field"/>.
+    /// </summary>
+    private static IArrowArray BuildColumn(object?[] columnValues, out IArrowType arrowType)
+    {
+        var (canDouble, canBool, sawNonNull) = ScanTypes(columnValues);
+
+        if (!sawNonNull)
+        {
+            // All-null column. Use string + all nulls so pandas roundtrip is
+            // well-defined (Arrow null type interacts poorly with pyarrow
+            // → pandas in some versions).
+            var b = new StringArray.Builder();
+            for (var i = 0; i < columnValues.Length; i++) b.AppendNull();
+            arrowType = StringType.Default;
+            return b.Build();
+        }
+
+        if (canDouble)
+        {
+            var b = new DoubleArray.Builder();
+            foreach (var v in columnValues)
+            {
+                if (v is null) { b.AppendNull(); continue; }
+                b.Append(ToDouble(v));
+            }
+            arrowType = DoubleType.Default;
+            return b.Build();
+        }
+
+        if (canBool)
+        {
+            var b = new BooleanArray.Builder();
+            foreach (var v in columnValues)
+            {
+                if (v is null) { b.AppendNull(); continue; }
+                b.Append((bool)v);
+            }
+            arrowType = BooleanType.Default;
+            return b.Build();
+        }
+
+        // Mixed / string / unknown — fall back to string.
+        {
+            var b = new StringArray.Builder();
+            foreach (var v in columnValues)
+            {
+                if (v is null) { b.AppendNull(); continue; }
+                b.Append(v.ToString() ?? "");
+            }
+            arrowType = StringType.Default;
+            return b.Build();
+        }
+    }
+
+    /// <summary>
+    /// Single pass to learn what's in the column. The result tells the
+    /// builder which fast path applies (double / bool) or that the column
+    /// has to fall back to string.
+    /// </summary>
+    private static (bool canDouble, bool canBool, bool sawNonNull) ScanTypes(object?[] values)
+    {
+        var allNumeric = true;
+        var allBool = true;
+        var sawNonNull = false;
+
+        foreach (var v in values)
+        {
+            if (v is null) continue;
+            sawNonNull = true;
+            if (!IsNumeric(v)) allNumeric = false;
+            if (v is not bool) allBool = false;
+            if (!allNumeric && !allBool) break;
+        }
+
+        return (allNumeric && sawNonNull, allBool && sawNonNull, sawNonNull);
+    }
+
+    private static bool IsNumeric(object v) => v switch
+    {
+        double or float or decimal => true,
+        int or long or short or sbyte => true,
+        uint or ulong or ushort or byte => true,
+        _ => false,
+    };
+
+    private static double ToDouble(object v) => v switch
+    {
+        double d => d,
+        float f => f,
+        decimal m => (double)m,
+        int i => i,
+        long l => l,
+        short s => s,
+        sbyte sb => sb,
+        uint ui => ui,
+        ulong ul => ul,
+        ushort us => us,
+        byte b => b,
+        _ => throw new InvalidCastException(
+            $"value of type {v.GetType().Name} reached the numeric path"),
+    };
+
+    // -----------------------------------------------------------------------
+    // Schema + IPC writer/reader plumbing
+    // -----------------------------------------------------------------------
+
+    private static Schema BuildSchema(
+        IReadOnlyList<Field> fields,
+        string shape,
+        string? orientation)
+    {
+        var metadata = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            [MetaShapeKey] = shape,
+        };
+        if (orientation is { })
+            metadata[MetaOrientKey] = orientation;
+
+        var builder = new Schema.Builder();
+        foreach (var f in fields) builder.Field(f);
+        builder.Metadata(metadata);
+        return builder.Build();
+    }
+
+    private static byte[] WriteStream(Schema schema, IArrowArray[] arrays, int length)
+    {
+        var batch = new RecordBatch(schema, arrays, length);
+        using var ms = new MemoryStream();
+        using (var writer = new ArrowStreamWriter(ms, schema))
+        {
+            writer.WriteRecordBatch(batch);
+            writer.WriteEnd();
+        }
+        return ms.ToArray();
+    }
+
+    private static (ArrowShape Shape, ArrowOrientation? Orientation) ReadShape(Schema schema)
+    {
+        var metadata = schema.Metadata;
+        var shapeValue = metadata is { } m && m.TryGetValue(MetaShapeKey, out var sv) ? sv : ShapeTable;
+        var orientationValue = metadata is { } m2 && m2.TryGetValue(MetaOrientKey, out var ov) ? ov : null;
+
+        var shape = shapeValue switch
+        {
+            ShapeScalar => ArrowShape.Scalar,
+            ShapeVector => ArrowShape.Vector,
+            _ => ArrowShape.Table,
+        };
+        var orientation = orientationValue switch
+        {
+            OrientRow => (ArrowOrientation?)ArrowOrientation.Row,
+            OrientColumn => ArrowOrientation.Column,
+            _ => null,
+        };
+        return (shape, orientation);
+    }
+
+    private static List<RecordBatch> ReadAllBatches(ArrowStreamReader reader)
+    {
+        var batches = new List<RecordBatch>();
+        while (true)
+        {
+            var b = reader.ReadNextRecordBatch();
+            if (b is null) break;
+            batches.Add(b);
+        }
+        return batches;
+    }
+
+    // -----------------------------------------------------------------------
+    // Decoders for each shape
+    // -----------------------------------------------------------------------
+
+    private static object?[,] DecodeTable(List<RecordBatch> batches)
+    {
+        // The producer side currently writes one batch per stream; we
+        // concatenate if more arrive so external Arrow writers can be
+        // multi-batch without surprising the host.
+        var totalRows = 0;
+        foreach (var b in batches) totalRows += b.Length;
+
+        var cols = batches.Count > 0 ? batches[0].ColumnCount : 0;
+        var result = new object?[totalRows, cols];
+
+        var rowOffset = 0;
+        foreach (var batch in batches)
+        {
+            for (var c = 0; c < batch.ColumnCount; c++)
+            {
+                var arr = batch.Column(c);
+                for (var r = 0; r < batch.Length; r++)
+                    result[rowOffset + r, c] = ReadCell(arr, r);
+            }
+            rowOffset += batch.Length;
+        }
+        return result;
+    }
+
+    private static object?[] DecodeVector(List<RecordBatch> batches)
+    {
+        var totalRows = 0;
+        foreach (var b in batches) totalRows += b.Length;
+        var result = new object?[totalRows];
+
+        var rowOffset = 0;
+        foreach (var batch in batches)
+        {
+            if (batch.ColumnCount == 0) continue;
+            var arr = batch.Column(0);
+            for (var r = 0; r < batch.Length; r++)
+                result[rowOffset + r] = ReadCell(arr, r);
+            rowOffset += batch.Length;
+        }
+        return result;
+    }
+
+    private static object? DecodeScalar(List<RecordBatch> batches)
+    {
+        if (batches.Count == 0 || batches[0].Length == 0 || batches[0].ColumnCount == 0)
+            return null;
+        return ReadCell(batches[0].Column(0), 0);
+    }
+
+    /// <summary>
+    /// Read one cell from an Arrow array, boxing it for transit through
+    /// Excel's <c>object?[,]</c> grid. Returns null for null entries.
+    /// </summary>
+    private static object? ReadCell(IArrowArray array, int index)
+    {
+        if (array.IsNull(index)) return null;
+        return array switch
+        {
+            DoubleArray d => (object?)d.GetValue(index),
+            FloatArray f => f.GetValue(index),
+            Int64Array i64 => i64.GetValue(index),
+            Int32Array i32 => i32.GetValue(index),
+            Int16Array i16 => i16.GetValue(index),
+            Int8Array i8 => i8.GetValue(index),
+            UInt64Array u64 => u64.GetValue(index),
+            UInt32Array u32 => u32.GetValue(index),
+            UInt16Array u16 => u16.GetValue(index),
+            UInt8Array u8 => u8.GetValue(index),
+            BooleanArray b => b.GetValue(index),
+            StringArray s => s.GetString(index),
+            _ => array.GetType().Name,  // last-ditch: surface the type name
+        };
+    }
+
+    private static string OrientationToWire(ArrowOrientation o) => o switch
+    {
+        ArrowOrientation.Row => OrientRow,
+        ArrowOrientation.Column => OrientColumn,
+        _ => throw new ArgumentOutOfRangeException(nameof(o)),
+    };
+}

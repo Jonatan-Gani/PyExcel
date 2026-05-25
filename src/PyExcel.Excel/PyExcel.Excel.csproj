@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <!--
+      The C# half of the Excel data plane. Owns:
+        * ArrowMarshal — C# ↔ Arrow IPC roundtrip mirroring embedded/pyexcel/kernel/arrow_io.py
+        * (later) PythonResolver — locating the kernel's python executable
+        * (later) KernelHost — lifecycle wrapper around KernelSupervisor + KernelClient
+        * (later, net48-only) PyRunFunction — the =PY.RUN UDF
+      Multi-targets net48 (production .xll) and netstandard2.0 (Linux CI build).
+    -->
+    <TargetFrameworks>net48;netstandard2.0</TargetFrameworks>
+    <RootNamespace>PyExcel.Excel</RootNamespace>
+    <AssemblyName>PyExcel.Excel</AssemblyName>
+    <Platforms>x64;AnyCPU</Platforms>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Apache.Arrow" Version="18.0.0" />
+    <ProjectReference Include="..\PyExcel.Bridge\PyExcel.Bridge.csproj" />
+    <ProjectReference Include="..\PyExcel.Kernel.Client\PyExcel.Kernel.Client.csproj" />
+  </ItemGroup>
+
+</Project>

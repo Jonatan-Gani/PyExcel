@@ -150,8 +150,8 @@ Arrow, COM interop, and the threading model in a single slice before going wide.
 
 **Deliverables.** `PyExcel.Excel`; a wired `OnRunPython`.
 
-- [ ] Range → Arrow: read range `Value2` into a typed Arrow record batch (handle dates, blanks/`NA`, Excel error values).
-- [ ] Arrow → Range: write result tables, lists, and scalars to ranges.
+- [x] Range → Arrow: read `object?[,]` / `object?[]` / scalar into Arrow IPC streams with shape metadata (`pyexcel-shape`, `pyexcel-orientation`) matching `arrow_io.py`. Per-column type inference; mixed columns fall back to string. Date/Excel-error handling still ahead.
+- [x] Arrow → Range: decode Arrow IPC back to `object?[,]` / `object?[]` / scalar. Defaults to table for buffers without PyExcel metadata (interoperable with external Arrow writers).
 - [ ] Parse the Input/Output ribbon fields, including the `{name}=Range` syntax.
 - [ ] Wire `OnRunPython`: parse → marshal → enqueue to `Kernel.Client` → write results. **SAFE-1**: enqueue and return; never block the callback.
 - [ ] Non-blocking progress UI driven by `PROGRESS` frames, with a working **Cancel**.
