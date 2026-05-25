@@ -4,6 +4,18 @@
 > & first run"). Skim this once; then [`ROADMAP.md`](../ROADMAP.md) is the
 > source of truth and the C# / Python tests are the executable spec.
 
+> **Status note (2026-05-24):** Phase 4's marshalling + dispatch +
+> `=PY.RUN` UDF + SAFE-1 async + visible-error surfacing + kernel-side
+> cooperative CANCEL all shipped on `NET_Migration` after this doc was
+> written. What this doc describes as "what Phase 4 has to build" is
+> now mostly done — see the `ROADMAP.md` status log for the running
+> record. The pieces still open are the ones that need **Phase 3**
+> (`StateService`) first: ribbon button `OnRunPython`, ribbon
+> Input/Output `{name}=Range` parsing, and the progress dialog.
+> Routing Excel-DNA's task cancellation through `KernelClient.Cancel`
+> is also still open (the kernel side accepts CANCEL frames, the UDF
+> doesn't fire them yet).
+
 ---
 
 ## TL;DR
