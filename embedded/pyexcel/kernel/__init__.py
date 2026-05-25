@@ -21,4 +21,15 @@ Modules:
 * :mod:`pyexcel.kernel.__main__` — the ``python -m pyexcel.kernel`` entry
   point. Parses argv, opens the transport, hands control to the
   supervisor.
+
+User-facing helpers
+-------------------
+
+Long-running transform functions can poll :func:`is_cancelled` between
+work units and return early; the supervisor will then surface an
+``ERROR`` frame with code ``"Cancelled"`` instead of ``RUN_RESULT``.
 """
+
+from .worker import is_cancelled  # noqa: E402, F401 — re-export for user scripts
+
+__all__ = ["is_cancelled"]

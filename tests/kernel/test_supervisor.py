@@ -297,3 +297,156 @@ def test_kernel_run_request_user_exception_produces_error_frame(tmp_path):
             proc.kill()
             proc.wait(timeout=2)
         server.close()
+
+
+
+# -----------------------------------------------------------------------------
+# CANCEL handling — kernel pumps frames during a RUN, flips the cooperative
+# cancellation flag, surfaces ERROR(Cancelled) when a CANCEL arrived.
+# -----------------------------------------------------------------------------
+
+
+def test_kernel_cancel_during_long_run_returns_cancelled_error(tmp_path):
+    # The user's script loops with a small sleep, checking is_cancelled()
+    # between iterations and breaking out when the flag is set. With the
+    # CANCEL arriving partway through, the kernel should reply
+    # ERROR/Cancelled rather than RUN_RESULT.
+    script = tmp_path / "loop.py"
+    script.write_text(textwrap.dedent("""
+        import time
+        from pyexcel.kernel import is_cancelled
+
+        def transform():
+            for _ in range(200):  # ~10s worst case at 50ms tick
+                if is_cancelled():
+                    return "stopped-cooperatively"
+                time.sleep(0.05)
+            return "finished-without-cancel"
+    """))
+
+    pipe_name = "pyexcel-test-" + uuid.uuid4().hex
+    server = _Server(pipe_name)
+    proc = _spawn_kernel(pipe_name)
+
+    try:
+        server.accept(timeout_s=5.0)
+        server.send(FrameType.HELLO, {"protocol": PROTOCOL_VERSION})
+        _ = server.recv()
+
+        encoded = encode_frame(
+            FrameType.RUN_REQUEST,
+            {"run_id": "long-job", "script": str(script)},
+        )
+        server._conn.sendall(encoded)  # type: ignore[union-attr]
+
+        # Give the script a moment to enter its loop, then cancel.
+        time.sleep(0.2)
+        server.send(FrameType.CANCEL, {"run_id": "long-job"})
+
+        reply = server.recv()
+        assert reply.type is FrameType.ERROR, (
+            f"expected ERROR after CANCEL, got {reply.type.name}; meta={reply.meta!r}"
+        )
+        assert reply.meta["code"] == "Cancelled"
+        assert reply.meta["run_id"] == "long-job"
+
+        # The loop is still alive: shutdown cleanly.
+        server.send(FrameType.SHUTDOWN, {})
+        rc, _, err = _drain(proc, timeout_s=5.0)
+        assert rc == 0, f"kernel exited with {rc}; stderr={err!r}"
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait(timeout=2)
+        server.close()
+
+
+def test_kernel_unsolicited_cancel_returns_error_keeps_running():
+    # CANCEL with no run in flight is a host/kernel race — the run finished
+    # before CANCEL arrived. We acknowledge with ERROR(code="Cancelled")
+    # so the host knows it was seen, and the loop stays alive.
+    pipe_name = "pyexcel-test-" + uuid.uuid4().hex
+    server = _Server(pipe_name)
+    proc = _spawn_kernel(pipe_name)
+
+    try:
+        server.accept(timeout_s=5.0)
+        server.send(FrameType.HELLO, {"protocol": PROTOCOL_VERSION})
+        _ = server.recv()
+
+        server.send(FrameType.CANCEL, {"run_id": "ghost"})
+        reply = server.recv()
+        assert reply.type is FrameType.ERROR
+        assert reply.meta.get("code") == "Cancelled"
+        assert reply.meta.get("run_id") == "ghost"
+
+        # Loop is intact: PING/PONG still works.
+        server.send(FrameType.PING, {"nonce": "after-ghost"})
+        pong = server.recv()
+        assert pong.type is FrameType.PONG
+        assert pong.meta == {"nonce": "after-ghost"}
+
+        server.send(FrameType.SHUTDOWN, {})
+        rc, _, _ = _drain(proc, timeout_s=5.0)
+        assert rc == 0
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait(timeout=2)
+        server.close()
+
+
+def test_kernel_ping_during_run_is_answered(tmp_path):
+    # PING during a RUN must still produce a PONG (liveness check) without
+    # disturbing the run's outcome.
+    script = tmp_path / "slow.py"
+    script.write_text(textwrap.dedent("""
+        import time
+        def transform():
+            time.sleep(0.5)
+            return 42
+    """))
+
+    pipe_name = "pyexcel-test-" + uuid.uuid4().hex
+    server = _Server(pipe_name)
+    proc = _spawn_kernel(pipe_name)
+
+    try:
+        server.accept(timeout_s=5.0)
+        server.send(FrameType.HELLO, {"protocol": PROTOCOL_VERSION})
+        _ = server.recv()
+
+        encoded = encode_frame(
+            FrameType.RUN_REQUEST,
+            {"run_id": "slow", "script": str(script)},
+        )
+        server._conn.sendall(encoded)  # type: ignore[union-attr]
+
+        # Send PING while the run is parked in sleep(0.5).
+        time.sleep(0.1)
+        server.send(FrameType.PING, {"nonce": "during-run"})
+
+        # Read up to two frames; one is the PONG, one is the RUN_RESULT.
+        # Order isn't guaranteed (PONG ought to come first because the
+        # run is still sleeping, but we don't pin that).
+        seen_pong = False
+        seen_result = False
+        for _ in range(2):
+            f = server.recv()
+            if f.type is FrameType.PONG:
+                assert f.meta == {"nonce": "during-run"}
+                seen_pong = True
+            elif f.type is FrameType.RUN_RESULT:
+                seen_result = True
+        assert seen_pong and seen_result, (
+            f"missing one of pong/result; pong={seen_pong} result={seen_result}"
+        )
+
+        server.send(FrameType.SHUTDOWN, {})
+        rc, _, _ = _drain(proc, timeout_s=5.0)
+        assert rc == 0
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait(timeout=2)
+        server.close()

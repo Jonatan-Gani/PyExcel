@@ -14,8 +14,11 @@ Frames handled in-loop:
 
 * ``HELLO`` — handshake (server speaks first, we mirror back).
 * ``PING`` — answered with ``PONG`` echoing any ``nonce`` meta.
-* ``RUN_REQUEST`` — delegated to :mod:`pyexcel.kernel.worker` and answered
-  inline with either ``RUN_RESULT`` or ``ERROR`` depending on outcome.
+* ``RUN_REQUEST`` — delegated to :mod:`pyexcel.kernel.worker` running on
+  a worker thread; meanwhile the main loop pumps inbound frames so
+  ``CANCEL`` arrives in time to flip the cooperative cancellation flag,
+  and ``PING`` keeps answering for liveness checks. Replies inline with
+  ``RUN_RESULT`` or ``ERROR`` once the worker thread finishes.
 * ``SHUTDOWN`` — clean exit with code 0.
 
 Anything else gets an ``ERROR`` reply and the loop stays alive.
@@ -24,7 +27,8 @@ Anything else gets an ``ERROR`` reply and the loop stays alive.
 from __future__ import annotations
 
 import sys
-from typing import NoReturn
+import threading
+from typing import NoReturn, Optional
 
 from . import worker
 from .framing import (
@@ -36,6 +40,18 @@ from .framing import (
     read_frame,
 )
 from .transport import FrameTransport, TransportError, connect
+
+# How often the main loop wakes to poll for inbound frames while a
+# RUN_REQUEST is executing on the worker thread. 50 ms gives sub-100ms
+# CANCEL latency with near-idle CPU. Tunable per-test by patching.
+_CANCEL_POLL_INTERVAL_S = 0.05
+
+# How long the main loop waits for the worker thread to wind down once
+# the worker function has either returned naturally or noticed a CANCEL
+# request. The worker thread should exit promptly after run_job returns;
+# this guard rail exists to keep an unresponsive script from wedging the
+# supervisor.
+_WORKER_JOIN_TIMEOUT_S = 5.0
 
 
 def _send(
@@ -97,15 +113,29 @@ def _dispatch(transport: FrameTransport, frame: Frame) -> bool:
         return True
 
     if frame.type is FrameType.RUN_REQUEST:
-        outcome = worker.run_job(frame.meta, frame.payloads)
-        reply_type = FrameType.RUN_RESULT if outcome.success else FrameType.ERROR
-        _send(transport, reply_type, outcome.meta, tuple(outcome.payloads))
+        _run_with_cancellation(transport, frame)
         return True
 
     if frame.type is FrameType.SHUTDOWN:
         return False
 
-    # Anything not in the dispatch table above (CANCEL, LIST_JOBS, …) gets a
+    if frame.type is FrameType.CANCEL:
+        # An unsolicited CANCEL (no run in flight) is a no-op — the host
+        # may have raced us and sent it after the previous run already
+        # finished. Acknowledge with ERROR so the host knows it was seen
+        # but didn't apply; the loop stays alive.
+        _send(
+            transport,
+            FrameType.ERROR,
+            {
+                "reason": "CANCEL received but no run in flight",
+                "code": "Cancelled",
+                "run_id": frame.meta.get("run_id", ""),
+            },
+        )
+        return True
+
+    # Anything not in the dispatch table above (LIST_JOBS, etc.) gets a
     # polite ERROR rather than silent drop. The C# side surfaces this in tests.
     _send(
         transport,
@@ -113,6 +143,93 @@ def _dispatch(transport: FrameTransport, frame: Frame) -> bool:
         {"reason": f"unsupported frame type {frame.type.name} at this phase"},
     )
     return True
+
+
+def _run_with_cancellation(transport: FrameTransport, request: Frame) -> None:
+    """Execute one RUN_REQUEST on a worker thread, pumping inbound frames in
+    the main loop so CANCEL arrives in time to flip the cooperative
+    cancellation flag and PING keeps answering for liveness checks.
+
+    Reply is sent once after the worker thread finishes. If a CANCEL arrived
+    during the run, the reply is overridden to ``ERROR / Cancelled`` regardless
+    of whether the user function completed naturally or noticed and aborted.
+    """
+    cancel_event = threading.Event()
+    outcome_holder: list[Optional[worker.JobOutcome]] = [None]
+    run_id = request.meta.get("run_id", "") or ""
+
+    def worker_main() -> None:
+        worker._begin_job(cancel_event)
+        try:
+            outcome_holder[0] = worker.run_job(request.meta, request.payloads)
+        finally:
+            worker._end_job()
+
+    t = threading.Thread(target=worker_main, daemon=True, name="pyexcel-worker")
+    t.start()
+
+    # Pump inbound frames while the worker runs. CANCEL → flip the flag;
+    # PING → reply with PONG; anything else (including a second RUN_REQUEST,
+    # which the host shouldn't send while a run is in flight) → ignore with
+    # a log so we don't deadlock waiting for a frame we can't service yet.
+    while t.is_alive():
+        if not transport.has_data(_CANCEL_POLL_INTERVAL_S):
+            continue
+        try:
+            f = _recv(transport)
+        except (FramingError, TransportError) as exc:
+            # Peer dropped mid-run. Set the cancel flag so the worker can
+            # bail at its next checkpoint, and stop pumping; the outer loop
+            # in :func:`run` will surface the disconnect on its next read.
+            print(f"kernel: peer dropped during run {run_id!r}: {exc}", file=sys.stderr)
+            cancel_event.set()
+            break
+
+        if f.type is FrameType.CANCEL:
+            cancel_event.set()
+        elif f.type is FrameType.PING:
+            _send(transport, FrameType.PONG, {"nonce": f.meta.get("nonce", "")})
+        else:
+            print(
+                f"kernel: ignoring {f.type.name} frame during run {run_id!r}",
+                file=sys.stderr,
+            )
+
+    t.join(timeout=_WORKER_JOIN_TIMEOUT_S)
+    outcome = outcome_holder[0]
+
+    # Three terminal states:
+    #   (a) worker returned normally + no cancel → forward the outcome as-is.
+    #   (b) worker returned normally + cancel flag set → override with Cancelled.
+    #   (c) worker did not return within the join timeout → return an error.
+    #       Note we don't (and can't safely) interrupt the worker thread — it
+    #       leaks until process exit. Worth surfacing rather than wedging.
+    if outcome is None:
+        reply_meta = {
+            "run_id": run_id,
+            "code": "WorkerHung",
+            "type": "TimeoutError",
+            "message": f"worker thread did not finish within {_WORKER_JOIN_TIMEOUT_S}s",
+            "traceback": "",
+            "duration_ms": int(_WORKER_JOIN_TIMEOUT_S * 1000),
+        }
+        _send(transport, FrameType.ERROR, reply_meta)
+        return
+
+    if cancel_event.is_set():
+        reply_meta = {
+            "run_id": run_id,
+            "code": "Cancelled",
+            "type": "CancellationRequested",
+            "message": "kernel received CANCEL during run",
+            "traceback": "",
+            "duration_ms": outcome.meta.get("duration_ms", 0),
+        }
+        _send(transport, FrameType.ERROR, reply_meta)
+        return
+
+    reply_type = FrameType.RUN_RESULT if outcome.success else FrameType.ERROR
+    _send(transport, reply_type, outcome.meta, tuple(outcome.payloads))
 
 
 def run(pipe_name: str, *, connect_timeout_s: float = 5.0) -> int:

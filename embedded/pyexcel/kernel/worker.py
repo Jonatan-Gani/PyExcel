@@ -62,10 +62,11 @@ import hashlib
 import importlib.util
 import os
 import sys
+import threading
 import time
 import traceback
 from types import ModuleType
-from typing import Any, Callable, List, Tuple
+from typing import Any, Callable, List, Optional, Tuple
 
 from . import arrow_io
 
@@ -74,6 +75,11 @@ _DEFAULT_FUNCTION = "transform"
 
 # abs_path -> (mtime_seen_at_load, loaded_module)
 _module_cache: dict[str, Tuple[float, ModuleType]] = {}
+
+# Module-level cancellation state. Only one job runs at a time per kernel,
+# so a single shared Event is sufficient — the supervisor calls
+# :func:`_begin_job` before dispatching and :func:`_end_job` afterwards.
+_current_cancel_event: Optional[threading.Event] = None
 
 
 class JobError(Exception):
@@ -104,6 +110,34 @@ class JobOutcome:
 def clear_cache() -> None:
     """Drop every cached user module. Test helper; not used at runtime."""
     _module_cache.clear()
+
+
+def is_cancelled() -> bool:
+    """User-facing API: was a CANCEL frame received for the current job?
+
+    Long-running transform functions can poll this between work units and
+    return early — the supervisor will then surface an ``ERROR`` frame with
+    code ``"Cancelled"`` instead of ``RUN_RESULT``. Returns ``False`` when
+    no job is in flight, so it's always safe to call.
+    """
+    ev = _current_cancel_event
+    return ev is not None and ev.is_set()
+
+
+def _begin_job(event: Optional[threading.Event]) -> None:
+    """Install the cancellation Event for the duration of one job.
+
+    Called by :mod:`pyexcel.kernel.supervisor` immediately before dispatching
+    ``run_job`` on the worker thread. Not part of the user-facing surface.
+    """
+    global _current_cancel_event
+    _current_cancel_event = event
+
+
+def _end_job() -> None:
+    """Clear the per-job cancellation Event after the worker thread finishes."""
+    global _current_cancel_event
+    _current_cancel_event = None
 
 
 def run_job(

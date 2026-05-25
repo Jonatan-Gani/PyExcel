@@ -51,6 +51,16 @@ class FrameTransport:
     def write_all(self, data: bytes) -> None:  # pragma: no cover - abstract
         raise NotImplementedError
 
+    def has_data(self, timeout_s: float) -> bool:  # pragma: no cover - abstract
+        """Return True iff at least one byte is readable within ``timeout_s``.
+
+        Used by the supervisor's CANCEL pump: while a RUN job is in flight on
+        a worker thread, the main loop polls this to interleave handling of
+        late-arriving CANCEL / PING frames without blocking on a full
+        :func:`read_frame`. Implementations must not consume bytes.
+        """
+        raise NotImplementedError
+
     def close(self) -> None:  # pragma: no cover - abstract
         raise NotImplementedError
 
@@ -85,6 +95,11 @@ class _SocketTransport(FrameTransport):
             self._sock.sendall(data)
         except OSError as exc:
             raise TransportError(f"socket write failed: {exc}") from exc
+
+    def has_data(self, timeout_s: float) -> bool:
+        import select
+        rlist, _, _ = select.select([self._sock], [], [], max(timeout_s, 0.0))
+        return bool(rlist)
 
     def close(self) -> None:
         try:
@@ -174,6 +189,18 @@ class _WinPipeTransport(FrameTransport):
                 raise TransportError("pipe write returned 0 bytes")
             pos += written
 
+    def has_data(self, timeout_s: float) -> bool:
+        # ``_winapi`` doesn't expose PeekNamedPipe — fall through to ctypes.
+        # Polling at ~10 ms granularity gives sub-second CANCEL latency while
+        # keeping CPU near idle.
+        deadline = time.monotonic() + max(timeout_s, 0.0)
+        while True:
+            if _peek_named_pipe(self._handle) > 0:
+                return True
+            if time.monotonic() >= deadline:
+                return False
+            time.sleep(0.01)
+
     def close(self) -> None:
         if self._closed:
             return
@@ -184,6 +211,43 @@ class _WinPipeTransport(FrameTransport):
         except OSError:
             # Handle already gone (e.g. peer closed and OS reaped it).
             pass
+
+
+def _peek_named_pipe(handle) -> int:
+    """Return the number of bytes available on a Windows named pipe.
+
+    Wraps ``PeekNamedPipe`` from kernel32.dll via ctypes — ``_winapi``
+    omits it. Returns 0 on any failure so the caller treats the pipe as
+    "no data right now" and retries; a real disconnect surfaces on the
+    next ``ReadFile`` with ERROR_BROKEN_PIPE.
+    """
+    try:
+        import ctypes  # local import — only loaded on Windows
+        from ctypes import wintypes
+
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.PeekNamedPipe.argtypes = [
+            wintypes.HANDLE,
+            ctypes.c_void_p,
+            wintypes.DWORD,
+            ctypes.POINTER(wintypes.DWORD),
+            ctypes.POINTER(wintypes.DWORD),
+            ctypes.POINTER(wintypes.DWORD),
+        ]
+        kernel32.PeekNamedPipe.restype = wintypes.BOOL
+
+        bytes_available = wintypes.DWORD(0)
+        ok = kernel32.PeekNamedPipe(
+            wintypes.HANDLE(int(handle)),
+            None,
+            0,
+            None,
+            ctypes.byref(bytes_available),
+            None,
+        )
+        return bytes_available.value if ok else 0
+    except Exception:
+        return 0
 
 
 def _connect_windows(

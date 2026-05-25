@@ -36,11 +36,15 @@ namespace PyExcel.Excel;
 /// Excel-DNA log window. A richer error UI — a per-script error pane or
 /// a hover tooltip — is a Phase 4 follow-up.</para>
 ///
-/// <para><em>Cancel:</em> Excel-DNA cancels the background task if the
-/// formula changes or the workbook closes while the run is in flight,
-/// but the kernel itself doesn't act on CANCEL frames yet — that's a
-/// worker.py follow-up. Until then, an in-flight run completes even
-/// after the host cancels.</para>
+/// <para><em>Cancel:</em> the kernel now handles CANCEL frames
+/// cooperatively (see <c>pyexcel.kernel.is_cancelled</c>). What this UDF
+/// doesn't yet do is hook Excel-DNA's task cancellation to
+/// <see cref="KernelClient.Cancel"/> — when Excel-DNA cancels the
+/// background task (formula change, workbook close), the call to
+/// <see cref="PyRun.Execute"/> here still completes synchronously
+/// before the worker thread ends. Wiring through a
+/// <see cref="System.Threading.CancellationToken"/> via
+/// <see cref="KernelClient.RunAsync"/> is the natural follow-up.</para>
 /// </summary>
 public static class PyRunFunction
 {
