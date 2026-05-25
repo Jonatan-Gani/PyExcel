@@ -23,10 +23,15 @@ single kernel package (it must stay Python — it runs user `transform()` code).
 
 ## Status & progress log
 
-**Current position:** Phase 0 ✅ · Phase 1 ✅ · Phase 2 ✅ · **Phase 3 / Phase 4 next.** A focused brief for the next session — what shipped, the public APIs, what Phase 4 still has to build — is in [`docs/phase4-handoff.md`](docs/phase4-handoff.md).
+**Current position:** Phase 0 ✅ · Phase 1 ✅ · Phase 2 ✅ · Phase 4 in progress (Arrow marshalling + kernel lifecycle + dispatch core landed; the Excel-DNA UDF wrapper and ribbon button are next). Working branch: `NET_Migration`. Phase-2 handoff context lives in [`docs/phase4-handoff.md`](docs/phase4-handoff.md).
 
 Terse running record (newest first) so a new session can pick up where work stopped:
 
+- **2026-05-24 — Phase 4 step 1: marshalling + dispatch core.** New `PyExcel.Excel` assembly (multi-target net48 + netstandard2.0, Apache.Arrow 18.0.0). Three pieces:
+  - `ArrowMarshal` — C# half of the kernel data plane. `EncodeTable` / `EncodeVector` / `EncodeScalar` / `PeekShape` / `Decode`. Schema metadata (`pyexcel-shape`, `pyexcel-orientation`) matches `arrow_io.py` byte-for-byte. Per-column type inference (double/bool/string with string fallback for mixed), nulls preserved. 23 unit tests.
+  - `PythonResolver` + `KernelHost` — discovery (env var → workbook venv → PATH) plus a process-wide `Lazy<KernelClient>` whose first access boots the kernel and whose `Dispose` is the add-in unload hook. Phase 3 will move ownership to per-workbook state.
+  - `PyRun.Execute(script, input, kwargs, client, …)` — shared marshal-and-dispatch core for both the planned UDF and the ribbon button. 13 e2e tests through a real Python kernel are the cross-language conformance check for ArrowMarshal ↔ arrow_io.py.
+  - Repository housekeeping: previously fragmented `claude/*` branches consolidated into the single `NET_Migration` working branch.
 - **2026-05-23 — Phase 2 complete.** Shipped the rest of the kernel data plane in one session, both CI lanes green on `ae0b4f0`:
   - `arrow_io.py` — shape-preserving Arrow IPC for DataFrame / Series / list / tuple / 1-D-or-2-D numpy / scalar, with `pyexcel-shape` and `pyexcel-orientation` schema metadata so the host can reconstruct cell geometry. 39 pytest tests.
   - `worker.py` — pure `run_job(meta, payloads) -> JobOutcome`; loads the user script (mtime-cached), decodes Arrow payloads, calls the target function, replies with `RUN_RESULT` or a typed `ERROR` (9 stable codes: `BadRequest` / `ModuleNotFound` / `ModuleLoadError` / `ModuleExecError` / `FunctionNotFound` / `FunctionNotCallable` / `BadInput` / `BadReturnType` / `Exception`). 23 unit tests + 2 e2e supervisor tests.
@@ -152,8 +157,11 @@ Arrow, COM interop, and the threading model in a single slice before going wide.
 
 - [x] Range → Arrow: read `object?[,]` / `object?[]` / scalar into Arrow IPC streams with shape metadata (`pyexcel-shape`, `pyexcel-orientation`) matching `arrow_io.py`. Per-column type inference; mixed columns fall back to string. Date/Excel-error handling still ahead.
 - [x] Arrow → Range: decode Arrow IPC back to `object?[,]` / `object?[]` / scalar. Defaults to table for buffers without PyExcel metadata (interoperable with external Arrow writers).
+- [x] `PyRun.Execute` — shared marshal-and-dispatch core for both the `=PY.RUN` UDF and the ribbon `OnRunPython` button. Resolves the script path (relative → workbook dir), encodes input as Arrow, calls `KernelClient.Run`, decodes the response (honours `pyexcel-orientation` to spill row vs column), and surfaces a `None` return as a sentinel the wrapper translates to `ExcelEmpty`. No Excel-DNA dependency — runs in netstandard2.0, fully unit-testable.
+- [x] `KernelHost` — process-wide `Lazy<KernelClient>` lifecycle wrapper for Phase 4. First `Client` access boots the kernel; idempotent `Dispose` for the add-in unload hook. Phase 3 will replace this with per-workbook ownership in `StateService`.
+- [x] `PythonResolver` — three-tier discovery: `PYEXCEL_PYTHON` env var → `<workbook>/.pyexcel-venv/{Scripts,bin}/python` → PATH fallback. Plus `ResolveEmbeddedPath()` walking up from `AppContext.BaseDirectory` to find `embedded/pyexcel/kernel/__main__.py`.
 - [ ] Parse the Input/Output ribbon fields, including the `{name}=Range` syntax.
-- [ ] Wire `OnRunPython`: parse → marshal → enqueue to `Kernel.Client` → write results. **SAFE-1**: enqueue and return; never block the callback.
+- [ ] Wire the `=PY.RUN` UDF (net48-only Excel-DNA wrapper around `PyRun.Execute`) and the `OnRunPython` ribbon button handler. **SAFE-1**: enqueue and return; never block the callback.
 - [ ] Non-blocking progress UI driven by `PROGRESS` frames, with a working **Cancel**.
 - [ ] Archive a run (inputs, outputs, log); retention cap.
 - [ ] Surface kernel errors (full traceback, script name, log path) clearly to the user.
