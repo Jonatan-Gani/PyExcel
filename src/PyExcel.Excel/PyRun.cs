@@ -113,16 +113,13 @@ public static class PyRun
     internal static byte[]? EncodeInput(object? input)
     {
         if (input is null) return null;
-
-        switch (input)
-        {
-            case object?[,] table:
-                return ArrowMarshal.EncodeTable(table);
-            case object?[] vector:
-                return ArrowMarshal.EncodeVector(vector);
-            default:
-                return ArrowMarshal.EncodeScalar(input);
-        }
+        // Array covariance: 'object[,]' matches both object[,] and object?[,]
+        // at runtime, and ArrowMarshal.EncodeTable's object?[,] parameter
+        // accepts the upcast. Avoiding '?' in the pattern keeps us out of
+        // an awkward corner of C# 10's pattern-matching grammar.
+        if (input is object[,] table) return ArrowMarshal.EncodeTable(table);
+        if (input is object[] vector) return ArrowMarshal.EncodeVector(vector);
+        return ArrowMarshal.EncodeScalar(input);
     }
 
     // -------------------------------------------------------------------------
