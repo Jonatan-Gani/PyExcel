@@ -7,36 +7,39 @@ using PyExcel.Kernel.Client;
 namespace PyExcel.Excel;
 
 /// <summary>
-/// The <c>=PY.RUN</c> worksheet function — the smallest possible Excel-DNA
-/// surface on top of <see cref="PyRun"/>.
+/// The <c>=PY.RUN</c> worksheet function — Excel-DNA surface on top of
+/// <see cref="PyRun"/>.
 ///
-/// <para>The flow:</para>
+/// <para>The flow on each cell calc:</para>
 ///
 /// <list type="number">
-///   <item>Excel passes a script path and one input argument
-///     (cell / range / array / scalar) plus optional function name.</item>
-///   <item>We translate Excel-DNA's sentinel argument types
-///     (<see cref="ExcelMissing"/>, <see cref="ExcelEmpty"/>,
-///     <see cref="ExcelError"/>) into <c>null</c> so
-///     <see cref="PyRun"/> sees a regular .NET shape.</item>
-///   <item><see cref="PyRun.Execute"/> handles the marshal + dispatch
-///     against the process-wide <see cref="KernelHost.Default"/>.</item>
-///   <item>The result is translated back to something Excel can spill:
-///     <see cref="PyRun.EmptyResult"/> becomes <see cref="ExcelEmpty.Value"/>;
-///     anything else passes through unchanged.</item>
+///   <item>Excel calls <see cref="Run"/> on the calc thread with a script
+///     path, one input argument (cell / range / array / scalar), and an
+///     optional function name.</item>
+///   <item>We hand the work to <see cref="ExcelAsyncUtil.Run"/>. The first
+///     call kicks off a background task and returns <c>#N/A</c> immediately
+///     so Excel's UI doesn't freeze (SAFE-1). When the task completes, the
+///     cell auto-refreshes with the real result. Subsequent calls with the
+///     same parameter set reuse the cached result.</item>
+///   <item>On the worker thread, the sync core
+///     (<see cref="RunSynchronously"/>) translates Excel-DNA's sentinel
+///     argument types into plain .NET, calls
+///     <see cref="PyRun.Execute"/> against
+///     <see cref="KernelHost.Default"/>, and converts the result back to
+///     something Excel can spill.</item>
 /// </list>
 ///
 /// <para>Failures surface as <see cref="ExcelError.ExcelErrorValue"/>
 /// (<c>#VALUE!</c> in the cell) with the full Python traceback logged
-/// to <see cref="Debug"/> / <see cref="Trace"/> so the user can see it
-/// in DebugView or the Excel-DNA log window. A richer error UI — a
-/// per-script error pane or a hover tooltip — is a Phase 4 follow-up.</para>
+/// to <see cref="Trace"/> so the user can see it in DebugView or the
+/// Excel-DNA log window. A richer error UI — a per-script error pane or
+/// a hover tooltip — is a Phase 4 follow-up.</para>
 ///
-/// <para><em>SAFE-1 note:</em> this UDF is currently synchronous; it
-/// blocks the Excel calc thread for the duration of the run. The
-/// roadmap calls for an async variant that returns
-/// <see cref="ExcelAsyncUtil"/>-driven results so long jobs don't
-/// freeze the UI. That's a separate Phase 4 item.</para>
+/// <para><em>Cancel:</em> Excel-DNA cancels the background task if the
+/// formula changes or the workbook closes while the run is in flight,
+/// but the kernel itself doesn't act on CANCEL frames yet — that's a
+/// worker.py follow-up. Until then, an in-flight run completes even
+/// after the host cancels.</para>
 /// </summary>
 public static class PyRunFunction
 {
@@ -65,6 +68,26 @@ public static class PyRunFunction
             Description = "Function name in the script (default: transform)")]
         object function)
     {
+        // ExcelAsyncUtil.Run dispatches the work to a background thread,
+        // returns #N/A immediately, and refreshes the cell when the
+        // worker completes. The `parameters` array is used as the cache
+        // key — identical inputs short-circuit to the cached result
+        // rather than re-spawning a job.
+        return ExcelAsyncUtil.Run(
+            functionName: "PY.RUN",
+            parameters: new object?[] { script, input, function },
+            function: () => RunSynchronously(script, input, function));
+    }
+
+    /// <summary>
+    /// The actual blocking work — runs on Excel-DNA's worker thread, not
+    /// on the calc thread. Same error-translation contract as the sync
+    /// UDF had before SAFE-1: <see cref="KernelException"/> and unhandled
+    /// exceptions both surface as <c>#VALUE!</c>, with the diagnostic
+    /// detail logged via <see cref="Trace"/>.
+    /// </summary>
+    private static object RunSynchronously(string script, object input, object function)
+    {
         try
         {
             var functionName = ResolveFunctionName(function);
@@ -81,9 +104,6 @@ public static class PyRunFunction
         }
         catch (KernelException kex)
         {
-            // The kernel-side traceback is the actually-useful diagnostic.
-            // We log it for DebugView / the Excel-DNA log window; the cell
-            // gets #VALUE! since a string return would look like a result.
             Trace.WriteLine(
                 $"[PY.RUN] kernel error [{kex.Code}] {kex.PythonType}: {kex.Message}\n{kex.PythonTraceback}");
             return ExcelError.ExcelErrorValue;
