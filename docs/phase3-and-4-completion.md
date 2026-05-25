@@ -28,21 +28,23 @@ the friction is in the test loop, not the code.
 
 ## What's left to fully close Phase 3 + Phase 4
 
-### 1. `ExcelWorkbookContext` — concrete `IWorkbookContext` (~50 lines)
+### 1. `ExcelWorkbookContext` — concrete `IWorkbookContext` ✅
 
-`PyExcel.State.IWorkbookContext` is an interface today. Production needs an
-implementation that returns the active workbook's identity from
-`Application.ActiveWorkbook`. Lives in `PyExcel.Addin` (or a new
-`PyExcel.State.Windows`) under `#if NETFRAMEWORK`. Key strategy: use
-`Workbook.FullName` for saved workbooks, fall back to `Workbook.Name +
-SessionGuid` for unsaved ones (matches the contract documented in
-`IWorkbookContext`).
+Landed in `src/PyExcel.Addin/ExcelWorkbookContext.cs`. Uses
+`ExcelDnaUtil.Application` over `dynamic` (no Office PIA reference).
+Saved workbooks → `Workbook.FullName`; unsaved workbooks →
+`"unsaved:{SessionGuid}:{Workbook.Name}"` (the session GUID is
+allocated once per add-in load so two unsaved books named `Book1` /
+`Book2` don't collide). Any COM exception during the lookup
+(transient state between workbook events, shutdown) is swallowed and
+yields `null` — the ribbon's getters all tolerate that as
+"no workbook".
 
-`PyExcel.Addin.AddIn.AutoOpen` calls:
-
-```csharp
-PyExcelServices.WorkbookContext = new ExcelWorkbookContext();
-```
+Wired into `PyExcelServices.WorkbookContext` from `AddIn.AutoOpen`.
+Can't unit-test on Linux (no Excel COM); manual smoke test on
+Windows: open a fresh workbook → save it → close → reopen, and
+confirm the ribbon's getEnabled / getSelectedScript reflect the
+right per-workbook state at each step.
 
 ### 2. `AppEventSink` — the Excel.Application event subscriber (~150 lines)
 
@@ -173,7 +175,7 @@ mention only for traceability.
 
 | Component | CI-testable | Notes |
 |---|---|---|
-| #1 `ExcelWorkbookContext` | ❌ | COM-bound; manual smoke test |
+| #1 `ExcelWorkbookContext` | ✅ landed | COM-bound; manual smoke test still required |
 | #2 `AppEventSink` | ❌ | COM events; manual smoke test |
 | #3 CustomXMLPart codec | ✅ landed | `WorkbookStateCodec` + 15 tests; COM read/write part still to do |
 | #4 UDF cancel bridge | ⚠️ | Async flow testable via fake ExcelAsyncUtil; the real flow needs Excel |
@@ -187,7 +189,7 @@ mention only for traceability.
 ## Suggested order for the next session
 
 1. ~~**#6 Ribbon range parser**~~ — done, see `RibbonRangeParser.cs`.
-2. **#1 ExcelWorkbookContext** — small, mechanical. (~1 commit)
+2. ~~**#1 ExcelWorkbookContext**~~ — done, see `ExcelWorkbookContext.cs`. Needs Windows smoke test.
 3. ~~**#3 CustomXMLPart codec**~~ (codec only) — done, see `WorkbookStateCodec.cs`. COM persister still to do.
 4. **#2 AppEventSink** + COM-side CustomXMLPart persistence + smoke
    test in Excel. **This is the milestone that unlocks the Phase 3

@@ -26,6 +26,7 @@
   <ItemGroup>
     <ProjectReference Include="..\PyExcel.Common\PyExcel.Common.csproj" />
     <ProjectReference Include="..\PyExcel.Ribbon\PyExcel.Ribbon.csproj" />
+    <ProjectReference Include="..\PyExcel.State\PyExcel.State.csproj" />
   </ItemGroup>
 
 </Project>
