@@ -27,6 +27,7 @@ single kernel package (it must stay Python — it runs user `transform()` code).
 
 Terse running record (newest first) so a new session can pick up where work stopped:
 
+- **2026-05-24 — Phase 4 step 4: error visibility via LogDisplay.** `PyRunFunction` now writes kernel-error details (`Code`, `PythonType`, `Message`, full `PythonTraceback`) to `ExcelDna.Logging.LogDisplay` in addition to `Trace`. LogDisplay is Excel-DNA's built-in pop-up log window — surfaces in Excel itself rather than only in DebugView. Cell still gets `#VALUE!` so `ISERROR()` keeps working. No code change required of users; just a packaging upgrade to a more useful error path.
 - **2026-05-24 — Phase 4 step 3: SAFE-1 async UDF.** Replaced the sync UDF body with `ExcelAsyncUtil.Run(...)` so the calc thread no longer blocks for the duration of a kernel run. First call returns `#N/A` immediately; Excel-DNA refreshes the cell when the background task completes. Identical inputs short-circuit to the cached result instead of re-spawning. The blocking work now runs in `RunSynchronously` on Excel-DNA's worker thread; same error contract as before (KernelException → `#VALUE!` + `Trace.WriteLine` of the Python traceback). Worker-side cancellation (kernel acting on CANCEL frames) is still pending — Excel-DNA cancels its background task on formula change, but the kernel completes the run regardless.
 - **2026-05-24 — Phase 4 step 2: `=PY.RUN` UDF.** Added `PyRunFunction.cs` (net48-only, `#if NETFRAMEWORK` so the netstandard2.0 / Linux CI slice ignores it). ExcelDna.Integration 1.8.0 conditional package reference for the net48 target. The UDF is a small translation layer over `PyRun.Execute` — Excel sentinel arguments map to `null`, the `PyRun.EmptyResult` sentinel maps to `ExcelEmpty.Value`, `KernelException` is rendered as `#VALUE!` in the cell with the Python traceback logged via `Trace.WriteLine`. Synchronous in this slice; async/progress/cancel (SAFE-1) and the ribbon button are separate Phase 4 items. No automated test coverage on this file alone — exercising `[ExcelFunction]` needs an actual Excel instance — but the dispatch core it delegates to is covered by `PyRunTests`' 13 end-to-end cases.
 - **2026-05-24 — Phase 4 step 1: marshalling + dispatch core.** New `PyExcel.Excel` assembly (multi-target net48 + netstandard2.0, Apache.Arrow 18.0.0). Three pieces:
@@ -168,7 +169,7 @@ Arrow, COM interop, and the threading model in a single slice before going wide.
 - [ ] `OnRunPython` ribbon button handler (same dispatch core as the UDF, called from the button event); apply the same non-blocking pattern with a progress UI driven by `PROGRESS` frames.
 - [ ] Non-blocking progress UI driven by `PROGRESS` frames, with a working **Cancel**.
 - [ ] Archive a run (inputs, outputs, log); retention cap.
-- [ ] Surface kernel errors (full traceback, script name, log path) clearly to the user.
+- [~] Surface kernel errors — `KernelException` now logs to Excel-DNA's `LogDisplay` (the in-Excel error window users can open from the add-in menu) in addition to `Trace`. Cell still shows `#VALUE!` so `ISERROR()` still works. Richer surfacing (per-script error pane, hover tooltip, copy-button for the traceback) is a follow-up.
 - [ ] `ExcelFormula` round-trip (A1 mode).
 - [ ] Tests: range ↔ Arrow round-trip incl. dates, nulls, formulas.
 

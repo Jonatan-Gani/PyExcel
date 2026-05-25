@@ -2,6 +2,7 @@
 using System;
 using System.Diagnostics;
 using ExcelDna.Integration;
+using ExcelDna.Logging;
 using PyExcel.Kernel.Client;
 
 namespace PyExcel.Excel;
@@ -106,13 +107,24 @@ public static class PyRunFunction
         }
         catch (KernelException kex)
         {
-            Trace.WriteLine(
-                $"[PY.RUN] kernel error [{kex.Code}] {kex.PythonType}: {kex.Message}\n{kex.PythonTraceback}");
+            // The kernel-side traceback is the diagnostic users actually
+            // need. Send it to:
+            //   * Trace — visible in DebugView when developing.
+            //   * LogDisplay — Excel-DNA's built-in error window, which
+            //     users can open from the add-in (or which pops up
+            //     automatically on the first message in some configs).
+            // The cell itself still gets #VALUE! so spreadsheet formulas
+            // like ISERROR() see it as a failure rather than as data.
+            var msg = $"[PY.RUN] {kex.Code} {kex.PythonType}: {kex.Message}\n{kex.PythonTraceback}";
+            Trace.WriteLine(msg);
+            LogDisplay.WriteLine(msg);
             return ExcelError.ExcelErrorValue;
         }
         catch (Exception ex)
         {
-            Trace.WriteLine($"[PY.RUN] host error: {ex}");
+            var msg = $"[PY.RUN] host error: {ex}";
+            Trace.WriteLine(msg);
+            LogDisplay.WriteLine(msg);
             return ExcelError.ExcelErrorValue;
         }
     }
