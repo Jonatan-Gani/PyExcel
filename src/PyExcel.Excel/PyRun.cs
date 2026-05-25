@@ -1,8 +1,13 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Runtime.CompilerServices;
 using PyExcel.Bridge;
 using PyExcel.Kernel.Client;
+
+// Test-only access to the internal classification + decoding helpers in
+// this class so PyRunTests can drive them without spinning up a kernel.
+[assembly: InternalsVisibleTo("PyExcel.Bridge.Tests")]
 
 namespace PyExcel.Excel;
 
