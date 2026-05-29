@@ -6,12 +6,24 @@
   this assembly and call AddIn.AutoOpen()/AutoClose() at the appropriate
   lifecycle points. See PyExcel.Addin.AddIn.cs for those entry points.
 
-  CustomUI is wired via the Ribbon class registered in PyExcel.Ribbon,
-  not here — Excel-DNA discovers it via the assembly attribute
-  [assembly: ExternalLibrary] / [ExcelRibbon]-derived classes.
+  CustomUI is wired via the ExcelRibbon-derived PyExcelRibbon class in
+  PyExcel.Ribbon.dll. Excel-DNA only scans assemblies listed here as
+  <ExternalLibrary> for [ExcelRibbon] classes (and [ExcelFunction]s) —
+  a merely-referenced dependency is packed for runtime loading but NOT
+  scanned. So PyExcel.Ribbon.dll must have its own entry, otherwise the
+  ribbon tab never renders even though the add-in's AutoOpen runs.
+  Likewise PyExcel.Excel.dll, which carries the =PY.RUN UDF.
 -->
 <DnaLibrary Name="PyExcel" RuntimeVersion="v4.0">
   <ExternalLibrary Path="PyExcel.Addin.dll"
+                   ExplicitExports="false"
+                   LoadFromBytes="true"
+                   Pack="true" />
+  <ExternalLibrary Path="PyExcel.Ribbon.dll"
+                   ExplicitExports="false"
+                   LoadFromBytes="true"
+                   Pack="true" />
+  <ExternalLibrary Path="PyExcel.Excel.dll"
                    ExplicitExports="false"
                    LoadFromBytes="true"
                    Pack="true" />
