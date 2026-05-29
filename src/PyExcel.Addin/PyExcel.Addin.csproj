@@ -12,6 +12,13 @@
     <AssemblyName>PyExcel.Addin</AssemblyName>
     <Platforms>x64</Platforms>
     <PlatformTarget>x64</PlatformTarget>
+    <!--
+      Point the build at app.config explicitly (rather than relying on
+      SDK auto-detection) so ExcelDna.AddIn copies our binding redirects
+      into PyExcel-AddIn64.xll.config. Those redirects are what let
+      Apache.Arrow's System.* dependencies bind at load on net48.
+    -->
+    <AppConfig>app.config</AppConfig>
   </PropertyGroup>
 
   <ItemGroup>
