@@ -99,12 +99,17 @@ add-in lifetime (`AutoOpen` → `AutoClose`).
 > `error CS0234: type 'Workbook' does not exist in namespace
 > 'PyExcel.Excel'`. Tried both with and without an `<EmbedInteropTypes>`
 > child on the `PackageReference`; both failed identically. The fix
-> (`PyExcel.Addin.csproj`): restore the package only for its DLLs
-> (`GeneratePathProperty="true"` + `ExcludeAssets="all"`) and add explicit
-> `<Reference EmbedInteropTypes="true" Private="false">` items pointing at
+> (`PyExcel.Addin.csproj`): reference the package's PIA DLLs explicitly
+> with `<Reference EmbedInteropTypes="true" Private="false">` pointing at
 > `$(PkgExcelDna_Interop)\lib\net452\{Microsoft.Office.Interop.Excel,
 > Office,Microsoft.Vbe.Interop}.dll` — the canonical way to embed a
-> NuGet-delivered PIA.
+> NuGet-delivered PIA — where `$(PkgExcelDna_Interop)` comes from
+> `GeneratePathProperty="true"` on the `PackageReference`.
+>
+> **Second gotcha:** `GeneratePathProperty` must stand alone — do NOT pair
+> it with `ExcludeAssets="all"` or `PrivateAssets="all"`, which leave the
+> `$(Pkg…)` property empty (NuGet/Home #13859, #8311), so the HintPaths
+> resolve to nothing and the CS0234 returns. (Cost a CI round to learn.)
 
 ### 3. CustomXMLPart persistence
 

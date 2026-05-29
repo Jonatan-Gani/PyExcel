@@ -36,19 +36,22 @@
       flips them to EmbedInteropTypes after ResolveReferences.
 
       That implicit mechanism did NOT surface the types on the Windows CI
-      runner (CS0234 "type 'Workbook' does not exist in namespace
+      build (CS0234 "type 'Workbook' does not exist in namespace
       'PyExcel.Excel'" — the `Excel` alias falling back to our own
       namespace — both with and without an <EmbedInteropTypes> child). So
-      we restore the package only for its DLLs (GeneratePathProperty
-      exposes its root as $(PkgExcelDna_Interop); ExcludeAssets=all stops
-      its own asset/targets path) and reference the assemblies EXPLICITLY
-      with EmbedInteropTypes below — the canonical, deterministic way to
-      embed a NuGet-delivered PIA. Embedding => the shipped .xll carries no
-      runtime PIA dependency. Pinned, never wildcard, so packaging stays
-      reproducible.
+      we reference the package's DLLs EXPLICITLY with EmbedInteropTypes
+      below (the canonical way to embed a NuGet-delivered PIA), using
+      GeneratePathProperty to expose the restored package root as
+      $(PkgExcelDna_Interop).
+
+      IMPORTANT: GeneratePathProperty must stand alone here. Do NOT add
+      ExcludeAssets="all" (an earlier attempt did): that leaves
+      $(PkgExcelDna_Interop) empty, so the HintPaths below resolve to
+      nothing and the same CS0234 returns. Embedding => the shipped .xll
+      carries no runtime PIA dependency. Pinned, never wildcard.
     -->
     <PackageReference Include="ExcelDna.Interop" Version="15.0.1"
-                      GeneratePathProperty="true" ExcludeAssets="all" />
+                      GeneratePathProperty="true" />
   </ItemGroup>
 
   <!--
