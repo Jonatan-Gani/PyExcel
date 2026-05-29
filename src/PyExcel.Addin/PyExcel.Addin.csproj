@@ -97,4 +97,20 @@
     <Reference Include="Microsoft.CSharp" />
   </ItemGroup>
 
+  <!--
+    TEMPORARY diagnostic (remove once the net48 build is green): prints the
+    actual state of the Office PIA resolution on the CI runner, since this
+    environment can't build net48 locally. Shows whether GeneratePathProperty
+    populated $(PkgExcelDna_Interop), whether the DLL exists at the HintPath,
+    the NuGet package folders, the build engine (Core vs Full MSBuild), and
+    whether the interop assembly reached @(ReferencePath).
+  -->
+  <Target Name="_DiagInteropResolution" BeforeTargets="CoreCompile">
+    <Message Importance="high" Text="DIAG RuntimeType=$(MSBuildRuntimeType)" />
+    <Message Importance="high" Text="DIAG PkgExcelDna_Interop='$(PkgExcelDna_Interop)'" />
+    <Message Importance="high" Text="DIAG NuGetPackageFolders='$(NuGetPackageFolders)'" />
+    <Message Importance="high" Text="DIAG ExcelDllExists=$([System.IO.File]::Exists('$(PkgExcelDna_Interop)\lib\net452\Microsoft.Office.Interop.Excel.dll'))" />
+    <Message Importance="high" Text="DIAG RefPathInterop=@(ReferencePath->WithMetadataValue('FileName','Microsoft.Office.Interop.Excel')->'%(Identity);Embed=%(EmbedInteropTypes)')" />
+  </Target>
+
 </Project>
