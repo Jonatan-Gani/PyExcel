@@ -127,7 +127,27 @@ public class PyExcelRibbon : ExcelRibbon
     // -------------------------------------------------------------------------
 
     public void OnEnablePyExcel(IRibbonControl control)
-        => StubAction(control, "OnEnablePyExcel", "modRibbon.bas:461 — invokes setup wizard");
+    {
+        // v1 (modRibbon.bas:461) ran a full setup wizard that provisioned
+        // the workbook and then marked it enabled; that wizard is Phase 7.
+        // For now this button is the enable/disable toggle for the active
+        // workbook. Flipping Enabled fires StateChanged, which the
+        // RibbonOnLoad handler turns into an IRibbonUI.Invalidate — so every
+        // getEnabled-gated control lights up (or greys out) on the next
+        // repaint without any extra wiring here.
+        try
+        {
+            var key = PyExcelServices.WorkbookContext.CurrentWorkbookKey;
+            if (key is null) { _log.Info("OnEnablePyExcel: no active workbook"); return; }
+            var now = !PyExcelServices.State.Get(key).Enabled;
+            PyExcelServices.State.SetEnabled(key, now);
+            _log.Info($"OnEnablePyExcel: workbook '{key}' enabled={now}");
+        }
+        catch (Exception ex)
+        {
+            _log.Error("OnEnablePyExcel failed", ex);
+        }
+    }
 
     public void OnOpenExplorer(IRibbonControl control)
         => StubAction(control, "OnOpenExplorer", "modRibbon.bas:515 — shells explorer.exe at project root");
