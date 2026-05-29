@@ -89,15 +89,22 @@ add-in lifetime (`AutoOpen` → `AutoClose`).
 > reference is added in `PyExcel.Addin.csproj`; it is the *only* Office
 > interop reference in the codebase.
 >
-> **Consume it plain — gotcha.** Do **not** put an
-> `<EmbedInteropTypes>true</EmbedInteropTypes>` child on the
-> `PackageReference`: it diverts the SDK away from the package's
-> `.targets`-provided references, the `Microsoft.Office.Interop.Excel`
-> types stop resolving, and the `Excel` alias falls back to our own
-> `PyExcel.Excel` namespace — which surfaces as
+> **Reference the assemblies explicitly — gotcha.** The package's own
+> mechanism is a build `.targets` that flips the restored
+> `lib/net452` references to `EmbedInteropTypes` after `ResolveReferences`.
+> On the Windows CI runner that did **not** surface the types (the
+> `lib/net452` assemblies never reached `ReferencePath`), so
+> `Microsoft.Office.Interop.Excel` didn't resolve and the `Excel` alias
+> fell back to our own `PyExcel.Excel` namespace —
 > `error CS0234: type 'Workbook' does not exist in namespace
-> 'PyExcel.Excel'`. (First Windows CI run hit exactly this; fixed by
-> dropping the child element.)
+> 'PyExcel.Excel'`. Tried both with and without an `<EmbedInteropTypes>`
+> child on the `PackageReference`; both failed identically. The fix
+> (`PyExcel.Addin.csproj`): restore the package only for its DLLs
+> (`GeneratePathProperty="true"` + `ExcludeAssets="all"`) and add explicit
+> `<Reference EmbedInteropTypes="true" Private="false">` items pointing at
+> `$(PkgExcelDna_Interop)\lib\net452\{Microsoft.Office.Interop.Excel,
+> Office,Microsoft.Vbe.Interop}.dll` — the canonical way to embed a
+> NuGet-delivered PIA.
 
 ### 3. CustomXMLPart persistence
 
