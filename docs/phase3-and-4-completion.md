@@ -198,13 +198,13 @@ mention only for traceability.
 
 | Component | CI-testable | Notes |
 |---|---|---|
-| #1 `ExcelWorkbookContext` | ✅ landed | COM-bound; manual smoke test still required |
+| #1 `ExcelWorkbookContext` | ✅ verified | smoke-tested on real Excel 2026-05-29 |
 | #2 `AppEventSink` | ❌ | COM events; manual smoke test |
 | #3 CustomXMLPart codec | ✅ landed | `WorkbookStateCodec` + 15 tests; COM read/write part still to do |
 | #4 UDF cancel bridge | ⚠️ | Async flow testable via fake ExcelAsyncUtil; the real flow needs Excel |
 | #5 Progress UI | ❌ | WinForms; manual |
 | #6 Ribbon range parser | ✅ landed | `RibbonRangeParser` + 15 tests |
-| #7 OnRunPython | ✅ code complete | `RangeRunner` + ExecuteMany tested; range read/write needs Windows smoke test |
+| #7 OnRunPython | ✅ verified | smoke-tested on real Excel 2026-05-29 — doubling, error surfacing, multi-input all pass |
 | #8 Forms | ❌ | Phase 8 |
 
 ---
