@@ -76,10 +76,17 @@ _DEFAULT_FUNCTION = "transform"
 # abs_path -> (mtime_seen_at_load, loaded_module)
 _module_cache: dict[str, Tuple[float, ModuleType]] = {}
 
-# Module-level cancellation state. Only one job runs at a time per kernel,
-# so a single shared Event is sufficient — the supervisor calls
+# Module-level per-job state. Only one job runs at a time per kernel, so a
+# single shared slot for each is sufficient — the supervisor calls
 # :func:`_begin_job` before dispatching and :func:`_end_job` afterwards.
+#
+# ``_current_cancel_event`` is set when a CANCEL frame arrives mid-run;
+# :func:`is_cancelled` reads it. ``_current_progress_sink`` is the callback
+# :func:`report_progress` forwards user progress updates to — the supervisor
+# wires it to a queue it drains onto the wire as PROGRESS frames.
 _current_cancel_event: Optional[threading.Event] = None
+ProgressSink = Callable[[Optional[float], str], None]
+_current_progress_sink: Optional[ProgressSink] = None
 
 
 class JobError(Exception):
@@ -124,20 +131,54 @@ def is_cancelled() -> bool:
     return ev is not None and ev.is_set()
 
 
-def _begin_job(event: Optional[threading.Event]) -> None:
-    """Install the cancellation Event for the duration of one job.
+def report_progress(percent: Optional[float] = None, message: str = "") -> None:
+    """User-facing API: report progress for the in-flight job to the host.
+
+    Long-running transform functions can call this between work units; the
+    supervisor relays each call to the host as a ``PROGRESS`` frame
+    (``KernelClient.ProgressReceived`` on the C# side), which a progress UI
+    renders. Calls are fire-and-forget — they never block on the host and
+    never raise on the user for transport reasons.
+
+    Args:
+        percent: Completion as a 0–100 value, or ``None`` for an
+            indeterminate update that only carries a ``message`` (e.g. a
+            spinner with a status line). Numeric values are coerced to
+            ``float``; the 0–100 convention is honoured by the renderer, not
+            enforced here.
+        message: Optional human-readable status line.
+
+    Calling this when no job is in flight is a safe no-op (mirrors
+    :func:`is_cancelled`), so user modules can call it unconditionally.
+    """
+    sink = _current_progress_sink
+    if sink is None:
+        return  # no job in flight — safe no-op
+    pct = None if percent is None else float(percent)
+    sink(pct, str(message))
+
+
+def _begin_job(
+    event: Optional[threading.Event],
+    progress_sink: Optional[ProgressSink] = None,
+) -> None:
+    """Install the per-job cancellation Event + progress sink for one job.
 
     Called by :mod:`pyexcel.kernel.supervisor` immediately before dispatching
     ``run_job`` on the worker thread. Not part of the user-facing surface.
     """
-    global _current_cancel_event
+    global _current_cancel_event, _current_progress_sink
     _current_cancel_event = event
+    _current_progress_sink = progress_sink
 
 
 def _end_job() -> None:
-    """Clear the per-job cancellation Event after the worker thread finishes."""
-    global _current_cancel_event
+    """Clear the per-job cancellation Event + progress sink after the worker
+    thread finishes, so a later out-of-band :func:`report_progress` /
+    :func:`is_cancelled` call is an inert no-op."""
+    global _current_cancel_event, _current_progress_sink
     _current_cancel_event = None
+    _current_progress_sink = None
 
 
 def run_job(

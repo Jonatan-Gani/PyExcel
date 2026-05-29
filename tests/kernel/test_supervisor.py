@@ -396,6 +396,80 @@ def test_kernel_unsolicited_cancel_returns_error_keeps_running():
         server.close()
 
 
+# -----------------------------------------------------------------------------
+# PROGRESS — user script calls pyexcel.kernel.report_progress; the supervisor
+# relays each call as a PROGRESS frame that precedes the terminal RUN_RESULT.
+# -----------------------------------------------------------------------------
+
+
+def test_kernel_report_progress_emits_progress_frames_before_result(tmp_path):
+    # The script reports determinate, indeterminate (None percent), and final
+    # progress, then returns a value. The kernel must stream those as PROGRESS
+    # frames (matching the meta KernelClient.RaiseProgress reads) before the
+    # RUN_RESULT lands.
+    script = tmp_path / "progressing.py"
+    script.write_text(textwrap.dedent("""
+        from pyexcel.kernel import report_progress
+
+        def transform(x):
+            report_progress(25, "quarter")
+            report_progress(message="working")   # indeterminate: percent=None
+            report_progress(100, "done")
+            return x * 2
+    """))
+
+    pipe_name = "pyexcel-test-" + uuid.uuid4().hex
+    server = _Server(pipe_name)
+    proc = _spawn_kernel(pipe_name)
+
+    try:
+        server.accept(timeout_s=5.0)
+        server.send(FrameType.HELLO, {"protocol": PROTOCOL_VERSION})
+        _ = server.recv()  # client HELLO
+
+        encoded = encode_frame(
+            FrameType.RUN_REQUEST,
+            {"run_id": "prog-job", "script": str(script)},
+            (arrow_io.encode(21),),
+        )
+        server._conn.sendall(encoded)  # type: ignore[union-attr]
+
+        # Collect PROGRESS frames until the terminal RUN_RESULT. Reading a
+        # bounded number of frames guards against a hang if the contract breaks.
+        progress = []
+        result = None
+        for _ in range(10):
+            f = server.recv()
+            if f.type is FrameType.PROGRESS:
+                progress.append(f)
+            elif f.type is FrameType.RUN_RESULT:
+                result = f
+                break
+            else:
+                pytest.fail(f"unexpected frame {f.type.name}; meta={f.meta!r}")
+
+        assert result is not None, "never received RUN_RESULT"
+        assert result.meta["run_id"] == "prog-job"
+        assert arrow_io.decode(result.payloads[0]) == 42
+
+        # Every progress frame echoes the run id and carries percent/message.
+        assert [p.meta["run_id"] for p in progress] == ["prog-job"] * 3
+        assert (progress[0].meta["percent"], progress[0].meta["message"]) == (25.0, "quarter")
+        # Indeterminate update: percent serialised as JSON null -> None.
+        assert progress[1].meta["percent"] is None
+        assert progress[1].meta["message"] == "working"
+        assert (progress[2].meta["percent"], progress[2].meta["message"]) == (100.0, "done")
+
+        server.send(FrameType.SHUTDOWN, {})
+        rc, _, err = _drain(proc, timeout_s=5.0)
+        assert rc == 0, f"kernel exited with {rc}; stderr={err!r}"
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait(timeout=2)
+        server.close()
+
+
 def test_kernel_ping_during_run_is_answered(tmp_path):
     # PING during a RUN must still produce a PONG (liveness check) without
     # disturbing the run's outcome.

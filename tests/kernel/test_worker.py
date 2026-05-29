@@ -27,6 +27,15 @@ def _clear_module_cache():
     worker.clear_cache()
 
 
+@pytest.fixture(autouse=True)
+def _reset_job_state():
+    """Ensure the module-level per-job slots (cancel event, progress sink) are
+    clear around every test, so a test that installs a sink can't leak it."""
+    worker._end_job()
+    yield
+    worker._end_job()
+
+
 def _write_script(tmp_path: Path, name: str, body: str) -> Path:
     p = tmp_path / name
     p.write_text(textwrap.dedent(body))
@@ -352,3 +361,63 @@ def test_outcome_is_frozen_dataclass():
     assert isinstance(out, JobOutcome)
     with pytest.raises(dataclasses.FrozenInstanceError):
         out.success = True  # type: ignore[misc]
+
+
+# -----------------------------------------------------------------------------
+# report_progress — user-facing helper; supervisor wires the sink, worker just
+# forwards. (End-to-end PROGRESS-frame coverage lives in test_supervisor.py.)
+# -----------------------------------------------------------------------------
+
+
+def test_report_progress_is_noop_when_no_job_in_flight():
+    # No _begin_job has installed a sink, so this must be inert (not raise).
+    worker.report_progress(50, "ignored")
+    worker.report_progress()  # bare call, indeterminate
+    worker.report_progress(message="still fine")
+
+
+def test_report_progress_forwards_to_installed_sink():
+    seen: list[tuple] = []
+    worker._begin_job(None, lambda pct, msg: seen.append((pct, msg)))
+    try:
+        worker.report_progress(25, "quarter")
+        worker.report_progress(100, "done")
+    finally:
+        worker._end_job()
+
+    assert seen == [(25.0, "quarter"), (100.0, "done")]
+
+
+def test_report_progress_coerces_percent_to_float_and_message_to_str():
+    seen: list[tuple] = []
+    worker._begin_job(None, lambda pct, msg: seen.append((pct, msg)))
+    try:
+        worker.report_progress(42, 123)  # int percent, non-str message
+    finally:
+        worker._end_job()
+
+    (pct, msg), = seen
+    assert isinstance(pct, float) and pct == 42.0
+    assert msg == "123"
+
+
+def test_report_progress_none_percent_is_indeterminate():
+    seen: list[tuple] = []
+    worker._begin_job(None, lambda pct, msg: seen.append((pct, msg)))
+    try:
+        worker.report_progress(message="working")  # percent defaults to None
+        worker.report_progress(None, "still working")
+    finally:
+        worker._end_job()
+
+    assert seen == [(None, "working"), (None, "still working")]
+
+
+def test_end_job_clears_sink_so_later_calls_are_noops():
+    seen: list[tuple] = []
+    worker._begin_job(None, lambda pct, msg: seen.append((pct, msg)))
+    worker.report_progress(10, "during")
+    worker._end_job()
+    worker.report_progress(90, "after")  # sink gone — must not be recorded
+
+    assert seen == [(10.0, "during")]
