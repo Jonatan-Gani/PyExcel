@@ -216,9 +216,12 @@ real resolver is Phase 7 scope.
 
 ## Known gaps from Phase 2 (not blockers for Phase 4)
 
-- **Worker doesn't emit PROGRESS / LOG yet.** `KernelClient` parses
-  them; `worker.py` doesn't produce them. Trivial follow-up — expose a
-  `pyexcel.kernel.log(...)` API the user script can call.
+- **Worker emits PROGRESS now; LOG still pending.** `pyexcel.kernel.report_progress(percent, message)`
+  lets a user script push `PROGRESS` frames — the supervisor drains them
+  onto the wire from its main loop and `KernelClient.ProgressReceived`
+  fires (see `docs/phase3-and-4-completion.md` §5). The parallel
+  `pyexcel.kernel.log(...)` → `LOG` path is the remaining follow-up
+  (`KernelClient.LogReceived` is already wired on the C# side).
 - **Worker doesn't handle CANCEL.** `KernelClient.Cancel(runId)` writes
   the frame; the supervisor sees it as "unsupported frame type" and
   replies with an unsolicited ERROR. To make Cancel actually cancel,

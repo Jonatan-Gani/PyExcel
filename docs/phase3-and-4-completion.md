@@ -130,18 +130,28 @@ when the observable disposes.
 Worth it only if users hit long-running jobs in practice; Phase 4 first
 slice prioritised correctness over this optimisation.
 
-### 5. Progress UI (~200–300 lines, WinForms)
+### 5. Progress UI (~200–300 lines, WinForms) — kernel half ✅, WinForms still to do
 
-Wire `KernelClient.ProgressReceived` to a small modeless WinForm with a
+**Kernel half landed.** `pyexcel.kernel.report_progress(percent=None,
+message="")` is now a user-facing helper (re-exported from
+`pyexcel.kernel`, alongside `is_cancelled`). The supervisor installs a
+per-job progress sink via `worker._begin_job(event, progress_sink)` and
+drains it onto the wire as `PROGRESS` frames from the main loop — the
+same single-writer thread that sends PONG/terminal frames, so the worker
+thread never races it for the transport. Frames are flushed each
+~50 ms poll tick during the run and once more after the worker joins, so
+every `PROGRESS` precedes the terminal `RUN_RESULT`/`ERROR`. Meta matches
+what `KernelClient.RaiseProgress` reads: `run_id`, `percent` (JSON `null`
+for indeterminate updates), `message`. 5 worker unit tests + 1 e2e
+supervisor test (`test_kernel_report_progress_emits_progress_frames_before_result`).
+The C# side was already wired (`KernelClient.ProgressReceived` fires).
+
+**WinForms half still to do** (needs Windows, Phase 8 charter). Wire
+`KernelClient.ProgressReceived` to a small modeless WinForm with a
 percent bar, message, and a Cancel button. The form lives in a new
-`PyExcel.Forms` assembly (Phase 8 charter) but a Phase-4-grade one
-can be inline if you want to move fast. The Cancel button calls
-`KernelClient.Cancel(runId)`.
-
-The kernel currently emits no `PROGRESS` frames. Add a
-`pyexcel.kernel.report_progress(percent, message)` helper user scripts
-can call; supervisor sends it as `PROGRESS` over the wire. C# side is
-already wired (`KernelClient.ProgressReceived` event fires).
+`PyExcel.Forms` assembly but a Phase-4-grade one can be inline if you
+want to move fast. The Cancel button calls `KernelClient.Cancel(runId)`
+(#4's bridge is what makes that Cancel actually abort the run).
 
 ### 6. Ribbon Input/Output `{name}=Range` parser ✅
 
@@ -202,7 +212,7 @@ mention only for traceability.
 | #2 `AppEventSink` | ❌ | COM events; manual smoke test |
 | #3 CustomXMLPart codec | ✅ landed | `WorkbookStateCodec` + 15 tests; COM read/write part still to do |
 | #4 UDF cancel bridge | ⚠️ | Async flow testable via fake ExcelAsyncUtil; the real flow needs Excel |
-| #5 Progress UI | ❌ | WinForms; manual |
+| #5 Progress UI | ⚠️ | kernel half (`report_progress` → `PROGRESS`) ✅ CI-tested; WinForms still manual |
 | #6 Ribbon range parser | ✅ landed | `RibbonRangeParser` + 15 tests |
 | #7 OnRunPython | ✅ verified | smoke-tested on real Excel 2026-05-29 — doubling, error surfacing, multi-input all pass |
 | #8 Forms | ❌ | Phase 8 |
@@ -220,7 +230,9 @@ mention only for traceability.
    on a design decision** — see the note under §2: a typed Office PIA
    reference is the easy path but breaks the PIA-less Windows CI build,
    so the event sink must wire COM events late-bound. Still open.
-6. **#4** UDF cancel bridge and **#5** progress UI — polish, still open.
+6. **#4** UDF cancel bridge and **#5** progress UI — polish. #5's kernel
+   half (`report_progress` → `PROGRESS` frames) is done and CI-tested;
+   the WinForms dialog is the remaining (Windows-only) piece. #4 still open.
 
 Phase 4's headline ("one real script runs end to end") is satisfiable
 once the #7 smoke test below passes. Phase 3's exit criteria still want
@@ -306,6 +318,6 @@ couldn't verify from Linux.
 | Script directory tracking | `src/PyExcel.State/ScriptDirectoryWatcher.cs` + tests |
 | `=PY.RUN` UDF wrapper | `src/PyExcel.Excel/PyRunFunction.cs` (the file you'll modify for #4) |
 | Dispatch core | `src/PyExcel.Excel/PyRun.cs` (the file you may extend for #6) |
-| Kernel `is_cancelled` | `embedded/pyexcel/kernel/__init__.py` (re-exported from `worker`) |
+| Kernel `is_cancelled` / `report_progress` | `embedded/pyexcel/kernel/__init__.py` (re-exported from `worker`); supervisor drains the progress sink in `_run_with_cancellation` |
 | Add-in entry point | `src/PyExcel.Addin/AddIn.cs` (where `AutoOpen` wires services) |
 | Roadmap | [`ROADMAP.md`](../ROADMAP.md) Phase 3 + Phase 4 sections |

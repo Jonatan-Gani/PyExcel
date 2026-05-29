@@ -17,8 +17,12 @@ Frames handled in-loop:
 * ``RUN_REQUEST`` — delegated to :mod:`pyexcel.kernel.worker` running on
   a worker thread; meanwhile the main loop pumps inbound frames so
   ``CANCEL`` arrives in time to flip the cooperative cancellation flag,
-  and ``PING`` keeps answering for liveness checks. Replies inline with
-  ``RUN_RESULT`` or ``ERROR`` once the worker thread finishes.
+  and ``PING`` keeps answering for liveness checks. The same pump drains
+  any ``pyexcel.kernel.report_progress`` calls the user function made and
+  emits them as ``PROGRESS`` frames — all wire writes stay on the main
+  thread, so the worker thread never races the loop for the transport.
+  Replies inline with ``RUN_RESULT`` or ``ERROR`` once the worker thread
+  finishes.
 * ``SHUTDOWN`` — clean exit with code 0.
 
 Anything else gets an ``ERROR`` reply and the loop stays alive.
@@ -26,6 +30,7 @@ Anything else gets an ``ERROR`` reply and the loop stays alive.
 
 from __future__ import annotations
 
+import queue
 import sys
 import threading
 from typing import NoReturn, Optional
@@ -145,21 +150,54 @@ def _dispatch(transport: FrameTransport, frame: Frame) -> bool:
     return True
 
 
+def _flush_progress(
+    transport: FrameTransport,
+    progress_queue: "queue.Queue[tuple[Optional[float], str]]",
+    run_id: str,
+) -> None:
+    """Drain every queued ``report_progress`` call onto the wire as PROGRESS
+    frames. Called from the main loop only, so it never races the worker
+    thread for the transport. Meta mirrors what ``KernelClient.RaiseProgress``
+    reads: ``run_id`` echoed, ``percent`` (``None`` for indeterminate),
+    ``message``.
+    """
+    while True:
+        try:
+            percent, message = progress_queue.get_nowait()
+        except queue.Empty:
+            return
+        _send(
+            transport,
+            FrameType.PROGRESS,
+            {"run_id": run_id, "percent": percent, "message": message},
+        )
+
+
 def _run_with_cancellation(transport: FrameTransport, request: Frame) -> None:
     """Execute one RUN_REQUEST on a worker thread, pumping inbound frames in
     the main loop so CANCEL arrives in time to flip the cooperative
-    cancellation flag and PING keeps answering for liveness checks.
+    cancellation flag and PING keeps answering for liveness checks. The pump
+    also drains the worker's ``report_progress`` calls and emits them as
+    PROGRESS frames, so every wire write stays on this (the main) thread.
 
     Reply is sent once after the worker thread finishes. If a CANCEL arrived
     during the run, the reply is overridden to ``ERROR / Cancelled`` regardless
     of whether the user function completed naturally or noticed and aborted.
     """
     cancel_event = threading.Event()
+    # Bounded by nothing in principle, but the pump drains it every poll tick;
+    # the worker only ever enqueues from its own thread. Tuple is (percent, msg).
+    progress_queue: "queue.Queue[tuple[Optional[float], str]]" = queue.Queue()
     outcome_holder: list[Optional[worker.JobOutcome]] = [None]
     run_id = request.meta.get("run_id", "") or ""
 
+    def progress_sink(percent: Optional[float], message: str) -> None:
+        # Runs on the worker thread; only enqueues. The main loop does the
+        # actual transport write so we keep a single writer.
+        progress_queue.put((percent, message))
+
     def worker_main() -> None:
-        worker._begin_job(cancel_event)
+        worker._begin_job(cancel_event, progress_sink)
         try:
             outcome_holder[0] = worker.run_job(request.meta, request.payloads)
         finally:
@@ -172,7 +210,10 @@ def _run_with_cancellation(transport: FrameTransport, request: Frame) -> None:
     # PING → reply with PONG; anything else (including a second RUN_REQUEST,
     # which the host shouldn't send while a run is in flight) → ignore with
     # a log so we don't deadlock waiting for a frame we can't service yet.
+    # Each tick also flushes queued progress so updates stream during the run
+    # rather than bunching up at the end.
     while t.is_alive():
+        _flush_progress(transport, progress_queue, run_id)
         if not transport.has_data(_CANCEL_POLL_INTERVAL_S):
             continue
         try:
@@ -196,6 +237,9 @@ def _run_with_cancellation(transport: FrameTransport, request: Frame) -> None:
             )
 
     t.join(timeout=_WORKER_JOIN_TIMEOUT_S)
+    # Flush progress enqueued in the worker's final stretch before the loop
+    # last polled, so every PROGRESS frame precedes the terminal reply.
+    _flush_progress(transport, progress_queue, run_id)
     outcome = outcome_holder[0]
 
     # Three terminal states:

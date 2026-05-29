@@ -28,8 +28,11 @@ User-facing helpers
 Long-running transform functions can poll :func:`is_cancelled` between
 work units and return early; the supervisor will then surface an
 ``ERROR`` frame with code ``"Cancelled"`` instead of ``RUN_RESULT``.
+They can also call :func:`report_progress` to push status updates to the
+host as ``PROGRESS`` frames (driving the progress UI). Both are safe to
+call unconditionally — they're inert no-ops when no job is in flight.
 """
 
-from .worker import is_cancelled  # noqa: E402, F401 — re-export for user scripts
+from .worker import is_cancelled, report_progress  # noqa: E402, F401 — re-export for user scripts
 
-__all__ = ["is_cancelled"]
+__all__ = ["is_cancelled", "report_progress"]
