@@ -76,14 +76,63 @@ public static class PyRun
         string function = "transform",
         int timeoutMs = 60_000)
     {
+        // Single-input is just the degenerate multi-input case: a null
+        // input means "no positional argument", a non-null input means
+        // "one positional argument".
+        var inputs = input is null
+            ? Array.Empty<object?>()
+            : new[] { input };
+
+        return ExecuteMany(
+            script, inputs, kwargs, client, workbookDirectory, function, timeoutMs);
+    }
+
+    /// <summary>
+    /// Run one job with an arbitrary number of positional arguments and
+    /// return the spill-ready result. The kernel matches arguments to the
+    /// user function's parameters positionally — so
+    /// <c>transform(prices, signals)</c> receives <paramref name="inputs"/>
+    /// in list order. This is the entry point the ribbon's
+    /// <c>OnRunPython</c> button uses once the Input field is parsed into
+    /// multiple range bindings (see
+    /// <see cref="PyExcel.State.RibbonRangeParser"/>); the
+    /// single-input <see cref="Execute"/> overload is the one the
+    /// <c>=PY.RUN</c> UDF calls.
+    /// </summary>
+    /// <param name="inputs">Ordered positional arguments. Each element may
+    /// be <c>object?[,]</c>, <c>object?[]</c>, or a scalar — but not
+    /// <see langword="null"/>: a null in the middle of the list would
+    /// misalign the remaining positional arguments, so it's rejected. Use
+    /// the single-input <see cref="Execute"/> overload (with
+    /// <c>input: null</c>) for a no-argument call.</param>
+    public static object ExecuteMany(
+        string script,
+        IReadOnlyList<object?> inputs,
+        IReadOnlyDictionary<string, object?>? kwargs,
+        KernelClient client,
+        string? workbookDirectory = null,
+        string function = "transform",
+        int timeoutMs = 60_000)
+    {
         if (script is null) throw new ArgumentNullException(nameof(script));
         if (script.Length == 0) throw new ArgumentException("script path must be non-empty", nameof(script));
+        if (inputs is null) throw new ArgumentNullException(nameof(inputs));
         if (client is null) throw new ArgumentNullException(nameof(client));
 
         var scriptPath = ResolveScriptPath(script, workbookDirectory);
 
-        var argBuffer = EncodeInput(input);
-        var arguments = argBuffer is null ? Array.Empty<byte[]>() : new[] { argBuffer };
+        var arguments = new byte[inputs.Count][];
+        for (var i = 0; i < inputs.Count; i++)
+        {
+            var buffer = EncodeInput(inputs[i]);
+            if (buffer is null)
+                throw new ArgumentException(
+                    $"input at index {i} is null; null positional arguments are not " +
+                    $"supported (they would misalign the remaining arguments). " +
+                    $"Use Execute(input: null) for a no-argument call.",
+                    nameof(inputs));
+            arguments[i] = buffer;
+        }
 
         var result = client.Run(
             new RunRequest
