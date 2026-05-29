@@ -127,7 +127,27 @@ public class PyExcelRibbon : ExcelRibbon
     // -------------------------------------------------------------------------
 
     public void OnEnablePyExcel(IRibbonControl control)
-        => StubAction(control, "OnEnablePyExcel", "modRibbon.bas:461 — invokes setup wizard");
+    {
+        // v1 (modRibbon.bas:461) ran a full setup wizard that provisioned
+        // the workbook and then marked it enabled; that wizard is Phase 7.
+        // For now this button is the enable/disable toggle for the active
+        // workbook. Flipping Enabled fires StateChanged, which the
+        // RibbonOnLoad handler turns into an IRibbonUI.Invalidate — so every
+        // getEnabled-gated control lights up (or greys out) on the next
+        // repaint without any extra wiring here.
+        try
+        {
+            var key = PyExcelServices.WorkbookContext.CurrentWorkbookKey;
+            if (key is null) { _log.Info("OnEnablePyExcel: no active workbook"); return; }
+            var now = !PyExcelServices.State.Get(key).Enabled;
+            PyExcelServices.State.SetEnabled(key, now);
+            _log.Info($"OnEnablePyExcel: workbook '{key}' enabled={now}");
+        }
+        catch (Exception ex)
+        {
+            _log.Error("OnEnablePyExcel failed", ex);
+        }
+    }
 
     public void OnOpenExplorer(IRibbonControl control)
         => StubAction(control, "OnOpenExplorer", "modRibbon.bas:515 — shells explorer.exe at project root");
@@ -160,10 +180,26 @@ public class PyExcelRibbon : ExcelRibbon
     // -------------------------------------------------------------------------
 
     public void OnRunPython(IRibbonControl control)
-        => StubAction(control, "OnRunPython",
-            "modRibbon.bas:1466 — orchestrates: read script, marshal input range, " +
-            "send Run frame, write output. SAFE-1: this must enqueue and return; " +
-            "never block on the pipe.");
+    {
+        _log.Info("OnRunPython clicked");
+        try
+        {
+            var key = PyExcelServices.WorkbookContext.CurrentWorkbookKey;
+            if (key is null) { _log.Info("OnRunPython: no active workbook"); return; }
+
+            // RangeRunner reads the input ranges synchronously on this
+            // (main) thread, then dispatches the kernel exchange to a
+            // background task and writes the result back via QueueAsMacro —
+            // so this callback returns promptly and never blocks on the
+            // pipe (SAFE-1).
+            var state = PyExcelServices.State.Get(key);
+            PyExcel.Excel.RangeRunner.RunActiveScript(state);
+        }
+        catch (Exception ex)
+        {
+            _log.Error("OnRunPython failed", ex);
+        }
+    }
 
     public void OnEditPython(IRibbonControl control)
         => StubAction(control, "OnEditPython", "modRibbon.bas:1400 — shells the user's editor");

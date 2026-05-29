@@ -240,6 +240,85 @@ public class PyRunTests
     }
 
     // -------------------------------------------------------------------------
+    // Multi-input dispatch (ExecuteMany) — the ribbon-button path
+    // -------------------------------------------------------------------------
+
+    [Fact]
+    public void ExecuteMany_TwoScalarArgs_PassedPositionally()
+    {
+        using var fx = new KernelFixture();
+        var script = fx.WriteScript("add2.py",
+            "def transform(a, b):\n    return a + b\n");
+
+        var result = PyRun.ExecuteMany(
+            script: script,
+            inputs: new object?[] { 40.0, 2.0 },
+            kwargs: null,
+            client: fx.Client);
+
+        Assert.Equal(42.0, result);
+    }
+
+    [Fact]
+    public void ExecuteMany_MixedShapes_PreservesOrder()
+    {
+        using var fx = new KernelFixture();
+        // First arg is a vector, second a scalar; the function indexes the
+        // vector and multiplies by the scalar — so a misordering would give
+        // a different answer.
+        var script = fx.WriteScript("vecscale.py",
+            "def transform(xs, factor):\n    return [x * factor for x in xs]\n");
+
+        var result = PyRun.ExecuteMany(
+            script: script,
+            inputs: new object?[] { new object?[] { 1.0, 2.0, 3.0 }, 10.0 },
+            kwargs: null,
+            client: fx.Client);
+
+        var rect = Assert.IsType<object?[,]>(result);
+        Assert.Equal(10.0, rect[0, 0]);
+        Assert.Equal(20.0, rect[1, 0]);
+        Assert.Equal(30.0, rect[2, 0]);
+    }
+
+    [Fact]
+    public void ExecuteMany_NoInputs_CallsNoArgFunction()
+    {
+        using var fx = new KernelFixture();
+        var script = fx.WriteScript("noarg.py",
+            "def transform():\n    return 5\n");
+
+        var result = PyRun.ExecuteMany(
+            script: script,
+            inputs: Array.Empty<object?>(),
+            kwargs: null,
+            client: fx.Client);
+
+        Assert.Equal(5.0, result);
+    }
+
+    [Fact]
+    public void ExecuteMany_NullInputInList_Throws()
+    {
+        using var fx = new KernelFixture();
+        var ex = Assert.Throws<ArgumentException>(() =>
+            PyRun.ExecuteMany(
+                script: "x.py",
+                inputs: new object?[] { 1.0, null, 3.0 },
+                kwargs: null,
+                client: fx.Client));
+        Assert.Contains("index 1", ex.Message);
+    }
+
+    [Fact]
+    public void ExecuteMany_NullInputsList_Throws()
+    {
+        using var fx = new KernelFixture();
+        Assert.Throws<ArgumentNullException>(() =>
+            PyRun.ExecuteMany("x.py", null!, null, fx.Client));
+    }
+
+    // -------------------------------------------------------------------------
     // Argument validation (no kernel needed)
     // -------------------------------------------------------------------------
 

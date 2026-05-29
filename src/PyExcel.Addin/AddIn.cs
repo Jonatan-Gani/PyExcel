@@ -1,6 +1,7 @@
 using System;
 using ExcelDna.Integration;
 using PyExcel.Common.Logging;
+using PyExcel.State;
 
 namespace PyExcel.Addin;
 
@@ -45,10 +46,15 @@ public sealed class AddIn : IExcelAddIn
                 return;
             }
 
-            // Phase 1 stops here. Subsequent phases bring services online
-            // (see ROADMAP.md for the canonical phase plan):
+            // Phase 3: wire the concrete WorkbookContext into the service
+            // locator the ribbon callbacks read from. The default is a
+            // NullWorkbookContext that always returns "no active workbook";
+            // swapping it here means the ribbon starts reflecting real
+            // workbook identity as soon as AutoOpen finishes.
+            PyExcelServices.WorkbookContext = new ExcelWorkbookContext();
+
+            // Subsequent phases bring more services online here:
             //   Phase 2: _kernelSupervisor = new KernelSupervisor(_log);
-            //   Phase 3: _stateService = new StateService(_log);
             //   Phase 3: _appEventSink = new AppEventSink(_log);
         }
         catch (Exception ex)

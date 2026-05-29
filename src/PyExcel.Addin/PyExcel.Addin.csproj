@@ -12,6 +12,13 @@
     <AssemblyName>PyExcel.Addin</AssemblyName>
     <Platforms>x64</Platforms>
     <PlatformTarget>x64</PlatformTarget>
+    <!--
+      Point the build at app.config explicitly (rather than relying on
+      SDK auto-detection) so ExcelDna.AddIn copies our binding redirects
+      into PyExcel-AddIn64.xll.config. Those redirects are what let
+      Apache.Arrow's System.* dependencies bind at load on net48.
+    -->
+    <AppConfig>app.config</AppConfig>
   </PropertyGroup>
 
   <ItemGroup>
@@ -26,6 +33,18 @@
   <ItemGroup>
     <ProjectReference Include="..\PyExcel.Common\PyExcel.Common.csproj" />
     <ProjectReference Include="..\PyExcel.Ribbon\PyExcel.Ribbon.csproj" />
+    <ProjectReference Include="..\PyExcel.State\PyExcel.State.csproj" />
+  </ItemGroup>
+
+  <!--
+    ExcelWorkbookContext reads Application.ActiveWorkbook late-bound via
+    `dynamic`. The C# dynamic binder on .NET Framework lives in
+    Microsoft.CSharp.dll, which SDK-style net48 projects don't reference
+    by default — without it the compiler can't emit the call sites
+    (error CS0656, CSharpArgumentInfo.Create).
+  -->
+  <ItemGroup>
+    <Reference Include="Microsoft.CSharp" />
   </ItemGroup>
 
 </Project>

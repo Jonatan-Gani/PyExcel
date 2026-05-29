@@ -19,6 +19,13 @@
   <ItemGroup>
     <ProjectReference Include="..\PyExcel.Common\PyExcel.Common.csproj" />
     <ProjectReference Include="..\PyExcel.State\PyExcel.State.csproj" />
+    <!--
+      OnRunPython delegates to PyExcel.Excel.RangeRunner (net48-only) for
+      the COM range read/marshal/run/write-back flow. This pulls the data
+      plane (Apache.Arrow, Bridge, Kernel.Client) into the ribbon's
+      dependency closure — fine for the production .xll, which is net48.
+    -->
+    <ProjectReference Include="..\PyExcel.Excel\PyExcel.Excel.csproj" />
   </ItemGroup>
 
   <ItemGroup>

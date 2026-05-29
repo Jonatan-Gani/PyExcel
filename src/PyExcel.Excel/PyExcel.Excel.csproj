@@ -28,6 +28,24 @@
                       Condition="'$(TargetFramework)' == 'net48'" />
     <ProjectReference Include="..\PyExcel.Bridge\PyExcel.Bridge.csproj" />
     <ProjectReference Include="..\PyExcel.Kernel.Client\PyExcel.Kernel.Client.csproj" />
+    <!--
+      RangeRunner (net48-only) consumes WorkbookState + RibbonRangeParser
+      from PyExcel.State. PyExcel.State multi-targets the same TFMs, so the
+      reference resolves cleanly for both the net48 and netstandard2.0
+      builds even though RangeRunner itself is #if NETFRAMEWORK.
+    -->
+    <ProjectReference Include="..\PyExcel.State\PyExcel.State.csproj" />
+  </ItemGroup>
+
+  <!--
+    RangeRunner drives Excel COM late-bound via `dynamic`. On .NET
+    Framework the C# dynamic binder lives in Microsoft.CSharp.dll, which
+    SDK-style net48 projects don't reference automatically (unlike .NET
+    Core, where it's in the shared framework). netstandard2.0 doesn't
+    need it — RangeRunner is #if NETFRAMEWORK and never compiles there.
+  -->
+  <ItemGroup Condition="'$(TargetFramework)' == 'net48'">
+    <Reference Include="Microsoft.CSharp" />
   </ItemGroup>
 
 </Project>
