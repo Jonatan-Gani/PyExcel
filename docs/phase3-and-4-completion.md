@@ -81,15 +81,23 @@ add-in lifetime (`AutoOpen` → `AutoClose`).
 > since `windows-latest` has no Excel and CI builds the whole solution.
 > **That objection is dissolved by the `ExcelDna.Interop` NuGet package**
 > (v15.0.1, by the Excel-DNA author): it ships the Office PIAs as a
-> restorable package, so the Excel-less runner compiles against them, and
-> with `<EmbedInteropTypes>true</EmbedInteropTypes>` only the interop
-> types actually used get baked into `PyExcel.Addin.dll` — the shipped
-> `.xll` carries no runtime PIA dependency. This is strictly simpler and
-> far less fragile than hand-rolling an `IConnectionPoint`/`IReflect` sink
-> with manually-transcribed `AppEvents` DISPIDs (the path that "can tear
-> down the Excel host on load"). The reference is added in
-> `PyExcel.Addin.csproj`; it is the *only* Office interop reference in the
-> codebase.
+> restorable package whose own MSBuild `.targets` add the assembly
+> references, so the Excel-less runner compiles against them. This is
+> strictly simpler and far less fragile than hand-rolling an
+> `IConnectionPoint`/`IReflect` sink with manually-transcribed `AppEvents`
+> DISPIDs (the path that "can tear down the Excel host on load"). The
+> reference is added in `PyExcel.Addin.csproj`; it is the *only* Office
+> interop reference in the codebase.
+>
+> **Consume it plain — gotcha.** Do **not** put an
+> `<EmbedInteropTypes>true</EmbedInteropTypes>` child on the
+> `PackageReference`: it diverts the SDK away from the package's
+> `.targets`-provided references, the `Microsoft.Office.Interop.Excel`
+> types stop resolving, and the `Excel` alias falls back to our own
+> `PyExcel.Excel` namespace — which surfaces as
+> `error CS0234: type 'Workbook' does not exist in namespace
+> 'PyExcel.Excel'`. (First Windows CI run hit exactly this; fixed by
+> dropping the child element.)
 
 ### 3. CustomXMLPart persistence
 

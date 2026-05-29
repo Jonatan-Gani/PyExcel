@@ -28,14 +28,14 @@ namespace PyExcel.Addin;
 ///   <item><c>SheetActivate</c> → record the active sheet name.</item>
 /// </list>
 ///
-/// <para><b>Typed PIA, embedded.</b> Application events can't be wired
-/// late-bound through <c>dynamic</c> — there is no <c>+=</c> over a dispatch
-/// object — so this is the one place PyExcel takes a typed Office interop
-/// reference. It comes from the <c>ExcelDna.Interop</c> NuGet package
-/// (restorable on a CI runner with no Excel installed) and is embedded
-/// (<c>EmbedInteropTypes</c>), so the shipped <c>.xll</c> still carries no
-/// PIA dependency at runtime. Everything else COM-bound in PyExcel
-/// (<see cref="ExcelWorkbookContext"/>, the range runner) stays late-bound.</para>
+/// <para><b>Typed PIA.</b> Application events can't be wired late-bound
+/// through <c>dynamic</c> — there is no <c>+=</c> over a dispatch object —
+/// so this is the one place PyExcel takes a typed Office interop reference.
+/// It comes from the <c>ExcelDna.Interop</c> NuGet package, whose build
+/// <c>.targets</c> add the assembly references, so a CI runner with no
+/// Excel installed still compiles this. Everything else COM-bound in
+/// PyExcel (<see cref="ExcelWorkbookContext"/>, the range runner) stays
+/// late-bound.</para>
 ///
 /// <para><b>Safety.</b> Every handler body runs inside <see cref="Guard"/>
 /// so a fault can never propagate back into Excel's event pump (which can

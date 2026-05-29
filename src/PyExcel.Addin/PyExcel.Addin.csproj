@@ -29,18 +29,22 @@
     -->
     <PackageReference Include="ExcelDna.AddIn" Version="1.8.0" />
     <!--
-      Typed Office PIA, compile-time only. AppEventSink needs typed
-      Application events (you can't `+=` over a late-bound `dynamic`), so
-      this is the one spot PyExcel references the Excel interop.
-      ExcelDna.Interop ships the PIAs as a NuGet package, so the Excel-less
-      Windows CI runner still restores and builds against them.
-      EmbedInteropTypes bakes only the interop types we actually use into
-      PyExcel.Addin.dll, so the shipped .xll carries no PIA dependency at
-      runtime. Pinned, never wildcard, so packaging stays reproducible.
+      Typed Office PIA. AppEventSink needs typed Application events (you
+      can't `+=` over a late-bound `dynamic`), so this is the one spot
+      PyExcel references the Excel interop. ExcelDna.Interop ships the PIAs
+      as a NuGet package whose own MSBuild .targets wire up the assembly
+      references — so the Excel-less Windows CI runner restores and builds
+      against them with no Excel installed.
+
+      Consume it PLAIN. Do NOT add an <EmbedInteropTypes> child here: that
+      diverts the SDK away from the package's .targets-provided references,
+      the Microsoft.Office.Interop.Excel types then never resolve, and the
+      `Excel` alias in AppEventSink.cs / WorkbookStatePersister.cs silently
+      falls back to our own PyExcel.Excel namespace — the
+      "type 'Workbook' does not exist in namespace 'PyExcel.Excel'" build
+      break. Pinned, never wildcard, so packaging stays reproducible.
     -->
-    <PackageReference Include="ExcelDna.Interop" Version="15.0.1">
-      <EmbedInteropTypes>true</EmbedInteropTypes>
-    </PackageReference>
+    <PackageReference Include="ExcelDna.Interop" Version="15.0.1" />
   </ItemGroup>
 
   <ItemGroup>
