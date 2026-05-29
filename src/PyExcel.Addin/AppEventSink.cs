@@ -3,9 +3,17 @@ using System;
 using System.Diagnostics;
 using ExcelDna.Integration;
 using PyExcel.State;
-using Excel = Microsoft.Office.Interop.Excel;
 
 namespace PyExcel.Addin;
+
+// The Excel alias MUST be declared here, inside the namespace, rather than at
+// the top of the file. At file scope the alias lands in the global namespace,
+// so the bare name `Excel` resolves outward from PyExcel.Addin, reaches the
+// enclosing PyExcel namespace, and binds to our own PyExcel.Excel before the
+// alias is ever consulted — producing CS0234 on Excel.Application /
+// Excel.Workbook. Declared inside PyExcel.Addin the alias is found first and
+// correctly maps `Excel` to the embedded Office PIA.
+using Excel = Microsoft.Office.Interop.Excel;
 
 /// <summary>
 /// Subscribes to the Excel <see cref="Excel.Application"/> events that

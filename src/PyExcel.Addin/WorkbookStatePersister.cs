@@ -2,9 +2,13 @@
 using System;
 using System.Diagnostics;
 using PyExcel.State;
-using Excel = Microsoft.Office.Interop.Excel;
 
 namespace PyExcel.Addin;
+
+// Declared inside the namespace deliberately — see the note in AppEventSink.cs.
+// At file scope the bare name `Excel` binds to our own PyExcel.Excel namespace
+// (CS0234) instead of this alias.
+using Excel = Microsoft.Office.Interop.Excel;
 
 /// <summary>
 /// Reads and writes PyExcel's per-workbook state as a <c>CustomXMLPart</c>
