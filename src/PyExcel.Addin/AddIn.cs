@@ -26,6 +26,7 @@ public sealed class AddIn : IExcelAddIn
     // until AutoClose. Excel-DNA holds the AddIn itself, which keeps these
     // alive — no static lifetime tricks needed.
     private ILog? _log;
+    private AppEventSink? _appEventSink;
 
     public void AutoOpen()
     {
@@ -53,9 +54,25 @@ public sealed class AddIn : IExcelAddIn
             // workbook identity as soon as AutoOpen finishes.
             PyExcelServices.WorkbookContext = new ExcelWorkbookContext();
 
+            // Phase 3: subscribe to Application events so per-workbook state
+            // stays in step with open / activate / save / close / sheet-change,
+            // and the ribbon repaints when the active workbook changes.
+            // Degrade gracefully — without the sink the ribbon and =PY.RUN
+            // still work, you just lose auto-refresh-on-activate and state
+            // persistence, so a sink failure must not fail the whole AutoOpen.
+            try
+            {
+                _appEventSink = new AppEventSink(
+                    PyExcelServices.State, PyExcelServices.WorkbookContext);
+                _log.Info("AppEventSink subscribed to Application events");
+            }
+            catch (Exception ex)
+            {
+                _log.Error("AppEventSink wiring failed; continuing without it", ex);
+            }
+
             // Subsequent phases bring more services online here:
             //   Phase 2: _kernelSupervisor = new KernelSupervisor(_log);
-            //   Phase 3: _appEventSink = new AppEventSink(_log);
         }
         catch (Exception ex)
         {
@@ -72,9 +89,13 @@ public sealed class AddIn : IExcelAddIn
         try
         {
             _log?.Info("PyExcel AutoClose");
-            // Subsequent phases will tear down here, in reverse-init order:
-            //   _kernelSupervisor?.DrainAndDispose(timeoutMs: 3000);
-            //   _appEventSink?.Dispose();
+            // Tear down in reverse-init order.
+            //   Phase 2 (when added): _kernelSupervisor?.DrainAndDispose(timeoutMs: 3000);
+            _appEventSink?.Dispose();
+            _appEventSink = null;
+            // Drop the ribbon-invalidate hook so a stale closure can't fire
+            // against a torn-down ribbon after unload.
+            PyExcelServices.RequestRibbonInvalidate = null;
         }
         catch (Exception ex)
         {

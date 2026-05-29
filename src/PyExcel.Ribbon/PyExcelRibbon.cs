@@ -70,6 +70,12 @@ public class PyExcelRibbon : ExcelRibbon
         // originate from a FileSystemWatcher worker thread, and
         // IRibbonUI is COM-affine.
         PyExcelServices.State.StateChanged += OnStateChanged;
+        // Let non-ribbon components ask for a repaint without reaching into
+        // this class. The COM event sink uses it on WorkbookActivate, where
+        // the active workbook key changes but nothing in the registry
+        // mutates — so no StateChanged fires, yet every getter must
+        // re-render against the newly-active workbook's state.
+        PyExcelServices.RequestRibbonInvalidate = QueueInvalidate;
     }
 
     private void OnStateChanged(object? sender, StateChangedEventArgs e)
@@ -83,6 +89,16 @@ public class PyExcelRibbon : ExcelRibbon
         {
             return;
         }
+        QueueInvalidate();
+    }
+
+    /// <summary>Queue an <see cref="IRibbonUI.Invalidate"/> onto Excel's
+    /// macro thread. Safe to call from any thread (FileSystemWatcher,
+    /// COM event sink): <see cref="IRibbonUI"/> is COM-affine, so we never
+    /// invalidate inline.</summary>
+    private void QueueInvalidate()
+    {
+        if (_ribbon is null) return;
         try
         {
             ExcelAsyncUtil.QueueAsMacro(() => _ribbon?.Invalidate());

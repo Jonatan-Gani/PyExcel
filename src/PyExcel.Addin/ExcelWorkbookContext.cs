@@ -1,4 +1,3 @@
-using System;
 using ExcelDna.Integration;
 using PyExcel.State;
 
@@ -17,15 +16,14 @@ namespace PyExcel.Addin;
 ///     including the filename). Stable across closes/reopens because
 ///     the path is the on-disk identity.</item>
 ///   <item>Unsaved workbooks (no on-disk path) → a synthetic
-///     <c>"unsaved:{SessionGuid}:{Workbook.Name}"</c> key. Excel
-///     gives every new workbook a unique <c>Name</c> within a session
-///     (<c>Book1</c>, <c>Book2</c>, …), and the session GUID is
-///     allocated once per add-in load — so two unsaved workbooks in
-///     the same session don't collide, and a "Save As" promotes the
-///     workbook to a path-based key on the next access (the previous
-///     unsaved key is then orphaned in the <see cref="StateService"/>
-///     until <c>WorkbookBeforeClose</c> calls
-///     <see cref="StateService.Forget"/>).</item>
+///     <c>"unsaved:{SessionGuid}:{Workbook.Name}"</c> key. The
+///     saved-vs-unsaved decision and the per-add-in-load session GUID
+///     both live in <see cref="WorkbookKeys"/> so the COM event sink
+///     derives identical keys for the same workbook — a "Save As"
+///     promotes the workbook to a path-based key on the next access
+///     (the previous unsaved key is then orphaned in the
+///     <see cref="StateService"/> until <c>WorkbookBeforeClose</c>
+///     calls <see cref="StateService.Forget"/>).</item>
 /// </list>
 ///
 /// <para>Returns <see langword="null"/> when Excel has no active
@@ -35,33 +33,24 @@ namespace PyExcel.Addin;
 /// </summary>
 public sealed class ExcelWorkbookContext : IWorkbookContext
 {
-    // One GUID per add-in load. Distinguishes "Book1 from this Excel
-    // session" from "Book1 from a previous session whose state lingered
-    // somewhere it shouldn't" — defensive, since session state should
-    // not outlive the add-in instance anyway.
-    private static readonly string SessionGuid = Guid.NewGuid().ToString("N");
-
     public string? CurrentWorkbookKey
     {
         get
         {
             try
             {
-                // dynamic instead of the typed COM PIA: keeps PyExcel.Addin
-                // free of an Office interop assembly reference, matching
-                // the Excel-DNA convention.
+                // dynamic instead of the typed COM PIA: keeps the active-
+                // workbook lookup free of an Office interop reference,
+                // matching the Excel-DNA convention. (AppEventSink is the
+                // one place a typed reference is unavoidable — events can't
+                // be wired late-bound.)
                 dynamic app = ExcelDnaUtil.Application;
                 dynamic wb = app.ActiveWorkbook;
                 if (wb is null) return null;
 
-                string name = (string)wb.Name;
-                string path = (string)wb.Path;
-
-                // Excel returns an empty Path for new-but-unsaved workbooks.
-                if (string.IsNullOrEmpty(path))
-                    return $"unsaved:{SessionGuid}:{name}";
-
-                return (string)wb.FullName;
+                // Defer the saved-vs-unsaved rule and the shared session
+                // GUID to WorkbookKeys so the event sink agrees on keys.
+                return WorkbookKeys.Resolve((string)wb.Name, (string)wb.Path, (string)wb.FullName);
             }
             catch
             {

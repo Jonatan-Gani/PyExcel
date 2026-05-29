@@ -74,6 +74,14 @@ public static class WorkbookStateCodec
         return new XDocument(new XDeclaration("1.0", "utf-8", null), root);
     }
 
+    /// <summary>Serialize <paramref name="state"/> to a compact XML string
+    /// suitable for storing in a workbook's <c>CustomXMLPart</c>. The root
+    /// element carries <see cref="XmlNamespace"/> so the COM-side persister
+    /// can locate the part again via <c>SelectByNamespace</c>; formatting is
+    /// disabled so the on-disk bytes stay deterministic across no-op saves.</summary>
+    public static string SerializeToString(WorkbookState state)
+        => Serialize(state).ToString(SaveOptions.DisableFormatting);
+
     private static XElement SerializeAction(RibbonAction a)
     {
         var el = new XElement(Ns + "action",
@@ -148,6 +156,33 @@ public static class WorkbookStateCodec
             Actions = actions,
             SelectedActionName = selectedAction,
         };
+    }
+
+    /// <summary>Best-effort parse of a <c>CustomXMLPart</c>'s XML back into
+    /// a <see cref="WorkbookState"/> keyed by <paramref name="workbookKey"/>.
+    /// Returns <see langword="false"/> (with a null
+    /// <paramref name="state"/>) for null/blank input, non-XML, or any
+    /// document that isn't a recognised PyExcel state part (wrong root,
+    /// namespace, or schema version) — so a corrupt or foreign part can
+    /// never throw into the COM event handler that calls this. Genuine
+    /// parse successes still go through <see cref="Deserialize"/>, so the
+    /// caller-supplied key wins over anything that might be in the XML.</summary>
+    public static bool TryDeserialize(string? xml, string workbookKey, out WorkbookState? state)
+    {
+        if (workbookKey is null) throw new ArgumentNullException(nameof(workbookKey));
+        state = null;
+        if (string.IsNullOrWhiteSpace(xml)) return false;
+        try
+        {
+            var doc = XDocument.Parse(xml);
+            state = Deserialize(doc, workbookKey);
+            return true;
+        }
+        catch (Exception ex) when (ex is FormatException or XmlException)
+        {
+            // Foreign / corrupt / wrong-version part — not ours to read.
+            return false;
+        }
     }
 
     private static RibbonAction DeserializeAction(XElement el)

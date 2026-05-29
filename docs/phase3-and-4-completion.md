@@ -46,10 +46,16 @@ Windows: open a fresh workbook → save it → close → reopen, and
 confirm the ribbon's getEnabled / getSelectedScript reflect the
 right per-workbook state at each step.
 
-### 2. `AppEventSink` — the Excel.Application event subscriber (~150 lines)
+### 2. `AppEventSink` — the Excel.Application event subscriber ✅ (code-complete — needs smoke test)
 
-Subscribes to `Application.WorkbookOpen`, `WorkbookActivate`,
-`WorkbookBeforeClose`, `SheetActivate`. Each handler:
+Landed in `src/PyExcel.Addin/AppEventSink.cs` (net48). Subscribes to
+`Application.WorkbookOpen`, `WorkbookActivate`, `WorkbookBeforeSave`,
+`WorkbookBeforeClose`, `SheetActivate`. Every handler body runs inside a
+`Guard(name, action)` wrapper so a fault is logged and swallowed, never
+propagated back into Excel's event pump. Constructed in `AddIn.AutoOpen`
+(inside its own try/catch so a sink failure degrades gracefully — the
+ribbon and `=PY.RUN` keep working), disposed in `AddIn.AutoClose`
+(unsubscribes every handler). Each handler:
 
 - `WorkbookOpen(wb)` → restore state from CustomXMLPart (#3),
   `ScriptDirectoryWatcher` for that workbook's `userScripts/`,
@@ -65,25 +71,25 @@ Implementation reference: Excel-DNA's
 or `Application` COM via `ExcelDnaUtil.Application`. Lifetime is the
 add-in lifetime (`AutoOpen` → `AutoClose`).
 
-> **⚠️ Design decision before writing this — PIA vs. late-bound.**
-> Subscribing to `Application.WorkbookOpen` &c. the easy way means a
-> typed `Microsoft.Office.Interop.Excel` reference and `app.WorkbookOpen
-> += handler`. **But that breaks the Windows CI build:** GitHub's
-> `windows-latest` runner has no Excel installed, so the Office PIA
-> isn't resolvable, and the CI lane builds the *whole* solution
-> (`dotnet build PyExcel.sln`). Everything COM-bound so far
-> (`ExcelWorkbookContext`, `RangeRunner`) deliberately uses late-bound
-> `dynamic` on `ExcelDnaUtil.Application` for exactly this reason — no
-> PIA, CI stays green. An event sink can't use `dynamic +=`, so it has
-> to advise the connection point manually (`IConnectionPointContainer`
-> / `IConnectionPoint` against the `AppEvents` dispinterface) — doable
-> but fiddly and untestable from CI, and a malformed sink can tear down
-> the Excel host on load. The alternatives are: (a) write the
-> late-bound `IConnectionPoint` sink; (b) take the PIA reference with
-> `EmbedInteropTypes=true` and *exclude `PyExcel.Addin` from the CI
-> solution build* (build it only in a separate Excel-present job, or
-> drop it from `PyExcel.sln`'s CI configuration). This is a real fork
-> in the road — pick deliberately rather than reflexively.
+> **✅ Design decision — resolved: typed PIA via `ExcelDna.Interop`,
+> embedded.** Subscribing to `Application.WorkbookOpen` &c. needs a typed
+> delegate (`app.WorkbookOpen += handler`) — you can't `+=` over a
+> late-bound `dynamic`, which is why every *other* COM-bound piece
+> (`ExcelWorkbookContext`, `RangeRunner`) stays late-bound but this one
+> can't. The original worry was that a typed
+> `Microsoft.Office.Interop.Excel` reference breaks the Windows CI build,
+> since `windows-latest` has no Excel and CI builds the whole solution.
+> **That objection is dissolved by the `ExcelDna.Interop` NuGet package**
+> (v15.0.1, by the Excel-DNA author): it ships the Office PIAs as a
+> restorable package, so the Excel-less runner compiles against them, and
+> with `<EmbedInteropTypes>true</EmbedInteropTypes>` only the interop
+> types actually used get baked into `PyExcel.Addin.dll` — the shipped
+> `.xll` carries no runtime PIA dependency. This is strictly simpler and
+> far less fragile than hand-rolling an `IConnectionPoint`/`IReflect` sink
+> with manually-transcribed `AppEvents` DISPIDs (the path that "can tear
+> down the Excel host on load"). The reference is added in
+> `PyExcel.Addin.csproj`; it is the *only* Office interop reference in the
+> codebase.
 
 ### 3. CustomXMLPart persistence
 
@@ -104,12 +110,20 @@ fields: `Enabled`, `SelectedScript`, `PyInput`, `PyOutput`,
 `urn:pyexcel:state:N` namespace AND
 `WorkbookStateCodec.SchemaVersion`.
 
-**COM half still to do:** Windows-only `WorkbookStatePersister` that
-on `WorkbookBeforeSave` calls `Serialize`, writes the result into the
-workbook's `CustomXMLPart` collection (deleting any existing
-`urn:pyexcel:state:1` part first), and on `WorkbookOpen` finds the
-part by namespace and calls `Deserialize` back into the
-`StateService`. Lives in `PyExcel.Addin` under `#if NETFRAMEWORK`.
+**COM half ✅ (code-complete — needs smoke test).** Landed as
+`src/PyExcel.Addin/WorkbookStatePersister.cs` (net48, `#if NETFRAMEWORK`).
+`Save(workbook, state)` deletes any existing `urn:pyexcel:state:1` parts
+(`CustomXMLParts.SelectByNamespace` → `Delete`, back-to-front) then
+`CustomXMLParts.Add`s the current one; `TryLoad(workbook, key)` finds the
+part by namespace and returns the deserialized state (or `null`). It's a
+thin shell: all XML work delegates to two new pure helpers on the tested
+`WorkbookStateCodec` — `SerializeToString(state)` and
+`TryDeserialize(xml, key, out state)` (the latter returns `false` for
+null/blank/non-XML/foreign-namespace/wrong-version input, so a corrupt or
+foreign part can't throw into the COM event handler). Both helpers are
+unit-tested cross-platform (`WorkbookStatePersistenceTests`, 9 cases).
+The `AppEventSink` calls `Save` on `BeforeSave`/`BeforeClose` and
+`TryLoad` on `WorkbookOpen`.
 
 ### 4. UDF → kernel cancellation bridge (~80 lines)
 
@@ -209,8 +223,8 @@ mention only for traceability.
 | Component | CI-testable | Notes |
 |---|---|---|
 | #1 `ExcelWorkbookContext` | ✅ verified | smoke-tested on real Excel 2026-05-29 |
-| #2 `AppEventSink` | ❌ | COM events; manual smoke test |
-| #3 CustomXMLPart codec | ✅ landed | `WorkbookStateCodec` + 15 tests; COM read/write part still to do |
+| #2 `AppEventSink` | ⚠️ code-complete | typed events via embedded `ExcelDna.Interop`; **compiles on Windows CI**, runtime needs the smoke test |
+| #3 CustomXMLPart | ✅ codec + ⚠️ COM | codec `WorkbookStateCodec` + 24 tests (CI); `WorkbookStatePersister` compiles on Windows CI, runtime needs the smoke test |
 | #4 UDF cancel bridge | ⚠️ | Async flow testable via fake ExcelAsyncUtil; the real flow needs Excel |
 | #5 Progress UI | ⚠️ | kernel half (`report_progress` → `PROGRESS`) ✅ CI-tested; WinForms still manual |
 | #6 Ribbon range parser | ✅ landed | `RibbonRangeParser` + 15 tests |
@@ -226,17 +240,19 @@ mention only for traceability.
 3. ~~**#3 CustomXMLPart codec**~~ (codec only) — done, see `WorkbookStateCodec.cs`. COM persister still to do.
 4. ~~**#7 OnRunPython**~~ — done, see `RangeRunner.cs`. Phase 4 exit
    criterion; needs the Windows smoke test below.
-5. **#2 AppEventSink** + COM-side CustomXMLPart persistence. **Blocked
-   on a design decision** — see the note under §2: a typed Office PIA
-   reference is the easy path but breaks the PIA-less Windows CI build,
-   so the event sink must wire COM events late-bound. Still open.
+5. ~~**#2 AppEventSink** + COM-side CustomXMLPart persistence~~ — done,
+   see `AppEventSink.cs` + `WorkbookStatePersister.cs`. The PIA-vs-late-bound
+   fork is resolved (typed events via the embedded `ExcelDna.Interop` PIA;
+   see §2). Both compile on the Windows CI lane; **runtime behaviour still
+   needs the Windows smoke test** (§2/§3 + the new step 9 below).
 6. **#4** UDF cancel bridge and **#5** progress UI — polish. #5's kernel
    half (`report_progress` → `PROGRESS` frames) is done and CI-tested;
    the WinForms dialog is the remaining (Windows-only) piece. #4 still open.
 
-Phase 4's headline ("one real script runs end to end") is satisfiable
-once the #7 smoke test below passes. Phase 3's exit criteria still want
-#2 (state surviving close/reopen).
+Phase 4's headline ("one real script runs end to end") is satisfied (#7,
+verified on real Excel). Phase 3's "state survives close/reopen" exit
+criterion is code-complete (#2/#3) and satisfied **once the smoke test
+below passes**.
 
 ---
 
@@ -295,12 +311,22 @@ $env:PYEXCEL_PYTHON = "C:\path\to\venv\Scripts\python.exe"
 8. Open a *second* workbook. Set its Script/Input/Output differently.
    Switch back and forth between the two windows — each should show its
    own ribbon values (this exercises `ExcelWorkbookContext` +
-   `StateService` keying). NB: until #2 (`AppEventSink`) lands, the
-   ribbon may not auto-refresh on the *switch* itself — toggle a field
-   or re-click the tab to force a redraw. Auto-refresh-on-activate is
-   exactly what #2 adds.
+   `StateService` keying). With #2 (`AppEventSink`) now wired, the ribbon
+   should **auto-refresh on the switch itself** (`WorkbookActivate` →
+   `RequestRibbonInvalidate`); if it doesn't, that's the spot to debug.
 
-Report back what happens at steps 5/6/7/8 — especially any COM quirks
+### Smoke test #2/#3 (state survives save → close → reopen)
+
+9. In the first workbook: Enable PyExcel, set Script/Input/Output, and
+   **save** the workbook (`.xlsx` is fine — CustomXMLParts persist in the
+   modern formats). Close it. Reopen it. Expected: the ribbon comes back
+   Enabled with the same Script/Input/Output you set — `WorkbookBeforeSave`
+   wrote a `urn:pyexcel:state:1` CustomXMLPart and `WorkbookOpen` restored
+   it. To confirm the part directly: rename a copy to `.zip` and look for
+   `customXml/item1.xml` (or inspect via the Developer ▸ XML tools). A
+   *second* save should not churn the part (serialisation is deterministic).
+
+Report back what happens at steps 5/6/7/8/9 — especially any COM quirks
 in the range read/write (e.g. a transposed result, an off-by-one
 anchor, or a type that didn't round-trip). Those are the spots I
 couldn't verify from Linux.

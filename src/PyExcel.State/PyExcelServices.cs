@@ -1,3 +1,5 @@
+using System;
+
 namespace PyExcel.State;
 
 /// <summary>
@@ -22,4 +24,20 @@ public static class PyExcelServices
 
     /// <summary>Strategy for "what workbook is active right now".</summary>
     public static IWorkbookContext WorkbookContext { get; set; } = NullWorkbookContext.Instance;
+
+    /// <summary>
+    /// Hook the ribbon registers (in <c>RibbonOnLoad</c>) so non-ribbon
+    /// components can ask the ribbon to repaint. The motivating caller is
+    /// the COM event sink on <c>WorkbookActivate</c>: the active workbook
+    /// key changed, so every getter now renders a different state, but no
+    /// <see cref="StateService.StateChanged"/> fired because nothing in the
+    /// registry mutated.
+    ///
+    /// <para>The ribbon's implementation queues <c>IRibbonUI.Invalidate</c>
+    /// onto Excel's macro thread, so callers may invoke this from any
+    /// thread. It is <see langword="null"/> until the ribbon registers it
+    /// (and after the add-in unloads), so callers invoke it null-conditionally
+    /// — a no-op in that window.</para>
+    /// </summary>
+    public static Action? RequestRibbonInvalidate { get; set; }
 }
