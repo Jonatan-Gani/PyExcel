@@ -29,4 +29,15 @@
     <ProjectReference Include="..\PyExcel.State\PyExcel.State.csproj" />
   </ItemGroup>
 
+  <!--
+    ExcelWorkbookContext reads Application.ActiveWorkbook late-bound via
+    `dynamic`. The C# dynamic binder on .NET Framework lives in
+    Microsoft.CSharp.dll, which SDK-style net48 projects don't reference
+    by default — without it the compiler can't emit the call sites
+    (error CS0656, CSharpArgumentInfo.Create).
+  -->
+  <ItemGroup>
+    <Reference Include="Microsoft.CSharp" />
+  </ItemGroup>
+
 </Project>

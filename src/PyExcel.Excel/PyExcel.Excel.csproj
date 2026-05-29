@@ -37,4 +37,15 @@
     <ProjectReference Include="..\PyExcel.State\PyExcel.State.csproj" />
   </ItemGroup>
 
+  <!--
+    RangeRunner drives Excel COM late-bound via `dynamic`. On .NET
+    Framework the C# dynamic binder lives in Microsoft.CSharp.dll, which
+    SDK-style net48 projects don't reference automatically (unlike .NET
+    Core, where it's in the shared framework). netstandard2.0 doesn't
+    need it — RangeRunner is #if NETFRAMEWORK and never compiles there.
+  -->
+  <ItemGroup Condition="'$(TargetFramework)' == 'net48'">
+    <Reference Include="Microsoft.CSharp" />
+  </ItemGroup>
+
 </Project>
