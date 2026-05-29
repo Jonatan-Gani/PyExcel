@@ -28,6 +28,13 @@
                       Condition="'$(TargetFramework)' == 'net48'" />
     <ProjectReference Include="..\PyExcel.Bridge\PyExcel.Bridge.csproj" />
     <ProjectReference Include="..\PyExcel.Kernel.Client\PyExcel.Kernel.Client.csproj" />
+    <!--
+      RangeRunner (net48-only) consumes WorkbookState + RibbonRangeParser
+      from PyExcel.State. PyExcel.State multi-targets the same TFMs, so the
+      reference resolves cleanly for both the net48 and netstandard2.0
+      builds even though RangeRunner itself is #if NETFRAMEWORK.
+    -->
+    <ProjectReference Include="..\PyExcel.State\PyExcel.State.csproj" />
   </ItemGroup>
 
 </Project>
