@@ -19,6 +19,12 @@ namespace PyExcel.State;
 /// <see langword="null"/> if the run was unbound.</param>
 /// <param name="Source">Origin label (<c>"PY.RUN"</c> /
 /// <c>"Run Python button"</c>).</param>
+/// <param name="HasOutput"><see langword="true"/> iff the archive
+/// directory has an <c>output.arrow</c> file — i.e. the run produced a
+/// payload the caller can paste back into a range. Distinct from
+/// <see cref="Status"/>: a successful run that returned <c>None</c>
+/// is <see cref="RunArchiveStatus.Success"/> but
+/// <c>HasOutput == false</c>.</param>
 public sealed record ArchivedRun(
     string Directory,
     string RunId,
@@ -26,4 +32,5 @@ public sealed record ArchivedRun(
     RunArchiveStatus Status,
     string ScriptPath,
     string? WorkbookKey,
-    string Source);
+    string Source,
+    bool HasOutput = false);

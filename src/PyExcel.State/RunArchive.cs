@@ -261,6 +261,8 @@ public sealed class RunArchive
         if (!Enum.TryParse<RunArchiveStatus>(statusStr, ignoreCase: false, out var status))
             return false;
 
+        var hasOutput = File.Exists(Path.Combine(directory, "output.arrow"));
+
         run = new ArchivedRun(
             Directory: directory,
             RunId: runId,
@@ -268,7 +270,8 @@ public sealed class RunArchive
             Status: status,
             ScriptPath: script,
             WorkbookKey: workbookKey,
-            Source: source);
+            Source: source,
+            HasOutput: hasOutput);
         return true;
     }
 

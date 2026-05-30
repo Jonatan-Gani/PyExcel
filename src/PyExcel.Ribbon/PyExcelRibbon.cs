@@ -467,7 +467,19 @@ public class PyExcelRibbon : ExcelRibbon
     // -------------------------------------------------------------------------
 
     public void OnPaste(IRibbonControl control)
-        => StubAction(control, "OnPaste", "modRibbon.bas:866 — pastes saved artifact");
+    {
+        _log.Info("OnPaste clicked");
+        try
+        {
+            var key = PyExcelServices.WorkbookContext.CurrentWorkbookKey;
+            if (key is null) { _log.Info("OnPaste: no active workbook"); return; }
+            PyExcel.Excel.PasteService.RunActivePaste(PyExcelServices.State.Get(key));
+        }
+        catch (Exception ex)
+        {
+            _log.Error("OnPaste failed", ex);
+        }
+    }
 
     public string GetPasteOutput(IRibbonControl control) => ActiveState().PasteOutput ?? string.Empty;
     public void OnPasteOutputChange(IRibbonControl control, string text)
