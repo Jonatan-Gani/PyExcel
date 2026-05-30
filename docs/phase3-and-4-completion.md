@@ -145,24 +145,47 @@ unit-tested cross-platform (`WorkbookStatePersistenceTests`, 9 cases).
 The `AppEventSink` calls `Save` on `BeforeSave`/`BeforeClose` and
 `TryLoad` on `WorkbookOpen`.
 
-### 4. UDF → kernel cancellation bridge (~80 lines)
+### 4. UDF → kernel cancellation bridge ✅
 
-Right now `KernelClient.Cancel(runId)` writes the CANCEL frame, the
-kernel pumps it, and `pyexcel.kernel.is_cancelled()` returns `True`.
-The piece **not yet wired** is the UDF firing `Cancel` when Excel-DNA
-cancels its background task (formula change, workbook close).
+`PyRunFunction.Run` now goes through `ExcelAsyncUtil.Observe` with a
+small `IExcelObservable` (`PyRunObservable`). On `Subscribe`, the
+observable spins up the run on the threadpool with a fresh
+`CancellationTokenSource` and returns a `CancelOnDispose(cts)` to
+Excel-DNA. When Excel-DNA disposes the subscription — the user typed
+a new formula, the workbook closed, the cell was deleted —
+`CancelOnDispose.Dispose` cancels the CTS; the token registration
+inside `KernelClient.RunAsync` then pushes a `CANCEL` frame for that
+run's `runId`. The kernel sets the cooperative-cancel flag the user's
+`transform()` reads via `pyexcel.kernel.is_cancelled()` and replies
+`ERROR / Cancelled`. The host observable swallows it as a no-op
+(the observer is already gone), so the next formula's run can take
+the supervisor's exchange semaphore immediately rather than waiting
+for the orphaned job to finish naturally.
 
-Approach: track the live `runId` per UDF-parameter-tuple in a
-`ConcurrentDictionary` inside `PyRunFunction`. When `ExcelAsyncUtil.Run`
-hands us a new parameter tuple (which it does when the user changes the
-formula), the previous tuple's task is no longer reachable; we'd like
-to fire `Cancel(prevRunId)` then. The hook is the
-`ExcelDna.Integration.ExcelAsyncUtil.Observe` overload, which gives us
-the cancellation signal — switch the UDF over and call `Cancel`
-when the observable disposes.
+The plumbing is two new async overloads — `PyRun.ExecuteAsync` and
+`PyRun.ExecuteManyAsync` — that thread the token through to
+`KernelClient.RunAsync`. The sync `Execute` / `ExecuteMany` are left
+alone so `RangeRunner` (the ribbon button's path) keeps its existing
+`Task.Run` + `ExcelAsyncUtil.QueueAsMacro` shape — the ribbon button
+isn't part of Excel-DNA's calc loop, so it has no equivalent
+cancellation source to wire up.
 
-Worth it only if users hit long-running jobs in practice; Phase 4 first
-slice prioritised correctness over this optimisation.
+Coverage:
+
+- `KernelClientTests.RunAsync_Cancellation_Surfaces_OperationCanceledException`
+  — proves the token-registers-Cancel path against a real kernel: a
+  cooperative-loop script is interrupted by `cts.Cancel()` and the host
+  awaits an `OperationCanceledException`.
+- `PyRunTests.ExecuteAsync_TokenCancelledMidRun_ThrowsOperationCanceled`
+  — same flow through the `PyRun` marshal-and-dispatch layer.
+- `PyRunTests.{ExecuteAsync_HappyPath,ExecuteManyAsync_HappyPath}_MatchesSyncResult`
+  — pin that the async wrapper preserves sync semantics.
+
+The Excel-DNA half (`PyRunObservable` itself) is `#if NETFRAMEWORK` and
+not directly unit-testable without Excel-DNA. The CI coverage there is
+"the net48 build compiles with `ExcelAsyncUtil.Observe` + the
+`IExcelObservable` shape", and the smoke test in §7's existing script
+exercises it on a real Excel.
 
 ### 5. Progress UI (~200–300 lines, WinForms) — kernel half ✅, WinForms still to do
 
@@ -245,7 +268,7 @@ mention only for traceability.
 | #1 `ExcelWorkbookContext` | ✅ verified | smoke-tested on real Excel 2026-05-29 |
 | #2 `AppEventSink` | ⚠️ code-complete | typed events via embedded `ExcelDna.Interop`; **compiles on Windows CI**, runtime needs the smoke test |
 | #3 CustomXMLPart | ✅ codec + ⚠️ COM | codec `WorkbookStateCodec` + 24 tests (CI); `WorkbookStatePersister` compiles on Windows CI, runtime needs the smoke test |
-| #4 UDF cancel bridge | ⚠️ | Async flow testable via fake ExcelAsyncUtil; the real flow needs Excel |
+| #4 UDF cancel bridge | ✅ landed | `PyRun.ExecuteAsync` + token wiring CI-tested end-to-end; `PyRunObservable` (Excel-DNA half) compiles on Windows CI |
 | #5 Progress UI | ⚠️ | kernel half (`report_progress` → `PROGRESS`) ✅ CI-tested; WinForms still manual |
 | #6 Ribbon range parser | ✅ landed | `RibbonRangeParser` + 15 tests |
 | #7 OnRunPython | ✅ verified | smoke-tested on real Excel 2026-05-29 — doubling, error surfacing, multi-input all pass |
@@ -265,9 +288,12 @@ mention only for traceability.
    fork is resolved (typed events via the embedded `ExcelDna.Interop` PIA;
    see §2). Both compile on the Windows CI lane; **runtime behaviour still
    needs the Windows smoke test** (§2/§3 + the new step 9 below).
-6. **#4** UDF cancel bridge and **#5** progress UI — polish. #5's kernel
-   half (`report_progress` → `PROGRESS` frames) is done and CI-tested;
-   the WinForms dialog is the remaining (Windows-only) piece. #4 still open.
+6. ~~**#4** UDF cancel bridge~~ — done, see `PyRunFunction.cs` (now uses
+   `ExcelAsyncUtil.Observe` + `CancelOnDispose`) and the new
+   `PyRun.ExecuteAsync` / `ExecuteManyAsync` overloads. **#5** progress UI
+   is the last open Phase 4 polish item: kernel half (`report_progress` →
+   `PROGRESS` frames) is done and CI-tested; the WinForms dialog is the
+   remaining (Windows-only) piece, scheduled for Phase 8.
 
 Phase 4's headline ("one real script runs end to end") is satisfied (#7,
 verified on real Excel). Phase 3's "state survives close/reopen" exit

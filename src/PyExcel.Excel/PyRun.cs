@@ -2,6 +2,8 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Runtime.CompilerServices;
+using System.Threading;
+using System.Threading.Tasks;
 using PyExcel.Bridge;
 using PyExcel.Kernel.Client;
 
@@ -143,6 +145,80 @@ public static class PyRun
                 Kwargs = kwargs,
             },
             timeoutMs: timeoutMs);
+
+        return DecodeResult(result);
+    }
+
+    /// <summary>
+    /// Async, cancellable counterpart to <see cref="Execute"/>. When
+    /// <paramref name="cancellationToken"/> fires, the kernel receives a
+    /// <c>CANCEL</c> frame for this run and the task completes with
+    /// <see cref="OperationCanceledException"/> instead of returning a
+    /// result. Used by the <c>=PY.RUN</c> UDF to translate Excel-DNA's
+    /// cancel-on-formula-change into a kernel-side abort.
+    /// </summary>
+    public static Task<object> ExecuteAsync(
+        string script,
+        object? input,
+        IReadOnlyDictionary<string, object?>? kwargs,
+        KernelClient client,
+        string? workbookDirectory = null,
+        string function = "transform",
+        int timeoutMs = 60_000,
+        CancellationToken cancellationToken = default)
+    {
+        var inputs = input is null
+            ? Array.Empty<object?>()
+            : new[] { input };
+
+        return ExecuteManyAsync(
+            script, inputs, kwargs, client, workbookDirectory, function, timeoutMs, cancellationToken);
+    }
+
+    /// <summary>
+    /// Async, cancellable counterpart to <see cref="ExecuteMany"/>. See
+    /// <see cref="ExecuteAsync"/> for the cancellation contract.
+    /// </summary>
+    public static async Task<object> ExecuteManyAsync(
+        string script,
+        IReadOnlyList<object?> inputs,
+        IReadOnlyDictionary<string, object?>? kwargs,
+        KernelClient client,
+        string? workbookDirectory = null,
+        string function = "transform",
+        int timeoutMs = 60_000,
+        CancellationToken cancellationToken = default)
+    {
+        if (script is null) throw new ArgumentNullException(nameof(script));
+        if (script.Length == 0) throw new ArgumentException("script path must be non-empty", nameof(script));
+        if (inputs is null) throw new ArgumentNullException(nameof(inputs));
+        if (client is null) throw new ArgumentNullException(nameof(client));
+
+        var scriptPath = ResolveScriptPath(script, workbookDirectory);
+
+        var arguments = new byte[inputs.Count][];
+        for (var i = 0; i < inputs.Count; i++)
+        {
+            var buffer = EncodeInput(inputs[i]);
+            if (buffer is null)
+                throw new ArgumentException(
+                    $"input at index {i} is null; null positional arguments are not " +
+                    $"supported (they would misalign the remaining arguments). " +
+                    $"Use ExecuteAsync(input: null) for a no-argument call.",
+                    nameof(inputs));
+            arguments[i] = buffer;
+        }
+
+        var result = await client.RunAsync(
+            new RunRequest
+            {
+                Script = scriptPath,
+                Function = function,
+                Arguments = arguments,
+                Kwargs = kwargs,
+            },
+            cancellationToken: cancellationToken,
+            timeoutMs: timeoutMs).ConfigureAwait(false);
 
         return DecodeResult(result);
     }

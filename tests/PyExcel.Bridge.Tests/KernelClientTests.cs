@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Runtime.InteropServices;
+using System.Threading;
 using System.Threading.Tasks;
 using PyExcel.Bridge;
 using PyExcel.Kernel.Client;
@@ -272,6 +273,41 @@ public class KernelClientTests
         Assert.Equal("Exception", ex.Code);
         Assert.Equal("RuntimeError", ex.PythonType);
         Assert.Contains("async-failure", ex.Message);
+    }
+
+    [Fact]
+    public async Task RunAsync_Cancellation_Surfaces_OperationCanceledException()
+    {
+        // Cooperative-loop script: polls is_cancelled() between sleeps so a
+        // CANCEL frame can interrupt it. This mirrors the Python-side
+        // test_kernel_cancel_during_long_run_returns_cancelled_error, but
+        // exercises the C# RunAsync → token-registers-Cancel path.
+        using var fixture = new KernelFixture();
+        var script = fixture.WriteScript("async_loop.py",
+            "import time\n" +
+            "from pyexcel.kernel import is_cancelled\n" +
+            "def transform():\n" +
+            "    for _ in range(200):\n" +
+            "        if is_cancelled():\n" +
+            "            return 'stopped'\n" +
+            "        time.sleep(0.05)\n" +
+            "    return 'finished'\n");
+
+        var client = new KernelClient(fixture.Supervisor);
+        using var cts = new CancellationTokenSource();
+
+        var run = client.RunAsync(new RunRequest { Script = script }, cts.Token);
+
+        // Let the loop enter its sleep cycle, then cancel. The token
+        // registration fires Cancel(runId); the kernel returns
+        // ERROR/Cancelled which RunAsync rethrows as OCE.
+        await Task.Delay(200);
+        cts.Cancel();
+
+        // Awaiting a Task that throws OperationCanceledException with the
+        // matching token returns either TaskCanceledException (Canceled
+        // status) or OperationCanceledException — both derive from OCE.
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => run);
     }
 
     // -------------------------------------------------------------------------

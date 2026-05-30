@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Threading;
+using System.Threading.Tasks;
 using PyExcel.Bridge;
 using PyExcel.Excel;
 using PyExcel.Kernel.Client;
@@ -316,6 +318,76 @@ public class PyRunTests
         using var fx = new KernelFixture();
         Assert.Throws<ArgumentNullException>(() =>
             PyRun.ExecuteMany("x.py", null!, null, fx.Client));
+    }
+
+    // -------------------------------------------------------------------------
+    // Async overload — cancellation path is the new bit; happy path proves
+    // the wrapper preserves the sync semantics.
+    // -------------------------------------------------------------------------
+
+    [Fact]
+    public async Task ExecuteAsync_HappyPath_MatchesSyncResult()
+    {
+        using var fx = new KernelFixture();
+        var script = fx.WriteScript("addone_async.py",
+            "def transform(x):\n    return x + 1\n");
+
+        var result = await PyRun.ExecuteAsync(
+            script: script,
+            input: 41.0,
+            kwargs: null,
+            client: fx.Client);
+
+        Assert.Equal(42.0, result);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_TokenCancelledMidRun_ThrowsOperationCanceled()
+    {
+        // Cooperative loop — polls is_cancelled() so a CANCEL frame from
+        // the host can actually interrupt it. Exercises the UDF cancel
+        // bridge end-to-end: token → KernelClient.Cancel → kernel CANCEL
+        // frame → user script returns early → kernel ERROR/Cancelled →
+        // host throws OperationCanceledException.
+        using var fx = new KernelFixture();
+        var script = fx.WriteScript("loop_async.py",
+            "import time\n" +
+            "from pyexcel.kernel import is_cancelled\n" +
+            "def transform():\n" +
+            "    for _ in range(200):\n" +
+            "        if is_cancelled():\n" +
+            "            return 'stopped'\n" +
+            "        time.sleep(0.05)\n" +
+            "    return 'finished'\n");
+
+        using var cts = new CancellationTokenSource();
+        var run = PyRun.ExecuteAsync(
+            script: script,
+            input: null,
+            kwargs: null,
+            client: fx.Client,
+            cancellationToken: cts.Token);
+
+        await Task.Delay(200);
+        cts.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => run);
+    }
+
+    [Fact]
+    public async Task ExecuteManyAsync_HappyPath_MatchesSyncResult()
+    {
+        using var fx = new KernelFixture();
+        var script = fx.WriteScript("add2_async.py",
+            "def transform(a, b):\n    return a + b\n");
+
+        var result = await PyRun.ExecuteManyAsync(
+            script: script,
+            inputs: new object?[] { 40.0, 2.0 },
+            kwargs: null,
+            client: fx.Client);
+
+        Assert.Equal(42.0, result);
     }
 
     // -------------------------------------------------------------------------

@@ -1,6 +1,8 @@
 #if NETFRAMEWORK
 using System;
 using System.Diagnostics;
+using System.Threading;
+using System.Threading.Tasks;
 using ExcelDna.Integration;
 using ExcelDna.Logging;
 using PyExcel.Kernel.Client;
@@ -17,34 +19,33 @@ namespace PyExcel.Excel;
 ///   <item>Excel calls <see cref="Run"/> on the calc thread with a script
 ///     path, one input argument (cell / range / array / scalar), and an
 ///     optional function name.</item>
-///   <item>We hand the work to <see cref="ExcelAsyncUtil.Run"/>. The first
-///     call kicks off a background task and returns <c>#N/A</c> immediately
-///     so Excel's UI doesn't freeze (SAFE-1). When the task completes, the
-///     cell auto-refreshes with the real result. Subsequent calls with the
-///     same parameter set reuse the cached result.</item>
-///   <item>On the worker thread, the sync core
-///     (<see cref="RunSynchronously"/>) translates Excel-DNA's sentinel
-///     argument types into plain .NET, calls
-///     <see cref="PyRun.Execute"/> against
-///     <see cref="KernelHost.Default"/>, and converts the result back to
-///     something Excel can spill.</item>
+///   <item>We hand the work to <see cref="ExcelAsyncUtil.Observe"/> via a
+///     small <see cref="IExcelObservable"/>. The first call kicks off a
+///     background task and returns <c>#N/A</c> immediately so Excel's UI
+///     doesn't freeze (SAFE-1). When the task completes, the cell
+///     auto-refreshes with the real result. Subsequent calls with the same
+///     parameter set reuse the cached result.</item>
+///   <item>On the background task, <see cref="PyRun.ExecuteAsync"/>
+///     translates Excel-DNA's sentinel argument types into plain .NET,
+///     dispatches against <see cref="KernelHost.Default"/>, and converts
+///     the result back into something Excel can spill.</item>
+///   <item>If Excel-DNA disposes the subscription (the user changed the
+///     formula, the workbook closed, or the cell was deleted), the
+///     observable's <see cref="IDisposable.Dispose"/> cancels the
+///     <see cref="CancellationTokenSource"/> driving the run. The token
+///     registration inside <see cref="KernelClient.RunAsync"/> then pushes
+///     a <c>CANCEL</c> frame to the kernel; the user's <c>transform()</c>
+///     observes <c>pyexcel.kernel.is_cancelled()</c> and returns early.
+///     Either way (cooperative abort or natural completion), the run is
+///     no longer holding the supervisor's exchange semaphore, so the next
+///     call can proceed immediately.</item>
 /// </list>
 ///
 /// <para>Failures surface as <see cref="ExcelError.ExcelErrorValue"/>
 /// (<c>#VALUE!</c> in the cell) with the full Python traceback logged
-/// to <see cref="Trace"/> so the user can see it in DebugView or the
-/// Excel-DNA log window. A richer error UI — a per-script error pane or
-/// a hover tooltip — is a Phase 4 follow-up.</para>
-///
-/// <para><em>Cancel:</em> the kernel now handles CANCEL frames
-/// cooperatively (see <c>pyexcel.kernel.is_cancelled</c>). What this UDF
-/// doesn't yet do is hook Excel-DNA's task cancellation to
-/// <see cref="KernelClient.Cancel"/> — when Excel-DNA cancels the
-/// background task (formula change, workbook close), the call to
-/// <see cref="PyRun.Execute"/> here still completes synchronously
-/// before the worker thread ends. Wiring through a
-/// <see cref="System.Threading.CancellationToken"/> via
-/// <see cref="KernelClient.RunAsync"/> is the natural follow-up.</para>
+/// to <see cref="Trace"/> and Excel-DNA's <see cref="LogDisplay"/>. A
+/// richer error UI — a per-script error pane or a hover tooltip — is a
+/// follow-up.</para>
 /// </summary>
 public static class PyRunFunction
 {
@@ -73,63 +74,121 @@ public static class PyRunFunction
             Description = "Function name in the script (default: transform)")]
         object function)
     {
-        // ExcelAsyncUtil.Run dispatches the work to a background thread,
-        // returns #N/A immediately, and refreshes the cell when the
-        // worker completes. The parameter tuple is used as the cache
-        // key — identical inputs short-circuit to the cached result
-        // rather than re-spawning a job. Positional args here because
-        // the ExcelDna 1.8.0 signature uses different parameter names
-        // than I'd guessed, and positions are the stable contract.
-        return ExcelAsyncUtil.Run(
+        // ExcelAsyncUtil.Observe is the cancellable cousin of
+        // ExcelAsyncUtil.Run. The parameter tuple keys Excel-DNA's
+        // internal cache; identical inputs short-circuit to the cached
+        // result rather than re-spawning a job. When Excel-DNA discards
+        // a cached observable (user typed a new formula, workbook closed,
+        // cell deleted), it disposes the IDisposable returned by
+        // Subscribe — that's our hook to abort the kernel run.
+        // Positional args here because the ExcelDna 1.8.0 signature uses
+        // different parameter names than I'd guessed, and positions are
+        // the stable contract.
+        return ExcelAsyncUtil.Observe(
             "PY.RUN",
             new object[] { script, input, function },
-            () => RunSynchronously(script, input, function));
+            () => new PyRunObservable(script, input, function));
     }
 
-    /// <summary>
-    /// The actual blocking work — runs on Excel-DNA's worker thread, not
-    /// on the calc thread. Same error-translation contract as the sync
-    /// UDF had before SAFE-1: <see cref="KernelException"/> and unhandled
-    /// exceptions both surface as <c>#VALUE!</c>, with the diagnostic
-    /// detail logged via <see cref="Trace"/>.
-    /// </summary>
-    private static object RunSynchronously(string script, object input, object function)
+    // -------------------------------------------------------------------------
+    // Observable that drives one run and cancels on dispose
+    // -------------------------------------------------------------------------
+
+    private sealed class PyRunObservable : IExcelObservable
     {
-        try
-        {
-            var functionName = ResolveFunctionName(function);
-            var inp = FromExcelArgument(input);
+        private readonly string _script;
+        private readonly object _input;
+        private readonly object _function;
 
-            var result = PyRun.Execute(
-                script: script,
-                input: inp,
-                kwargs: null,
-                client: KernelHost.Default.Client,
-                function: functionName);
+        public PyRunObservable(string script, object input, object function)
+        {
+            _script = script;
+            _input = input;
+            _function = function;
+        }
 
-            return ToExcelOutput(result);
-        }
-        catch (KernelException kex)
+        public IDisposable Subscribe(IExcelObserver observer)
         {
-            // The kernel-side traceback is the diagnostic users actually
-            // need. Send it to:
-            //   * Trace — visible in DebugView when developing.
-            //   * LogDisplay — Excel-DNA's built-in error window, which
-            //     users can open from the add-in (or which pops up
-            //     automatically on the first message in some configs).
-            // The cell itself still gets #VALUE! so spreadsheet formulas
-            // like ISERROR() see it as a failure rather than as data.
-            var msg = $"[PY.RUN] {kex.Code} {kex.PythonType}: {kex.Message}\n{kex.PythonTraceback}";
-            Trace.WriteLine(msg);
-            LogDisplay.WriteLine(msg);
-            return ExcelError.ExcelErrorValue;
+            var cts = new CancellationTokenSource();
+            // Kick off the run on a background task. PyRun.ExecuteAsync
+            // wires the token into KernelClient.RunAsync, which on cancel
+            // pushes a CANCEL frame to the kernel.
+            //
+            // Task is fire-and-forget by design — all exceptions are
+            // caught inside the lambda so the runtime never sees an
+            // unobserved task fault. We don't store the task: the only
+            // handle we need into it is the CTS, which Dispose owns.
+            _ = Task.Run(() => RunCoreAsync(observer, cts.Token));
+            return new CancelOnDispose(cts);
         }
-        catch (Exception ex)
+
+        private async Task RunCoreAsync(IExcelObserver observer, CancellationToken token)
         {
-            var msg = $"[PY.RUN] host error: {ex}";
-            Trace.WriteLine(msg);
-            LogDisplay.WriteLine(msg);
-            return ExcelError.ExcelErrorValue;
+            try
+            {
+                var functionName = ResolveFunctionName(_function);
+                var inp = FromExcelArgument(_input);
+
+                var result = await PyRun.ExecuteAsync(
+                    script: _script,
+                    input: inp,
+                    kwargs: null,
+                    client: KernelHost.Default.Client,
+                    function: functionName,
+                    cancellationToken: token).ConfigureAwait(false);
+
+                if (token.IsCancellationRequested) return; // observer is gone
+                observer.OnNext(ToExcelOutput(result));
+                observer.OnCompleted();
+            }
+            catch (OperationCanceledException) when (token.IsCancellationRequested)
+            {
+                // Excel-DNA cancelled us (formula change, workbook close);
+                // the observer is no longer interested. Drop silently.
+            }
+            catch (KernelException kex)
+            {
+                // The kernel-side traceback is the diagnostic users actually
+                // need. Send it to:
+                //   * Trace — visible in DebugView when developing.
+                //   * LogDisplay — Excel-DNA's built-in error window, which
+                //     users can open from the add-in (or which pops up
+                //     automatically on the first message in some configs).
+                // The cell itself still gets #VALUE! so spreadsheet formulas
+                // like ISERROR() see it as a failure rather than as data.
+                var msg = $"[PY.RUN] {kex.Code} {kex.PythonType}: {kex.Message}\n{kex.PythonTraceback}";
+                Trace.WriteLine(msg);
+                LogDisplay.WriteLine(msg);
+                if (token.IsCancellationRequested) return;
+                observer.OnNext(ExcelError.ExcelErrorValue);
+                observer.OnCompleted();
+            }
+            catch (Exception ex)
+            {
+                var msg = $"[PY.RUN] host error: {ex}";
+                Trace.WriteLine(msg);
+                LogDisplay.WriteLine(msg);
+                if (token.IsCancellationRequested) return;
+                observer.OnNext(ExcelError.ExcelErrorValue);
+                observer.OnCompleted();
+            }
+        }
+    }
+
+    /// <summary>Disposable wrapper that cancels (and disposes) a
+    /// <see cref="CancellationTokenSource"/> exactly once.</summary>
+    private sealed class CancelOnDispose : IDisposable
+    {
+        private CancellationTokenSource? _cts;
+
+        public CancelOnDispose(CancellationTokenSource cts) { _cts = cts; }
+
+        public void Dispose()
+        {
+            var cts = Interlocked.Exchange(ref _cts, null);
+            if (cts is null) return;
+            try { cts.Cancel(); } catch { /* best-effort */ }
+            cts.Dispose();
         }
     }
 
