@@ -99,9 +99,21 @@ public class RunArchiveTests : IDisposable
     {
         // A user function returning None gives RunResult.IsEmpty=true; the
         // caller passes output=null. Archive should record the run with
-        // no output.arrow file.
+        // no output.arrow file. Inlined rather than using SuccessEntry
+        // because the helper substitutes a default for a null output, and
+        // here we genuinely want the null through.
         var archive = new RunArchive(_root);
-        var entry = SuccessEntry(output: null);
+        var entry = new RunArchiveEntry(
+            Timestamp: new DateTimeOffset(2026, 5, 30, 14, 0, 0, TimeSpan.Zero),
+            WorkbookKey: "C:\\book.xlsx",
+            ScriptPath: "C:\\scripts\\transform.py",
+            Function: "transform",
+            Source: "PY.RUN",
+            Duration: TimeSpan.FromMilliseconds(100),
+            Inputs: new[] { new byte[] { 0x1 } },
+            Output: null,
+            Error: null,
+            Status: RunArchiveStatus.Success);
 
         var dir = archive.Archive(entry);
 
@@ -430,6 +442,10 @@ public class RunArchiveTests : IDisposable
     // Helpers
     // -------------------------------------------------------------------------
 
+    // Builds a successful-run entry with default placeholders. Note: the
+    // `output` parameter is null-coalesced to a default — passing
+    // `output: null` does NOT model "function returned None". Inline the
+    // record construction for that case so the null carries through.
     private static RunArchiveEntry SuccessEntry(
         DateTimeOffset? timestamp = null,
         string? workbookKey = "C:\\book.xlsx",
