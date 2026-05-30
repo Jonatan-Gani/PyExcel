@@ -6,6 +6,7 @@ using System.Threading.Tasks;
 using ExcelDna.Integration;
 using ExcelDna.Logging;
 using PyExcel.Kernel.Client;
+using PyExcel.State;
 
 namespace PyExcel.Excel;
 
@@ -154,9 +155,21 @@ public static class PyRunFunction
                 //   * LogDisplay — Excel-DNA's built-in error window, which
                 //     users can open from the add-in (or which pops up
                 //     automatically on the first message in some configs).
+                //   * ErrorService — backs the ribbon's "Show / Copy Last
+                //     Error" buttons so the user can recover the traceback
+                //     without hunting through Excel-DNA's log window.
                 // The cell itself still gets #VALUE! so spreadsheet formulas
                 // like ISERROR() see it as a failure rather than as data.
-                var msg = $"[PY.RUN] {kex.Code} {kex.PythonType}: {kex.Message}\n{kex.PythonTraceback}";
+                var record = new KernelErrorRecord(
+                    Timestamp: DateTimeOffset.UtcNow,
+                    Source: "PY.RUN",
+                    Code: kex.Code,
+                    PythonType: kex.PythonType,
+                    Message: kex.Message,
+                    PythonTraceback: kex.PythonTraceback,
+                    ScriptPath: _script);
+                RecordError(record);
+                var msg = record.FormatForClipboard();
                 Trace.WriteLine(msg);
                 LogDisplay.WriteLine(msg);
                 if (token.IsCancellationRequested) return;
@@ -165,12 +178,40 @@ public static class PyRunFunction
             }
             catch (Exception ex)
             {
-                var msg = $"[PY.RUN] host error: {ex}";
+                var record = new KernelErrorRecord(
+                    Timestamp: DateTimeOffset.UtcNow,
+                    Source: "PY.RUN",
+                    Code: "HostError",
+                    PythonType: ex.GetType().Name,
+                    Message: ex.Message,
+                    PythonTraceback: ex.ToString(),
+                    ScriptPath: _script);
+                RecordError(record);
+                var msg = record.FormatForClipboard();
                 Trace.WriteLine(msg);
                 LogDisplay.WriteLine(msg);
                 if (token.IsCancellationRequested) return;
                 observer.OnNext(ExcelError.ExcelErrorValue);
                 observer.OnCompleted();
+            }
+        }
+
+        /// <summary>Push the error into the per-workbook last-error slot
+        /// (or the global slot if no workbook is active). Best-effort —
+        /// a failure here must not eat the user-facing #VALUE!.</summary>
+        private static void RecordError(KernelErrorRecord record)
+        {
+            try
+            {
+                var key = PyExcelServices.WorkbookContext.CurrentWorkbookKey;
+                PyExcelServices.Errors.Record(key, record);
+            }
+            catch
+            {
+                // Best-effort. The user already sees #VALUE! in the cell
+                // and the message in LogDisplay; losing the ribbon's
+                // copy-button content is a worse experience than crashing
+                // the ribbon would be.
             }
         }
     }

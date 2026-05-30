@@ -32,4 +32,14 @@
     <EmbeddedResource Include="Resources\RibbonUI.xml" />
   </ItemGroup>
 
+  <!--
+    OnCopyLastError uses System.Windows.Forms.Clipboard.SetText. WinForms
+    isn't in the default .NET Framework reference set for SDK-style net48
+    projects, so add the assembly reference explicitly. (No package — it's
+    part of the framework redist.)
+  -->
+  <ItemGroup>
+    <Reference Include="System.Windows.Forms" />
+  </ItemGroup>
+
 </Project>

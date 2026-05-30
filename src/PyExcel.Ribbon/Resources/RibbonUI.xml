@@ -19,6 +19,15 @@
                     <button id="btnOpenExplorer" label="Open In Explorer" imageMso="FolderOpen" onAction="OnOpenExplorer" getEnabled="RibbonEnabled"/>
                     <button id="btnReadMe" label="Read Me" imageMso="Help" onAction="OnReadMe" getEnabled="RibbonEnabled"/>
                 </group>
+                <group id="grpErrors" label="Errors">
+                    <!--
+                      getEnabled is `RibbonHasError`, not `RibbonEnabled` —
+                      errors are surfaceable independently of whether the
+                      workbook has been enabled for PyExcel.
+                    -->
+                    <button id="btnShowLastError" label="Show Last Error" imageMso="ShowAllItems" onAction="OnShowLastError" getEnabled="RibbonHasError"/>
+                    <button id="btnCopyLastError" label="Copy Last Error" imageMso="Copy" onAction="OnCopyLastError" getEnabled="RibbonHasError"/>
+                </group>
                 <group id="grpPython" label="Python">
                     <button id="btnRun" label="Run" size="large" image="customLogo" onAction="OnRunPython" getEnabled="RibbonEnabled"/>
                     <button id="btnEdit" label="Edit" size="large" imageMso="DatabaseSwitchboardManager" onAction="OnEditPython" getEnabled="RibbonEnabled"/>

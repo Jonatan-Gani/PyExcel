@@ -22,6 +22,11 @@ public static class PyExcelServices
     /// <summary>The process-wide state registry.</summary>
     public static StateService State { get; set; } = new StateService();
 
+    /// <summary>The process-wide last-error registry. Wired by the
+    /// add-in's <c>AutoOpen</c>; the ribbon reads from it to render
+    /// the Show / Copy Last Error buttons.</summary>
+    public static ErrorService Errors { get; set; } = new ErrorService();
+
     /// <summary>Strategy for "what workbook is active right now".</summary>
     public static IWorkbookContext WorkbookContext { get; set; } = NullWorkbookContext.Instance;
 

@@ -127,15 +127,47 @@ public static class RangeRunner
             }
             catch (KernelException kex)
             {
-                Fail(
-                    $"Run Python: {kex.Code} {kex.PythonType}: {kex.Message}\n{kex.PythonTraceback}",
-                    kex);
+                var record = new KernelErrorRecord(
+                    Timestamp: DateTimeOffset.UtcNow,
+                    Source: "Run Python button",
+                    Code: kex.Code,
+                    PythonType: kex.PythonType,
+                    Message: kex.Message,
+                    PythonTraceback: kex.PythonTraceback,
+                    ScriptPath: script);
+                RecordError(record);
+                Fail(record.FormatForClipboard(), kex);
             }
             catch (Exception ex)
             {
-                Fail($"Run Python: host error — {ex.Message}", ex);
+                var record = new KernelErrorRecord(
+                    Timestamp: DateTimeOffset.UtcNow,
+                    Source: "Run Python button",
+                    Code: "HostError",
+                    PythonType: ex.GetType().Name,
+                    Message: ex.Message,
+                    PythonTraceback: ex.ToString(),
+                    ScriptPath: script);
+                RecordError(record);
+                Fail(record.FormatForClipboard(), ex);
             }
         });
+    }
+
+    /// <summary>Best-effort push into the per-workbook last-error slot.
+    /// A failure here must not stop the user-facing error from reaching
+    /// LogDisplay / Trace.</summary>
+    private static void RecordError(KernelErrorRecord record)
+    {
+        try
+        {
+            var key = PyExcelServices.WorkbookContext.CurrentWorkbookKey;
+            PyExcelServices.Errors.Record(key, record);
+        }
+        catch
+        {
+            // Best-effort.
+        }
     }
 
     // -------------------------------------------------------------------------

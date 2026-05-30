@@ -70,6 +70,11 @@ public class PyExcelRibbon : ExcelRibbon
         // originate from a FileSystemWatcher worker thread, and
         // IRibbonUI is COM-affine.
         PyExcelServices.State.StateChanged += OnStateChanged;
+        // Also repaint on error capture / clear so the "Show / Copy
+        // Last Error" buttons enable as soon as a run fails (and disable
+        // again when the slot is cleared). Same queue-then-invalidate
+        // contract — the recorder runs on a background task.
+        PyExcelServices.Errors.ErrorChanged += OnErrorChanged;
         // Let non-ribbon components ask for a repaint without reaching into
         // this class. The COM event sink uses it on WorkbookActivate, where
         // the active workbook key changes but nothing in the registry
@@ -83,6 +88,25 @@ public class PyExcelRibbon : ExcelRibbon
         if (_ribbon is null) return;
         // Skip work if the change is to a workbook other than the active
         // one — most cells of the ribbon only render the active workbook.
+        var activeKey = PyExcelServices.WorkbookContext.CurrentWorkbookKey;
+        if (activeKey is not null
+            && !string.Equals(activeKey, e.WorkbookKey, StringComparison.Ordinal))
+        {
+            return;
+        }
+        QueueInvalidate();
+    }
+
+    private void OnErrorChanged(object? sender, ErrorChangedEventArgs e)
+    {
+        if (_ribbon is null) return;
+        // A null WorkbookKey is the global slot — surface those on every
+        // workbook, since no specific workbook owns them.
+        if (e.WorkbookKey is null)
+        {
+            QueueInvalidate();
+            return;
+        }
         var activeKey = PyExcelServices.WorkbookContext.CurrentWorkbookKey;
         if (activeKey is not null
             && !string.Equals(activeKey, e.WorkbookKey, StringComparison.Ordinal))
@@ -343,6 +367,83 @@ public class PyExcelRibbon : ExcelRibbon
 
     public void OnEditPaste(IRibbonControl control)
         => StubAction(control, "OnEditPaste", "modRibbon.bas:940 — shows EditPasteForm");
+
+    // -------------------------------------------------------------------------
+    // Errors group — Show / Copy Last Error. Surfaces what the kernel
+    // returned (or a host fault) without forcing the user to dig through
+    // Excel-DNA's LogDisplay window.
+    // -------------------------------------------------------------------------
+
+    /// <summary>getEnabled for the error-group buttons: true iff
+    /// <see cref="ErrorService"/> has something to show for the active
+    /// workbook (or in the global slot).</summary>
+    public bool RibbonHasError(IRibbonControl control)
+    {
+        try
+        {
+            return PyExcelServices.Errors.GetLast(ActiveKey()) is not null;
+        }
+        catch
+        {
+            // A faulty getEnabled would gray the button silently; better
+            // to leave it enabled and surface the issue on click.
+            return true;
+        }
+    }
+
+    /// <summary>Show the last error in Excel-DNA's <see cref="LogDisplay"/>.
+    /// Brings the window to front so the user sees it even if it was
+    /// previously dismissed.</summary>
+    public void OnShowLastError(IRibbonControl control)
+    {
+        try
+        {
+            var record = PyExcelServices.Errors.GetLast(ActiveKey());
+            if (record is null)
+            {
+                LogDisplay.WriteLine("[PyExcel] No errors recorded.");
+            }
+            else
+            {
+                LogDisplay.WriteLine(record.FormatForClipboard());
+            }
+            LogDisplay.Show();
+        }
+        catch (Exception ex)
+        {
+            _log.Error("OnShowLastError failed", ex);
+        }
+    }
+
+    /// <summary>Copy the last error's formatted block to the clipboard
+    /// so the user can paste it into a bug report. No-op (and a single
+    /// LogDisplay note) when no error is on file.</summary>
+    public void OnCopyLastError(IRibbonControl control)
+    {
+        try
+        {
+            var record = PyExcelServices.Errors.GetLast(ActiveKey());
+            if (record is null)
+            {
+                LogDisplay.WriteLine("[PyExcel] No errors recorded — nothing to copy.");
+                return;
+            }
+            // System.Windows.Forms.Clipboard requires an STA thread.
+            // Ribbon callbacks run on Excel's main thread, which is STA.
+            System.Windows.Forms.Clipboard.SetText(record.FormatForClipboard());
+            LogDisplay.WriteLine("[PyExcel] Last error copied to clipboard.");
+        }
+        catch (Exception ex)
+        {
+            _log.Error("OnCopyLastError failed", ex);
+        }
+    }
+
+    /// <summary>Active workbook key, or <see langword="null"/> if no
+    /// workbook is bound — <see cref="ErrorService"/> falls back to the
+    /// global slot on null.</summary>
+    private static string? ActiveKey()
+        => PyExcelServices.WorkbookContext.CurrentWorkbookKey;
 
     // -------------------------------------------------------------------------
     // Helpers
