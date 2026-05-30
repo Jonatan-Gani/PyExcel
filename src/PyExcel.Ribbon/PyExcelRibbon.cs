@@ -4,6 +4,7 @@ using System.Reflection;
 using System.Runtime.InteropServices;
 using ExcelDna.Integration;
 using ExcelDna.Integration.CustomUI;
+using ExcelDna.Logging;
 using PyExcel.Common.Logging;
 using PyExcel.State;
 
