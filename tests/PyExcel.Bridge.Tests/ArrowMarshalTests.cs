@@ -251,8 +251,7 @@ public class ArrowMarshalTests
         // timezone. Build the equivalent buffer in-test and verify the
         // decoder lands on a naive DateTime.
         var expected = new DateTime(2024, 1, 15, 9, 30, 45, DateTimeKind.Unspecified);
-        var microsSinceEpoch = (expected.Ticks - new DateTime(1970, 1, 1).Ticks) / 10L;
-        var buf = BuildTimestampScalarBuffer(microsSinceEpoch, TimeUnit.Microsecond);
+        var buf = BuildTimestampScalarBuffer(expected, TimeUnit.Microsecond);
 
         var decoded = ArrowMarshal.Decode(buf);
 
@@ -262,46 +261,48 @@ public class ArrowMarshalTests
     }
 
     [Fact]
-    public void Decode_TimestampMillisecond_RoundsToNearestMs()
+    public void Decode_TimestampMillisecond_RoundTrips()
     {
         // External Arrow writers may use timestamp[ms] (Java/Spark default).
-        // 1700000000000 ms after epoch is 2023-11-14 22:13:20 UTC; the
+        // 2023-11-14 22:13:20 UTC ≡ 1_700_000_000_000 ms since epoch; the
         // decoder treats it as naive (no timezone applied).
-        var buf = BuildTimestampScalarBuffer(1_700_000_000_000L, TimeUnit.Millisecond);
+        var expected = new DateTime(2023, 11, 14, 22, 13, 20, DateTimeKind.Unspecified);
+        var buf = BuildTimestampScalarBuffer(expected, TimeUnit.Millisecond);
 
         var decoded = ArrowMarshal.Decode(buf);
 
         var dt = Assert.IsType<DateTime>(decoded);
-        Assert.Equal(new DateTime(2023, 11, 14, 22, 13, 20, DateTimeKind.Unspecified), dt);
+        Assert.Equal(expected, dt);
     }
 
     [Fact]
     public void Decode_TimestampSecond_RoundTrips()
     {
-        // 1700000000 seconds after epoch.
-        var buf = BuildTimestampScalarBuffer(1_700_000_000L, TimeUnit.Second);
+        var expected = new DateTime(2023, 11, 14, 22, 13, 20, DateTimeKind.Unspecified);
+        var buf = BuildTimestampScalarBuffer(expected, TimeUnit.Second);
 
         var decoded = ArrowMarshal.Decode(buf);
 
         var dt = Assert.IsType<DateTime>(decoded);
-        Assert.Equal(new DateTime(2023, 11, 14, 22, 13, 20, DateTimeKind.Unspecified), dt);
+        Assert.Equal(expected, dt);
     }
 
     [Fact]
-    public void Decode_TimestampNanosecond_TruncatesToTickPrecision()
+    public void Decode_TimestampNanosecond_RoundTrips()
     {
-        // DateTime resolution is 100 ns, so 1234 ns past a tick boundary
-        // truncates to a tick boundary. 1_700_000_000_000_001_234 ns
-        // = 1700000000000001 ticks + 234 ns remainder; the value/100
-        // division drops the remainder.
-        var buf = BuildTimestampScalarBuffer(1_700_000_000_000_001_234L, TimeUnit.Nanosecond);
+        // The nanosecond arm is the one pandas's datetime64[ns] uses. The
+        // Apache.Arrow C# builder only accepts DateTime / DateTimeOffset
+        // (so we can't construct a sub-tick raw long via the test API),
+        // but the path matters: 1 ns = 0.01 ticks, so the decoder must
+        // divide by 100 rather than multiply. Any sub-tick remainder gets
+        // truncated by integer division — fine, because .NET DateTime
+        // can't represent sub-100-ns precision anyway.
+        var expected = new DateTime(2024, 1, 15, 9, 30, 45, DateTimeKind.Unspecified);
+        var buf = BuildTimestampScalarBuffer(expected, TimeUnit.Nanosecond);
 
         var decoded = ArrowMarshal.Decode(buf);
 
         var dt = Assert.IsType<DateTime>(decoded);
-        // Expected: epoch + 17_000_000_000_000_012 ticks (= 1.7e15 ns / 100).
-        var expected = new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Unspecified)
-            .AddTicks(17_000_000_000_000_012L);
         Assert.Equal(expected, dt);
     }
 
@@ -310,8 +311,7 @@ public class ArrowMarshalTests
     {
         // pyarrow encodes datetime.date as date32 (days since 1970-01-01).
         var expected = new DateTime(2024, 1, 15, 0, 0, 0, DateTimeKind.Unspecified);
-        var days = (int)((expected - new DateTime(1970, 1, 1)).TotalDays);
-        var buf = BuildDate32ScalarBuffer(days);
+        var buf = BuildDate32ScalarBuffer(expected);
 
         var decoded = ArrowMarshal.Decode(buf);
 
@@ -326,8 +326,7 @@ public class ArrowMarshalTests
         // date64 is rare (Java tooling produces it), but external writers
         // may surface it; verify the decoder handles it.
         var expected = new DateTime(2024, 1, 15, 0, 0, 0, DateTimeKind.Unspecified);
-        var ms = (long)(expected - new DateTime(1970, 1, 1)).TotalMilliseconds;
-        var buf = BuildDate64ScalarBuffer(ms);
+        var buf = BuildDate64ScalarBuffer(expected);
 
         var decoded = ArrowMarshal.Decode(buf);
 
@@ -346,11 +345,7 @@ public class ArrowMarshalTests
             new DateTime(2024, 6, 15, 12, 30, 0, DateTimeKind.Unspecified),
             new DateTime(2024, 12, 31, 23, 59, 59, DateTimeKind.Unspecified),
         };
-        var epoch = new DateTime(1970, 1, 1).Ticks;
-        var micros = new long[dates.Length];
-        for (var i = 0; i < dates.Length; i++)
-            micros[i] = (dates[i].Ticks - epoch) / 10L;
-        var buf = BuildTimestampVectorBuffer(micros, TimeUnit.Microsecond);
+        var buf = BuildTimestampVectorBuffer(dates, TimeUnit.Microsecond);
 
         var decoded = ArrowMarshal.Decode(buf);
 
@@ -531,38 +526,48 @@ public class ArrowMarshalTests
         return ms.ToArray();
     }
 
-    private static byte[] BuildTimestampScalarBuffer(long value, TimeUnit unit)
+    // Apache.Arrow's date/timestamp builders accept DateTime / DateTimeOffset
+    // (not raw long / int) and handle the unit conversion internally. We
+    // treat the input DateTime as UTC-naive — wrap as DateTimeOffset with a
+    // zero offset — so the value the builder writes is the same wall-clock
+    // value the decoder reads back (no timezone shift). The "naive"
+    // semantics match every Python-side path PyExcel currently exercises.
+
+    private static byte[] BuildTimestampScalarBuffer(DateTime value, TimeUnit unit)
     {
-        // Apache.Arrow's TimestampType takes a `string timezone` (default "")
-        // — empty signals "naive", matching pyarrow's default.
         var type = new TimestampType(unit, timezone: "");
         var builder = new TimestampArray.Builder(type);
-        builder.Append(value);
+        builder.Append(new DateTimeOffset(value, TimeSpan.Zero));
         return BuildSingleColumnBuffer(type, builder.Build(), length: 1, shape: "scalar");
     }
 
-    private static byte[] BuildTimestampVectorBuffer(long[] values, TimeUnit unit)
+    private static byte[] BuildTimestampVectorBuffer(DateTime[] values, TimeUnit unit)
     {
         var type = new TimestampType(unit, timezone: "");
         var builder = new TimestampArray.Builder(type);
-        foreach (var v in values) builder.Append(v);
+        foreach (var v in values)
+            builder.Append(new DateTimeOffset(v, TimeSpan.Zero));
         return BuildSingleColumnBuffer(
             type, builder.Build(), length: values.Length,
             shape: "vector", orientation: "column");
     }
 
-    private static byte[] BuildDate32ScalarBuffer(int daysSinceEpoch)
+    private static byte[] BuildDate32ScalarBuffer(DateTime value)
     {
+        // Date32Array.Builder.Append(DateTime) drops the time component
+        // internally (date32 only stores days since epoch).
         var builder = new Date32Array.Builder();
-        builder.Append(daysSinceEpoch);
+        builder.Append(value);
         return BuildSingleColumnBuffer(
             Date32Type.Default, builder.Build(), length: 1, shape: "scalar");
     }
 
-    private static byte[] BuildDate64ScalarBuffer(long msSinceEpoch)
+    private static byte[] BuildDate64ScalarBuffer(DateTime value)
     {
+        // Date64Array.Builder.Append(DateTime) likewise drops time-of-day
+        // (Arrow date64 stores midnight-aligned ms since epoch).
         var builder = new Date64Array.Builder();
-        builder.Append(msSinceEpoch);
+        builder.Append(value);
         return BuildSingleColumnBuffer(
             Date64Type.Default, builder.Build(), length: 1, shape: "scalar");
     }
