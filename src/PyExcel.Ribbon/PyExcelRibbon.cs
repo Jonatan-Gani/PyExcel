@@ -6,6 +6,7 @@ using ExcelDna.Integration;
 using ExcelDna.Integration.CustomUI;
 using ExcelDna.Logging;
 using PyExcel.Common.Logging;
+using PyExcel.Common.Shell;
 using PyExcel.State;
 
 namespace PyExcel.Ribbon;
@@ -191,23 +192,51 @@ public class PyExcelRibbon : ExcelRibbon
     }
 
     public void OnOpenExplorer(IRibbonControl control)
-        => StubAction(control, "OnOpenExplorer", "modRibbon.bas:515 — shells explorer.exe at project root");
+    {
+        _log.Info("OnOpenExplorer clicked");
+        try
+        {
+            var dir = PyExcelServices.WorkbookContext.CurrentWorkbookDirectory;
+            if (string.IsNullOrEmpty(dir))
+            {
+                LogDisplay.WriteLine(
+                    "Open Explorer: the active workbook hasn't been saved yet — " +
+                    "no directory to open.");
+                return;
+            }
+            ShellLauncher.OpenInExplorer(dir!);
+        }
+        catch (Exception ex)
+        {
+            _log.Error("OnOpenExplorer failed", ex);
+            LogDisplay.WriteLine($"Open Explorer: {ex.Message}");
+        }
+    }
 
     public void OnReadMe(IRibbonControl control)
     {
         _log.Info("OnReadMe clicked");
         try
         {
-            // Phase 1 deliverable: show the readme. We pop a MessageBox
-            // rather than launching the user's text editor because the
-            // file-association resolution requires Shell APIs we haven't
-            // ported yet; that lives in PyExcel.Common.Shell in Phase 5.
+            // If the active workbook's directory has a README.md, open
+            // it with the user's default handler. Otherwise fall back to
+            // an in-Excel alert pointing at the migration docs.
+            var dir = PyExcelServices.WorkbookContext.CurrentWorkbookDirectory;
+            if (!string.IsNullOrEmpty(dir))
+            {
+                var readme = Path.Combine(dir!, "README.md");
+                if (File.Exists(readme))
+                {
+                    ShellLauncher.Open(readme);
+                    return;
+                }
+            }
+
             const string text =
                 "PyExcel v2.0 (alpha)\n\n" +
-                "This is the .NET rewrite of the PyExcel add-in. Phase 1 — " +
-                "ribbon skeleton — is the only thing wired up today.\n\n" +
-                "See README.md and docs/v2-build.md for the migration plan.";
-
+                "No README.md was found next to this workbook. " +
+                "See the bundled docs/v2-build.md and ROADMAP.md for the " +
+                "migration plan.";
             XlCall.Excel(XlCall.xlcAlert, text, 2 /* xlAlertWarning */);
         }
         catch (Exception ex)
@@ -243,7 +272,43 @@ public class PyExcelRibbon : ExcelRibbon
     }
 
     public void OnEditPython(IRibbonControl control)
-        => StubAction(control, "OnEditPython", "modRibbon.bas:1400 — shells the user's editor");
+    {
+        _log.Info("OnEditPython clicked");
+        try
+        {
+            var script = ActiveState().SelectedScript;
+            if (string.IsNullOrEmpty(script))
+            {
+                LogDisplay.WriteLine(
+                    "Edit Python: no script is selected. " +
+                    "Pick one from the ribbon's Script dropdown first.");
+                return;
+            }
+            var dir = PyExcelServices.WorkbookContext.CurrentWorkbookDirectory;
+            if (string.IsNullOrEmpty(dir))
+            {
+                LogDisplay.WriteLine(
+                    "Edit Python: the active workbook hasn't been saved yet — " +
+                    "save the workbook first so the userScripts/ folder is " +
+                    "located on disk.");
+                return;
+            }
+            // Convention: scripts live under <workbookDir>/userScripts/<name>.
+            // ScriptDirectoryWatcher uses the same root.
+            var path = Path.Combine(dir!, "userScripts", script!);
+            if (!File.Exists(path))
+            {
+                LogDisplay.WriteLine($"Edit Python: file not found at '{path}'.");
+                return;
+            }
+            ShellLauncher.Open(path);
+        }
+        catch (Exception ex)
+        {
+            _log.Error("OnEditPython failed", ex);
+            LogDisplay.WriteLine($"Edit Python: {ex.Message}");
+        }
+    }
 
     public int GetScriptCount(IRibbonControl control) => ActiveState().AvailableScripts.Count;
 
@@ -326,7 +391,19 @@ public class PyExcelRibbon : ExcelRibbon
     // -------------------------------------------------------------------------
 
     public void OnImport(IRibbonControl control)
-        => StubAction(control, "OnImport", "modRibbon.bas:593 — runs ImportService");
+    {
+        _log.Info("OnImport clicked");
+        try
+        {
+            var key = PyExcelServices.WorkbookContext.CurrentWorkbookKey;
+            if (key is null) { _log.Info("OnImport: no active workbook"); return; }
+            PyExcel.Excel.ImportService.RunActiveImport(PyExcelServices.State.Get(key));
+        }
+        catch (Exception ex)
+        {
+            _log.Error("OnImport failed", ex);
+        }
+    }
 
     public string GetImportInput(IRibbonControl control) => ActiveState().ImportInput ?? string.Empty;
     public void OnImportInputChange(IRibbonControl control, string text)
@@ -352,7 +429,19 @@ public class PyExcelRibbon : ExcelRibbon
     // -------------------------------------------------------------------------
 
     public void OnExport(IRibbonControl control)
-        => StubAction(control, "OnExport", "modRibbon.bas:740 — runs ExportService");
+    {
+        _log.Info("OnExport clicked");
+        try
+        {
+            var key = PyExcelServices.WorkbookContext.CurrentWorkbookKey;
+            if (key is null) { _log.Info("OnExport: no active workbook"); return; }
+            PyExcel.Excel.ExportService.RunActiveExport(PyExcelServices.State.Get(key));
+        }
+        catch (Exception ex)
+        {
+            _log.Error("OnExport failed", ex);
+        }
+    }
 
     public string GetExportInput(IRibbonControl control) => ActiveState().ExportInput ?? string.Empty;
     public void OnExportInputChange(IRibbonControl control, string text)

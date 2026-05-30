@@ -63,4 +63,23 @@ public sealed class ExcelWorkbookContext : IWorkbookContext
             }
         }
     }
+
+    public string? CurrentWorkbookDirectory
+    {
+        get
+        {
+            try
+            {
+                dynamic app = ExcelDnaUtil.Application;
+                dynamic wb = app.ActiveWorkbook;
+                if (wb is null) return null;
+                string path = (string)wb.Path;
+                return string.IsNullOrEmpty(path) ? null : path;
+            }
+            catch
+            {
+                return null;
+            }
+        }
+    }
 }
