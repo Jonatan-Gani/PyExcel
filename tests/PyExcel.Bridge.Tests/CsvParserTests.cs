@@ -22,7 +22,7 @@ public class CsvParserTests
     [Fact]
     public void Parse_NullText_Throws()
     {
-        Assert.Throws<ArgumentNullException>(() => CsvParser.Parse(null!));
+        Assert.Throws<ArgumentNullException>(() => CsvParser.Parse((string)null!));
     }
 
     [Fact]
