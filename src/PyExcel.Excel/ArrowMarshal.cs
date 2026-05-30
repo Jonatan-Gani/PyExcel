@@ -403,6 +403,13 @@ public static class ArrowMarshal
     /// path. This matches Excel's "every number is a double" model, so a
     /// Python script that returns <c>42</c> spills as <c>42.0</c> rather
     /// than crashing the host's downstream <c>double</c> arithmetic.</para>
+    ///
+    /// <para>Arrow date / timestamp arrays decode to <see cref="DateTime"/>
+    /// with <see cref="DateTimeKind.Unspecified"/>. The wire format does
+    /// not carry timezone information (every Python-side path PyExcel uses
+    /// produces naive <c>datetime</c> / <c>date</c> values, which pyarrow
+    /// renders as <c>timestamp[us]</c> with no timezone), so attaching
+    /// Utc / Local here would be a lie.</para>
     /// </summary>
     private static object? ReadCell(IArrowArray array, int index)
     {
@@ -425,9 +432,51 @@ public static class ArrowMarshal
             UInt8Array u8 => (object?)(double)u8.Values[index],
             BooleanArray b => b.GetValue(index),
             StringArray s => s.GetString(index),
+            Date32Array d32 => Date32ToDateTime(d32.Values[index]),
+            Date64Array d64 => Date64ToDateTime(d64.Values[index]),
+            TimestampArray ts => TimestampToDateTime(
+                ts.Values[index],
+                ((TimestampType)ts.Data.DataType).Unit),
             _ => array.GetType().Name,  // last-ditch: surface the type name
         };
     }
+
+    // -----------------------------------------------------------------------
+    // Date / timestamp conversion helpers (Arrow → DateTime).
+    //
+    // The DateTime is always DateTimeKind.Unspecified — pyarrow's default
+    // for a naive datetime is timestamp[us] with no timezone, and that is
+    // every Python-side path PyExcel currently exercises. Attaching Utc /
+    // Local here would invent information we don't have.
+    // -----------------------------------------------------------------------
+
+    private static readonly DateTime UnixEpoch =
+        new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Unspecified);
+
+    /// <summary>Date32 = days since 1970-01-01, no time component.</summary>
+    private static DateTime Date32ToDateTime(int days) => UnixEpoch.AddDays(days);
+
+    /// <summary>Date64 = milliseconds since 1970-01-01. Arrow's date64 is
+    /// rare (pyarrow prefers date32 for <see cref="System.DateTime.Date"/>),
+    /// but external writers may produce it, so we handle it.</summary>
+    private static DateTime Date64ToDateTime(long ms) => UnixEpoch.AddMilliseconds(ms);
+
+    /// <summary>
+    /// Timestamp = a signed integer count of the unit (sec / ms / μs / ns)
+    /// since the Unix epoch. .NET's DateTime ticks are 100 ns, so the
+    /// conversion bottoms out at <see cref="DateTime.AddTicks"/>.
+    /// </summary>
+    private static DateTime TimestampToDateTime(long value, TimeUnit unit) => unit switch
+    {
+        TimeUnit.Second => UnixEpoch.AddSeconds(value),
+        TimeUnit.Millisecond => UnixEpoch.AddMilliseconds(value),
+        // 1 μs = 10 ticks (1 tick = 100 ns).
+        TimeUnit.Microsecond => UnixEpoch.AddTicks(value * 10L),
+        // 1 ns = 0.01 ticks. Integer-divide truncates sub-tick remainder —
+        // DateTime can't represent sub-100-ns precision anyway.
+        TimeUnit.Nanosecond => UnixEpoch.AddTicks(value / 100L),
+        _ => throw new InvalidOperationException($"unknown TimeUnit: {unit}"),
+    };
 
     private static string OrientationToWire(ArrowOrientation o) => o switch
     {

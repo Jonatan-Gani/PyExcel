@@ -391,6 +391,183 @@ public class PyRunTests
     }
 
     // -------------------------------------------------------------------------
+    // Cross-language date round-trip — the most subtle bit of the data
+    // plane. Excel cells with a date format come through Value2 as doubles
+    // (OADate), so they exercise the numeric path; the reverse direction
+    // — a Python script returning a datetime / date — is what these tests
+    // pin. Before the date/timestamp decoders landed, a script returning a
+    // datetime would surface as the literal string "TimestampArray" in
+    // Excel; these tests guard against that regression.
+    // -------------------------------------------------------------------------
+
+    [Fact]
+    public void Execute_PythonReturnsDatetime_DecodesAsDateTime()
+    {
+        // pa.array([dt.datetime(...)]) → timestamp[us] with no timezone;
+        // the C# decoder should land on a naive DateTime matching the
+        // Python wall-clock value.
+        using var fx = new KernelFixture();
+        var script = fx.WriteScript("datetime_scalar.py",
+            "import datetime as dt\n" +
+            "def transform():\n" +
+            "    return dt.datetime(2024, 1, 15, 9, 30, 45)\n");
+
+        var result = PyRun.Execute(
+            script: script,
+            input: null,
+            kwargs: null,
+            client: fx.Client);
+
+        var dt = Assert.IsType<DateTime>(result);
+        Assert.Equal(new DateTime(2024, 1, 15, 9, 30, 45, DateTimeKind.Unspecified), dt);
+        Assert.Equal(DateTimeKind.Unspecified, dt.Kind);
+    }
+
+    [Fact]
+    public void Execute_PythonReturnsDate_DecodesAsMidnightDateTime()
+    {
+        // pa.array([dt.date(...)]) → date32 (days since epoch). Decoder
+        // returns a midnight DateTime.
+        using var fx = new KernelFixture();
+        var script = fx.WriteScript("date_scalar.py",
+            "import datetime as dt\n" +
+            "def transform():\n" +
+            "    return dt.date(2024, 1, 15)\n");
+
+        var result = PyRun.Execute(
+            script: script,
+            input: null,
+            kwargs: null,
+            client: fx.Client);
+
+        var dt = Assert.IsType<DateTime>(result);
+        Assert.Equal(new DateTime(2024, 1, 15, 0, 0, 0, DateTimeKind.Unspecified), dt);
+    }
+
+    [Fact]
+    public void Execute_PythonReturnsDatetimeList_DecodesAsDateTimeVector()
+    {
+        // A list of datetimes — the 1-D vector path. Exercises both the
+        // timestamp decoder and the vector spill geometry.
+        using var fx = new KernelFixture();
+        var script = fx.WriteScript("datetime_list.py",
+            "import datetime as dt\n" +
+            "def transform():\n" +
+            "    return [\n" +
+            "        dt.datetime(2024, 1, 1, 0, 0, 0),\n" +
+            "        dt.datetime(2024, 6, 15, 12, 30, 0),\n" +
+            "        dt.datetime(2024, 12, 31, 23, 59, 59),\n" +
+            "    ]\n");
+
+        var result = PyRun.Execute(
+            script: script,
+            input: null,
+            kwargs: null,
+            client: fx.Client);
+
+        // Column vector → N×1 rectangle.
+        var rect = Assert.IsType<object?[,]>(result);
+        Assert.Equal(3, rect.GetLength(0));
+        Assert.Equal(1, rect.GetLength(1));
+        Assert.Equal(new DateTime(2024, 1, 1), (DateTime)rect[0, 0]!);
+        Assert.Equal(new DateTime(2024, 6, 15, 12, 30, 0), (DateTime)rect[1, 0]!);
+        Assert.Equal(new DateTime(2024, 12, 31, 23, 59, 59), (DateTime)rect[2, 0]!);
+    }
+
+    [Fact]
+    public void Execute_PythonReturnsPandasTimestampSeries_DecodesAsDateTimeVector()
+    {
+        // A pandas Series of timestamps lands as timestamp[ns] (nanosecond
+        // precision — pandas's default). The nanosecond arm of the
+        // timestamp decoder is what we're exercising here.
+        using var fx = new KernelFixture();
+        var script = fx.WriteScript("pandas_ts.py",
+            "import pandas as pd\n" +
+            "def transform():\n" +
+            "    return pd.Series(pd.to_datetime([\n" +
+            "        '2024-01-01',\n" +
+            "        '2024-06-15 12:30:00',\n" +
+            "    ]))\n");
+
+        var result = PyRun.Execute(
+            script: script,
+            input: null,
+            kwargs: null,
+            client: fx.Client);
+
+        var rect = Assert.IsType<object?[,]>(result);
+        Assert.Equal(2, rect.GetLength(0));
+        Assert.Equal(new DateTime(2024, 1, 1), (DateTime)rect[0, 0]!);
+        Assert.Equal(new DateTime(2024, 6, 15, 12, 30, 0), (DateTime)rect[1, 0]!);
+    }
+
+    // -------------------------------------------------------------------------
+    // Embedded nulls — split by direction because the full round-trip is
+    // fragile: pandas's float64 dtype turns Arrow nulls into NaN on
+    // `to_pandas()`, and `from_pandas()` rendering of NaN can lose the
+    // null-bitmap distinction. We test each leg in isolation against a
+    // contract that doesn't depend on that conversion.
+    // -------------------------------------------------------------------------
+
+    [Fact]
+    public void Execute_TableInputWithNulls_PythonSeesAsMissing()
+    {
+        // C# → kernel direction. Encodes nulls via Arrow null bitmap;
+        // pandas in the kernel exposes them as NaN. The script counts
+        // NaN/null cells per column via df.isna().sum() so the assertion
+        // is type-agnostic: we only require the kernel to see "missing"
+        // in the right positions, not a specific Python representation.
+        using var fx = new KernelFixture();
+        var script = fx.WriteScript("count_nulls.py",
+            "def transform(df):\n" +
+            "    return df.isna().sum().tolist()\n");
+
+        var result = PyRun.Execute(
+            script: script,
+            input: new object?[,]
+            {
+                { 1.0, 10.0 },
+                { null, 20.0 },
+                { 3.0, null },
+            },
+            kwargs: null,
+            client: fx.Client);
+
+        // Column 0 has 1 null (row 1); column 1 has 1 null (row 2).
+        var rect = Assert.IsType<object?[,]>(result);
+        Assert.Equal(2, rect.GetLength(0));
+        Assert.Equal(1, rect.GetLength(1));
+        Assert.Equal(1.0, rect[0, 0]);
+        Assert.Equal(1.0, rect[1, 0]);
+    }
+
+    [Fact]
+    public void Execute_PythonReturnsListWithNone_DecodesAsVectorWithNull()
+    {
+        // kernel → C# direction. A Python list with None goes through
+        // pa.array(...) which uses the Arrow null bitmap (not NaN) for
+        // None positions, so the C# decoder sees a clean null.
+        using var fx = new KernelFixture();
+        var script = fx.WriteScript("list_with_none.py",
+            "def transform():\n" +
+            "    return [1.0, None, 3.0]\n");
+
+        var result = PyRun.Execute(
+            script: script,
+            input: null,
+            kwargs: null,
+            client: fx.Client);
+
+        // Column vector → N×1 rectangle.
+        var rect = Assert.IsType<object?[,]>(result);
+        Assert.Equal(3, rect.GetLength(0));
+        Assert.Equal(1, rect.GetLength(1));
+        Assert.Equal(1.0, rect[0, 0]);
+        Assert.Null(rect[1, 0]);
+        Assert.Equal(3.0, rect[2, 0]);
+    }
+
+    // -------------------------------------------------------------------------
     // Argument validation (no kernel needed)
     // -------------------------------------------------------------------------
 
