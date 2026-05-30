@@ -9,6 +9,10 @@ namespace PyExcel.Addin;
 // At file scope the bare name `Excel` binds to our own PyExcel.Excel namespace
 // (CS0234) instead of this alias.
 using Excel = Microsoft.Office.Interop.Excel;
+// CustomXMLPart / CustomXMLParts (the types Workbook.CustomXMLParts actually
+// returns) live in the Office object library, not the Excel interop — qualify
+// them through Office.Core, which the project references via Office.dll.
+using Core = Microsoft.Office.Core;
 
 /// <summary>
 /// Reads and writes PyExcel's per-workbook state as a <c>CustomXMLPart</c>
@@ -59,13 +63,13 @@ internal static class WorkbookStatePersister
         if (workbookKey is null) throw new ArgumentNullException(nameof(workbookKey));
         try
         {
-            Excel.CustomXMLParts parts =
+            Core.CustomXMLParts parts =
                 workbook.CustomXMLParts.SelectByNamespace(WorkbookStateCodec.XmlNamespace);
             if (parts is null || parts.Count == 0) return null;
 
             // The Excel object model is 1-based. There should only ever be
             // one PyExcel part (Save deletes before adding); take the first.
-            Excel.CustomXMLPart part = parts[1];
+            Core.CustomXMLPart part = parts[1];
             return WorkbookStateCodec.TryDeserialize(part.XML, workbookKey, out var state)
                 ? state
                 : null;
@@ -79,7 +83,7 @@ internal static class WorkbookStatePersister
 
     private static void RemoveExisting(Excel.Workbook workbook)
     {
-        Excel.CustomXMLParts existing =
+        Core.CustomXMLParts existing =
             workbook.CustomXMLParts.SelectByNamespace(WorkbookStateCodec.XmlNamespace);
         if (existing is null) return;
         // Walk back-to-front: the collection re-indexes as parts are
