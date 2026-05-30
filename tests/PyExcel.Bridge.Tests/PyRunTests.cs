@@ -571,6 +571,56 @@ public class PyRunTests
     }
 
     // -------------------------------------------------------------------------
+    // Formula round-trip — user transform() returns a Formula (or list of
+    // Formula); the host decodes back to a typed Formula. The eventual
+    // RangeRunner write hook for this is separate; this proves the wire
+    // contract.
+    // -------------------------------------------------------------------------
+
+    [Fact]
+    public void Execute_PythonReturnsFormula_DecodesAsTypedFormula()
+    {
+        using var fx = new KernelFixture();
+        var script = fx.WriteScript("formula_scalar.py",
+            "from pyexcel.kernel import Formula\n" +
+            "def transform():\n" +
+            "    return Formula('=SUM(A1:B2)')\n");
+
+        var result = PyRun.Execute(
+            script: script,
+            input: null,
+            kwargs: null,
+            client: fx.Client);
+
+        var formula = Assert.IsType<Formula>(result);
+        Assert.Equal("=SUM(A1:B2)", formula.Text);
+    }
+
+    [Fact]
+    public void Execute_PythonReturnsFormulaList_DecodesAsFormulaVector()
+    {
+        using var fx = new KernelFixture();
+        var script = fx.WriteScript("formula_list.py",
+            "from pyexcel.kernel import Formula\n" +
+            "def transform():\n" +
+            "    return [Formula('=A1*2'), Formula('=A2*2'), Formula('=A3*2')]\n");
+
+        var result = PyRun.Execute(
+            script: script,
+            input: null,
+            kwargs: null,
+            client: fx.Client);
+
+        // Column vector → N×1 rectangle.
+        var rect = Assert.IsType<object?[,]>(result);
+        Assert.Equal(3, rect.GetLength(0));
+        Assert.Equal(1, rect.GetLength(1));
+        Assert.Equal(new Formula("=A1*2"), (Formula)rect[0, 0]!);
+        Assert.Equal(new Formula("=A2*2"), (Formula)rect[1, 0]!);
+        Assert.Equal(new Formula("=A3*2"), (Formula)rect[2, 0]!);
+    }
+
+    // -------------------------------------------------------------------------
     // Argument validation (no kernel needed)
     // -------------------------------------------------------------------------
 

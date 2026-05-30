@@ -33,6 +33,7 @@ host as ``PROGRESS`` frames (driving the progress UI). Both are safe to
 call unconditionally — they're inert no-ops when no job is in flight.
 """
 
+from .types import Formula  # noqa: E402, F401 — re-export for user scripts
 from .worker import is_cancelled, report_progress  # noqa: E402, F401 — re-export for user scripts
 
-__all__ = ["is_cancelled", "report_progress"]
+__all__ = ["Formula", "is_cancelled", "report_progress"]

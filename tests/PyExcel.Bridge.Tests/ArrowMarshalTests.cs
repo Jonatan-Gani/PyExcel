@@ -455,6 +455,106 @@ public class ArrowMarshalTests
     }
 
     // -------------------------------------------------------------------------
+    // Formula round-trip — the user returns a Formula from transform();
+    // the marshalling layer carries it via a string Arrow column with a
+    // field-level `pyexcel-cell-type = formula` metadata marker; the
+    // decoder reconstructs the typed Formula on the host side.
+    // -------------------------------------------------------------------------
+
+    [Fact]
+    public void EncodeScalar_Formula_RoundTrips()
+    {
+        var input = new Formula("=SUM(A1:B2)");
+        var decoded = ArrowMarshal.Decode(ArrowMarshal.EncodeScalar(input));
+        var formula = Assert.IsType<Formula>(decoded);
+        Assert.Equal("=SUM(A1:B2)", formula.Text);
+    }
+
+    [Fact]
+    public void EncodeVector_FormulaColumn_RoundTripsEveryCell()
+    {
+        var input = new object?[]
+        {
+            new Formula("=A1+1"),
+            new Formula("=A2*2"),
+            new Formula("=A3-3"),
+        };
+        var decoded = (object?[])ArrowMarshal.Decode(ArrowMarshal.EncodeVector(input))!;
+        Assert.Equal(3, decoded.Length);
+        for (var i = 0; i < input.Length; i++)
+            Assert.Equal((Formula)input[i]!, (Formula)decoded[i]!);
+    }
+
+    [Fact]
+    public void EncodeVector_FormulaWithNulls_PreservesBothFormulasAndNulls()
+    {
+        // A null in a formula column should survive the round-trip as null
+        // (the host writes nothing into that cell). The field still carries
+        // the formula marker — nulls aren't a wire-format violation.
+        var input = new object?[] { new Formula("=A1+1"), null, new Formula("=A3-3") };
+        var decoded = (object?[])ArrowMarshal.Decode(ArrowMarshal.EncodeVector(input))!;
+        Assert.Equal(new Formula("=A1+1"), (Formula)decoded[0]!);
+        Assert.Null(decoded[1]);
+        Assert.Equal(new Formula("=A3-3"), (Formula)decoded[2]!);
+    }
+
+    [Fact]
+    public void EncodeTable_MixedFormulaAndValueColumns_DecodePerColumn()
+    {
+        // Column 0: doubles. Column 1: formulas. Two parallel cells per row.
+        var input = new object?[,]
+        {
+            { 1.0, new Formula("=A1*2") },
+            { 2.0, new Formula("=A2*2") },
+            { 3.0, new Formula("=A3*2") },
+        };
+        var decoded = (object?[,])ArrowMarshal.Decode(ArrowMarshal.EncodeTable(input))!;
+        for (var r = 0; r < 3; r++)
+        {
+            Assert.Equal((double)(r + 1), decoded[r, 0]);
+            Assert.Equal((Formula)input[r, 1]!, (Formula)decoded[r, 1]!);
+        }
+    }
+
+    [Fact]
+    public void EncodeTable_MixedFormulaAndNonFormulaWithinColumn_FallsBackToString()
+    {
+        // ScanTypes only marks a column as a formula column if every
+        // non-null entry is a Formula. A mixed column falls back to the
+        // string path, where each Formula stringifies to its raw "=…"
+        // text — recognisable but no longer live.
+        var input = new object?[,]
+        {
+            { new Formula("=A1+1") },
+            { "literal" },
+        };
+        var decoded = (object?[,])ArrowMarshal.Decode(ArrowMarshal.EncodeTable(input))!;
+        Assert.Equal("=A1+1", decoded[0, 0]);  // raw string, not a Formula
+        Assert.Equal("literal", decoded[1, 0]);
+    }
+
+    [Fact]
+    public void Formula_RejectsTextWithoutLeadingEquals()
+    {
+        Assert.Throws<ArgumentException>(() => new Formula("SUM(A1:B2)"));
+    }
+
+    [Fact]
+    public void Formula_RejectsEmptyAndNull()
+    {
+        Assert.Throws<ArgumentNullException>(() => new Formula(null!));
+        Assert.Throws<ArgumentException>(() => new Formula(""));
+    }
+
+    [Fact]
+    public void Formula_Equality_IsOrdinalStringComparison()
+    {
+        Assert.Equal(new Formula("=A1"), new Formula("=A1"));
+        Assert.NotEqual(new Formula("=A1"), new Formula("=a1"));
+        Assert.Equal(new Formula("=A1").GetHashCode(), new Formula("=A1").GetHashCode());
+    }
+
+    // -------------------------------------------------------------------------
     // Argument validation
     // -------------------------------------------------------------------------
 

@@ -36,10 +36,12 @@ Design rules:
 from __future__ import annotations
 
 import enum
-from typing import Any, Tuple
+from typing import Any, List, Tuple
 
 import pyarrow as pa
 import pyarrow.ipc as ipc
+
+from .types import Formula
 
 try:
     import pandas as pd
@@ -58,6 +60,12 @@ except ImportError:  # pragma: no cover — numpy is a hard kernel dep
 
 _META_SHAPE = b"pyexcel-shape"
 _META_ORIENT = b"pyexcel-orientation"
+
+# Field-level metadata key. Marks an Arrow string column whose cell values
+# are formula source rather than literals — the host writes those via
+# Range.Formula instead of Range.Value2 so Excel evaluates them.
+_FIELD_META_CELL_TYPE = b"pyexcel-cell-type"
+_CELL_TYPE_FORMULA = b"formula"
 
 
 class Shape(bytes, enum.Enum):
@@ -141,7 +149,32 @@ def _value_to_table(value: Any) -> Tuple[pa.Table, Shape]:
             f"numpy arrays must be 1-D or 2-D for kernel transport, got {value.ndim}-D"
         )
 
+    if isinstance(value, Formula):
+        # Scalar formula: 1×1 string table with the formula field marker so
+        # decode wraps the cell back into a Formula, and the host writes it
+        # via Range.Formula instead of Range.Value2.
+        field = pa.field("0", pa.string()).with_metadata(
+            {_FIELD_META_CELL_TYPE: _CELL_TYPE_FORMULA}
+        )
+        arr = pa.array([value.text], type=pa.string())
+        return pa.Table.from_arrays([arr], schema=pa.schema([field])), Shape.SCALAR
+
     if isinstance(value, (list, tuple)):
+        # All-Formula list → formula-marked string vector. A mixed list
+        # (some Formula, some not) is rejected as ambiguous: today's wire
+        # marker is per-column, so we can't carry per-cell type info in
+        # a 1-D vector without a much wider redesign.
+        if value and all(isinstance(v, Formula) for v in value):
+            field = pa.field("0", pa.string()).with_metadata(
+                {_FIELD_META_CELL_TYPE: _CELL_TYPE_FORMULA}
+            )
+            arr = pa.array([v.text for v in value], type=pa.string())
+            return pa.Table.from_arrays([arr], schema=pa.schema([field])), Shape.VECTOR
+        if any(isinstance(v, Formula) for v in value):
+            raise TypeError(
+                "list/tuple may not mix Formula with non-Formula entries; "
+                "per-cell formula marking isn't supported in 1-D payloads"
+            )
         try:
             arr = pa.array(value)
         except (pa.ArrowInvalid, pa.ArrowTypeError) as exc:
@@ -185,17 +218,74 @@ def decode(buf: bytes) -> Any:
     if shape_bytes == Shape.SCALAR.value:
         if table.num_columns == 0 or table.num_rows == 0:
             return None
-        return table.column(0)[0].as_py()
+        cell = table.column(0)[0].as_py()
+        if _is_formula_field(table.schema.field(0)):
+            return None if cell is None else Formula(cell)
+        return cell
 
     if shape_bytes == Shape.VECTOR.value:
         if table.num_columns == 0:
             return []
-        return table.column(0).to_pylist()
+        values = table.column(0).to_pylist()
+        if _is_formula_field(table.schema.field(0)):
+            return [None if v is None else Formula(v) for v in values]
+        return values
 
     # Default: shape=table (or any unrecognised marker we treat as table).
-    if _HAS_PANDAS:
+    return _table_to_python(table)
+
+
+def _is_formula_field(field: pa.Field) -> bool:
+    """Whether an Arrow field carries the formula cell-type marker."""
+    md = field.metadata or {}
+    return md.get(_FIELD_META_CELL_TYPE) == _CELL_TYPE_FORMULA
+
+
+def _table_to_python(table: pa.Table) -> Any:
+    """Convert a table-shaped buffer back to a Python object.
+
+    If any field carries the formula marker, the table can't go through
+    ``table.to_pandas()`` directly — pandas would silently strip the
+    field metadata and turn formula columns into plain strings. Build
+    the DataFrame column-by-column, wrapping marked columns into a
+    pandas object Series of :class:`Formula` instances. If pandas isn't
+    available, return the raw Arrow ``Table``.
+    """
+    if not _HAS_PANDAS:
+        return table
+
+    formula_indices = [
+        i for i in range(table.num_columns)
+        if _is_formula_field(table.schema.field(i))
+    ]
+    if not formula_indices:
         return table.to_pandas()
-    return table
+
+    # Mixed-column table with at least one formula column. Build each
+    # column as a Series with the right dtype, then assemble into a
+    # DataFrame so the result is interchangeable with `table.to_pandas()`
+    # for user code that does df[col].
+    formula_index_set = set(formula_indices)
+    columns: List[pd.Series] = []
+    for i in range(table.num_columns):
+        name = table.schema.field(i).name
+        if i in formula_index_set:
+            vals = table.column(i).to_pylist()
+            columns.append(
+                pd.Series(
+                    [None if v is None else Formula(v) for v in vals],
+                    name=name,
+                    dtype="object",
+                )
+            )
+        else:
+            # One-column slice → to_pandas() yields a DataFrame; pull the
+            # Series out by position so we don't depend on the name being
+            # unique across the original table.
+            series = table.select([i]).to_pandas().iloc[:, 0]
+            series.name = name
+            columns.append(series)
+    return pd.concat(columns, axis=1)
 
 
 def decode_orientation(buf: bytes) -> Orientation | None:

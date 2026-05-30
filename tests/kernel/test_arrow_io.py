@@ -25,6 +25,7 @@ from pyexcel.kernel.arrow_io import (
     decode_orientation,
     encode,
 )
+from pyexcel.kernel.types import Formula
 
 
 # -----------------------------------------------------------------------------
@@ -245,3 +246,62 @@ def test_shape_enum_values_are_bytes():
     assert isinstance(Shape.TABLE.value, bytes)
     assert isinstance(Shape.VECTOR.value, bytes)
     assert isinstance(Shape.SCALAR.value, bytes)
+
+
+# -----------------------------------------------------------------------------
+# Formula round-trip — Formula instances carry across the wire as string
+# Arrow columns with a field-level `pyexcel-cell-type = formula` marker.
+# -----------------------------------------------------------------------------
+
+
+def test_scalar_formula_roundtrips():
+    f = Formula("=SUM(A1:B2)")
+    assert decode(encode(f)) == f
+
+
+def test_vector_of_formulas_roundtrips_each_cell():
+    formulas = [Formula("=A1+1"), Formula("=A2*2"), Formula("=A3-3")]
+    assert decode(encode(formulas)) == formulas
+
+
+def test_mixed_formula_and_nonformula_in_list_rejected():
+    # Per-column marker → no clean way to encode "this cell is formula,
+    # that one isn't" in a 1-D payload, so the encoder rejects mixing.
+    with pytest.raises(TypeError, match="mix Formula with non-Formula"):
+        encode([Formula("=A1"), "not a formula"])
+
+
+def test_table_with_formula_column_roundtrips_via_dataframe():
+    # DataFrame round-trip: one column of doubles, one column of Formula.
+    # The decoder builds the result with the formula column wrapped as
+    # an object Series of Formula instances rather than plain strings.
+    df = pd.DataFrame({
+        "value": [1.0, 2.0, 3.0],
+        "calc": [Formula("=A1*2"), Formula("=A2*2"), Formula("=A3*2")],
+    })
+    # The encode path currently sends DataFrames via pa.Table.from_pandas,
+    # which doesn't preserve our Formula dtype (objects flatten to text).
+    # So this case explicitly isn't supported end-to-end; verify the
+    # *vector* form works for now and document this gap.
+    pytest.skip(
+        "DataFrame-of-Formula encoding requires the host to construct the "
+        "Arrow table by hand; only the vector / scalar paths are wired."
+    )
+
+
+def test_formula_rejects_text_without_leading_equals():
+    with pytest.raises(ValueError, match="must start with '='"):
+        Formula("SUM(A1:B2)")
+
+
+def test_formula_rejects_non_string_text():
+    with pytest.raises(TypeError, match="must be a string"):
+        Formula(42)  # type: ignore[arg-type]
+
+
+def test_formula_is_frozen_dataclass_equality():
+    # Frozen so it's hashable, which matters if user code stuffs them
+    # into sets / dict keys for de-duplication.
+    assert Formula("=A1") == Formula("=A1")
+    assert hash(Formula("=A1")) == hash(Formula("=A1"))
+    assert Formula("=A1") != Formula("=a1")

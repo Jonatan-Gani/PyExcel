@@ -39,12 +39,26 @@ public static class ArrowMarshal
     private const string MetaShapeKey = "pyexcel-shape";
     private const string MetaOrientKey = "pyexcel-orientation";
 
+    // Field-level metadata key. Marks an Arrow string column whose cells
+    // are formula source rather than literals — the host writes those via
+    // Range.Formula instead of Range.Value2 so Excel evaluates them.
+    private const string FieldMetaCellTypeKey = "pyexcel-cell-type";
+    private const string CellTypeFormula = "formula";
+
     // Wire values.
     private const string ShapeTable = "table";
     private const string ShapeVector = "vector";
     private const string ShapeScalar = "scalar";
     private const string OrientRow = "row";
     private const string OrientColumn = "column";
+
+    // Reusable formula field metadata — every Formula column gets the same
+    // single-entry dictionary, so cache it instead of allocating per column.
+    private static readonly IReadOnlyDictionary<string, string> FormulaFieldMetadata =
+        new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            [FieldMetaCellTypeKey] = CellTypeFormula,
+        };
 
     // -----------------------------------------------------------------------
     // Encode
@@ -73,9 +87,9 @@ public static class ArrowMarshal
         {
             var column = new object?[rows];
             for (var r = 0; r < rows; r++) column[r] = values[r, c];
-            arrays[c] = BuildColumn(column, out var type);
+            arrays[c] = BuildColumn(column, out var type, out var fieldMetadata);
             var name = columnNames is { } cn && c < cn.Count && cn[c] is { } n ? n : c.ToString();
-            fields[c] = new Field(name, type, nullable: true);
+            fields[c] = new Field(name, type, nullable: true, fieldMetadata);
         }
 
         var schema = BuildSchema(fields, ShapeTable, orientation: null);
@@ -93,8 +107,8 @@ public static class ArrowMarshal
     {
         if (values is null) throw new ArgumentNullException(nameof(values));
 
-        var array = BuildColumn(values, out var type);
-        var fields = new[] { new Field("0", type, nullable: true) };
+        var array = BuildColumn(values, out var type, out var fieldMetadata);
+        var fields = new[] { new Field("0", type, nullable: true, fieldMetadata) };
         var schema = BuildSchema(fields, ShapeVector, OrientationToWire(orientation));
         return WriteStream(schema, new[] { array }, values.Length);
     }
@@ -106,8 +120,8 @@ public static class ArrowMarshal
     /// </summary>
     public static byte[] EncodeScalar(object? value)
     {
-        var array = BuildColumn(new[] { value }, out var type);
-        var fields = new[] { new Field("0", type, nullable: true) };
+        var array = BuildColumn(new[] { value }, out var type, out var fieldMetadata);
+        var fields = new[] { new Field("0", type, nullable: true, fieldMetadata) };
         var schema = BuildSchema(fields, ShapeScalar, orientation: null);
         return WriteStream(schema, new[] { array }, length: 1);
     }
@@ -146,15 +160,16 @@ public static class ArrowMarshal
         if (buffer is null) throw new ArgumentNullException(nameof(buffer));
         using var ms = new MemoryStream(buffer, writable: false);
         using var reader = new ArrowStreamReader(ms);
+        var schema = reader.Schema;
         var batches = ReadAllBatches(reader);
         try
         {
-            var (shape, _) = ReadShape(reader.Schema);
+            var (shape, _) = ReadShape(schema);
             return shape switch
             {
-                ArrowShape.Scalar => DecodeScalar(batches),
-                ArrowShape.Vector => DecodeVector(batches),
-                _ => DecodeTable(batches),
+                ArrowShape.Scalar => DecodeScalar(batches, schema),
+                ArrowShape.Vector => DecodeVector(batches, schema),
+                _ => DecodeTable(batches, schema),
             };
         }
         finally
@@ -169,12 +184,20 @@ public static class ArrowMarshal
 
     /// <summary>
     /// Build a typed Arrow array for one column of values. Sets
-    /// <paramref name="arrowType"/> to the inferred Arrow type so the
+    /// <paramref name="arrowType"/> to the inferred Arrow type and
+    /// <paramref name="fieldMetadata"/> to any field-level metadata the
+    /// caller should attach (currently only the formula cell-type marker
+    /// for columns whose values are all <see cref="Formula"/>), so the
     /// caller can construct the matching <see cref="Field"/>.
     /// </summary>
-    private static IArrowArray BuildColumn(object?[] columnValues, out IArrowType arrowType)
+    private static IArrowArray BuildColumn(
+        object?[] columnValues,
+        out IArrowType arrowType,
+        out IReadOnlyDictionary<string, string>? fieldMetadata)
     {
-        var (canDouble, canBool, sawNonNull) = ScanTypes(columnValues);
+        var (canDouble, canBool, canFormula, sawNonNull) = ScanTypes(columnValues);
+
+        fieldMetadata = null;
 
         if (!sawNonNull)
         {
@@ -184,6 +207,22 @@ public static class ArrowMarshal
             var b = new StringArray.Builder();
             for (var i = 0; i < columnValues.Length; i++) b.AppendNull();
             arrowType = StringType.Default;
+            return b.Build();
+        }
+
+        if (canFormula)
+        {
+            // Formula column: encode as string, mark the field so the
+            // decoder (and the eventual range writer) can recover the
+            // intent.
+            var b = new StringArray.Builder();
+            foreach (var v in columnValues)
+            {
+                if (v is null) { b.AppendNull(); continue; }
+                b.Append(((Formula)v).Text);
+            }
+            arrowType = StringType.Default;
+            fieldMetadata = FormulaFieldMetadata;
             return b.Build();
         }
 
@@ -226,13 +265,20 @@ public static class ArrowMarshal
 
     /// <summary>
     /// Single pass to learn what's in the column. The result tells the
-    /// builder which fast path applies (double / bool) or that the column
-    /// has to fall back to string.
+    /// builder which fast path applies (formula / double / bool) or that
+    /// the column has to fall back to string. A column is the formula
+    /// path only if every non-null entry is a <see cref="Formula"/>;
+    /// mixing <see cref="Formula"/> with non-formula values has no clean
+    /// wire representation today (the marker is per-column, not
+    /// per-cell), so a mixed column falls through to the string path
+    /// where each <see cref="Formula"/> stringifies to its <c>=…</c>
+    /// text via <c>ToString()</c> — recognisable but not live.
     /// </summary>
-    private static (bool canDouble, bool canBool, bool sawNonNull) ScanTypes(object?[] values)
+    private static (bool canDouble, bool canBool, bool canFormula, bool sawNonNull) ScanTypes(object?[] values)
     {
         var allNumeric = true;
         var allBool = true;
+        var allFormula = true;
         var sawNonNull = false;
 
         foreach (var v in values)
@@ -241,10 +287,15 @@ public static class ArrowMarshal
             sawNonNull = true;
             if (!IsNumeric(v)) allNumeric = false;
             if (v is not bool) allBool = false;
-            if (!allNumeric && !allBool) break;
+            if (v is not Formula) allFormula = false;
+            if (!allNumeric && !allBool && !allFormula) break;
         }
 
-        return (allNumeric && sawNonNull, allBool && sawNonNull, sawNonNull);
+        return (
+            allNumeric && sawNonNull,
+            allBool && sawNonNull,
+            allFormula && sawNonNull,
+            sawNonNull);
     }
 
     private static bool IsNumeric(object v) => v switch
@@ -343,7 +394,7 @@ public static class ArrowMarshal
     // Decoders for each shape
     // -----------------------------------------------------------------------
 
-    private static object?[,] DecodeTable(List<RecordBatch> batches)
+    private static object?[,] DecodeTable(List<RecordBatch> batches, Schema schema)
     {
         // The producer side currently writes one batch per stream; we
         // concatenate if more arrive so external Arrow writers can be
@@ -354,25 +405,40 @@ public static class ArrowMarshal
         var cols = batches.Count > 0 ? batches[0].ColumnCount : 0;
         var result = new object?[totalRows, cols];
 
+        // Pre-compute per-column formula-ness from the schema rather than
+        // re-deriving it for each cell — keeps the hot loop tight.
+        var formulaColumn = new bool[cols];
+        for (var c = 0; c < cols; c++)
+            formulaColumn[c] = c < schema.FieldsList.Count && IsFormulaField(schema.GetFieldByIndex(c));
+
         var rowOffset = 0;
         foreach (var batch in batches)
         {
             for (var c = 0; c < batch.ColumnCount; c++)
             {
                 var arr = batch.Column(c);
+                var isFormula = formulaColumn[c];
                 for (var r = 0; r < batch.Length; r++)
-                    result[rowOffset + r, c] = ReadCell(arr, r);
+                {
+                    var cell = ReadCell(arr, r);
+                    result[rowOffset + r, c] = isFormula
+                        ? WrapFormula(cell)
+                        : cell;
+                }
             }
             rowOffset += batch.Length;
         }
         return result;
     }
 
-    private static object?[] DecodeVector(List<RecordBatch> batches)
+    private static object?[] DecodeVector(List<RecordBatch> batches, Schema schema)
     {
         var totalRows = 0;
         foreach (var b in batches) totalRows += b.Length;
         var result = new object?[totalRows];
+
+        var isFormula =
+            schema.FieldsList.Count > 0 && IsFormulaField(schema.GetFieldByIndex(0));
 
         var rowOffset = 0;
         foreach (var batch in batches)
@@ -380,18 +446,44 @@ public static class ArrowMarshal
             if (batch.ColumnCount == 0) continue;
             var arr = batch.Column(0);
             for (var r = 0; r < batch.Length; r++)
-                result[rowOffset + r] = ReadCell(arr, r);
+            {
+                var cell = ReadCell(arr, r);
+                result[rowOffset + r] = isFormula ? WrapFormula(cell) : cell;
+            }
             rowOffset += batch.Length;
         }
         return result;
     }
 
-    private static object? DecodeScalar(List<RecordBatch> batches)
+    private static object? DecodeScalar(List<RecordBatch> batches, Schema schema)
     {
         if (batches.Count == 0 || batches[0].Length == 0 || batches[0].ColumnCount == 0)
             return null;
-        return ReadCell(batches[0].Column(0), 0);
+        var cell = ReadCell(batches[0].Column(0), 0);
+        var isFormula =
+            schema.FieldsList.Count > 0 && IsFormulaField(schema.GetFieldByIndex(0));
+        return isFormula ? WrapFormula(cell) : cell;
     }
+
+    /// <summary>True iff <paramref name="field"/> carries the
+    /// <c>pyexcel-cell-type = formula</c> field-level metadata marker.</summary>
+    private static bool IsFormulaField(Field field)
+    {
+        var md = field.Metadata;
+        return md is { } && md.TryGetValue(FieldMetaCellTypeKey, out var v)
+            && string.Equals(v, CellTypeFormula, StringComparison.Ordinal);
+    }
+
+    /// <summary>Wrap a decoded cell as a <see cref="Formula"/>. Strings turn
+    /// into formulas; nulls stay null; any other type is a wire-format
+    /// violation we surface rather than silently lose.</summary>
+    private static object? WrapFormula(object? cell) => cell switch
+    {
+        null => null,
+        string s => new Formula(s),
+        _ => throw new InvalidDataException(
+            $"formula-marked field carried non-string cell of type {cell.GetType().Name}"),
+    };
 
     /// <summary>
     /// Read one cell from an Arrow array, boxing it for transit through
