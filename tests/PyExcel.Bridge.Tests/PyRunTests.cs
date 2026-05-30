@@ -479,13 +479,16 @@ public class PyRunTests
     {
         // A pandas Series of timestamps lands as timestamp[ns] (nanosecond
         // precision — pandas's default). The nanosecond arm of the
-        // timestamp decoder is what we're exercising here.
+        // timestamp decoder is what we're exercising here. Both input
+        // strings carry an explicit time component because pandas 2.x's
+        // default to_datetime parser rejects mixed-format input
+        // ('2024-01-01' + '2024-06-15 12:30:00' would need format='mixed').
         using var fx = new KernelFixture();
         var script = fx.WriteScript("pandas_ts.py",
             "import pandas as pd\n" +
             "def transform():\n" +
             "    return pd.Series(pd.to_datetime([\n" +
-            "        '2024-01-01',\n" +
+            "        '2024-01-01 00:00:00',\n" +
             "        '2024-06-15 12:30:00',\n" +
             "    ]))\n");
 
