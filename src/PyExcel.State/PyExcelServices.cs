@@ -1,4 +1,5 @@
 using System;
+using System.IO;
 
 namespace PyExcel.State;
 
@@ -27,6 +28,12 @@ public static class PyExcelServices
     /// the Show / Copy Last Error buttons.</summary>
     public static ErrorService Errors { get; set; } = new ErrorService();
 
+    /// <summary>The process-wide on-disk archive of recent runs (inputs,
+    /// output, error, manifest). Wired by the add-in's <c>AutoOpen</c>;
+    /// <c>PyRun.Execute*</c> writes here on every run when a
+    /// <c>RunArchiveContext</c> is supplied.</summary>
+    public static RunArchive RunArchive { get; set; } = BuildDefaultRunArchive();
+
     /// <summary>Strategy for "what workbook is active right now".</summary>
     public static IWorkbookContext WorkbookContext { get; set; } = NullWorkbookContext.Instance;
 
@@ -45,4 +52,20 @@ public static class PyExcelServices
     /// — a no-op in that window.</para>
     /// </summary>
     public static Action? RequestRibbonInvalidate { get; set; }
+
+    /// <summary>
+    /// Build the default <see cref="RunArchive"/> rooted under the per-user
+    /// local app-data folder (<c>%LOCALAPPDATA%\PyExcel\runs</c> on Windows;
+    /// the XDG-derived equivalent on Linux). Falls back to the system temp
+    /// dir when the platform doesn't have a local app-data folder — keeps
+    /// the service constructable on every CI lane.
+    /// </summary>
+    private static RunArchive BuildDefaultRunArchive()
+    {
+        var localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+        var root = string.IsNullOrEmpty(localAppData)
+            ? Path.Combine(Path.GetTempPath(), "PyExcel", "runs")
+            : Path.Combine(localAppData, "PyExcel", "runs");
+        return new RunArchive(root);
+    }
 }

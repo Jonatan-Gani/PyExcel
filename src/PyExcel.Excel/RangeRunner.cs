@@ -97,6 +97,8 @@ public static class RangeRunner
             return;
         }
 
+        var archiveContext = BuildArchiveContext();
+
         // --- background thread: the kernel exchange (may block) -----------
         Task.Run(() =>
         {
@@ -107,7 +109,8 @@ public static class RangeRunner
                     inputs: inputs,
                     kwargs: null,
                     client: KernelHost.Default.Client,
-                    workbookDirectory: workbookDir);
+                    workbookDirectory: workbookDir,
+                    archive: archiveContext);
 
                 // --- main thread: write the result back ------------------
                 if (outputAddress is null)
@@ -167,6 +170,25 @@ public static class RangeRunner
         catch
         {
             // Best-effort.
+        }
+    }
+
+    /// <summary>Build the archive context for this ribbon-button run.
+    /// Best-effort: archiving is diagnostic, not load-bearing, so if the
+    /// service slot or the workbook lookup throws we just return null and
+    /// the run proceeds unarchived.</summary>
+    private static RunArchiveContext? BuildArchiveContext()
+    {
+        try
+        {
+            var archive = PyExcelServices.RunArchive;
+            if (archive is null) return null;
+            var key = PyExcelServices.WorkbookContext.CurrentWorkbookKey;
+            return new RunArchiveContext(archive, "Run Python button", key);
+        }
+        catch
+        {
+            return null;
         }
     }
 

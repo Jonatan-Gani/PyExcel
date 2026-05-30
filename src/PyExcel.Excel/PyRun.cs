@@ -1,11 +1,13 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
 using PyExcel.Bridge;
 using PyExcel.Kernel.Client;
+using PyExcel.State;
 
 // Test-only access to the internal classification + decoding helpers in
 // this class so PyRunTests can drive them without spinning up a kernel.
@@ -76,7 +78,8 @@ public static class PyRun
         KernelClient client,
         string? workbookDirectory = null,
         string function = "transform",
-        int timeoutMs = 60_000)
+        int timeoutMs = 60_000,
+        RunArchiveContext? archive = null)
     {
         // Single-input is just the degenerate multi-input case: a null
         // input means "no positional argument", a non-null input means
@@ -86,7 +89,7 @@ public static class PyRun
             : new[] { input };
 
         return ExecuteMany(
-            script, inputs, kwargs, client, workbookDirectory, function, timeoutMs);
+            script, inputs, kwargs, client, workbookDirectory, function, timeoutMs, archive);
     }
 
     /// <summary>
@@ -114,7 +117,8 @@ public static class PyRun
         KernelClient client,
         string? workbookDirectory = null,
         string function = "transform",
-        int timeoutMs = 60_000)
+        int timeoutMs = 60_000,
+        RunArchiveContext? archive = null)
     {
         if (script is null) throw new ArgumentNullException(nameof(script));
         if (script.Length == 0) throw new ArgumentException("script path must be non-empty", nameof(script));
@@ -122,31 +126,51 @@ public static class PyRun
         if (client is null) throw new ArgumentNullException(nameof(client));
 
         var scriptPath = ResolveScriptPath(script, workbookDirectory);
+        var arguments = EncodeArguments(inputs);
 
-        var arguments = new byte[inputs.Count][];
-        for (var i = 0; i < inputs.Count; i++)
+        var startedAt = DateTimeOffset.UtcNow;
+        var stopwatch = Stopwatch.StartNew();
+        RunResult? result = null;
+        RunArchiveStatus status = RunArchiveStatus.Success;
+        KernelErrorRecord? errorRecord = null;
+        try
         {
-            var buffer = EncodeInput(inputs[i]);
-            if (buffer is null)
-                throw new ArgumentException(
-                    $"input at index {i} is null; null positional arguments are not " +
-                    $"supported (they would misalign the remaining arguments). " +
-                    $"Use Execute(input: null) for a no-argument call.",
-                    nameof(inputs));
-            arguments[i] = buffer;
+            result = client.Run(
+                new RunRequest
+                {
+                    Script = scriptPath,
+                    Function = function,
+                    Arguments = arguments,
+                    Kwargs = kwargs,
+                },
+                timeoutMs: timeoutMs);
+        }
+        catch (KernelException kex)
+        {
+            status = string.Equals(kex.Code, "Cancelled", StringComparison.Ordinal)
+                ? RunArchiveStatus.Cancelled
+                : RunArchiveStatus.Error;
+            if (archive is not null)
+                errorRecord = BuildKernelRecord(kex, archive.Source, scriptPath, startedAt);
+            throw;
+        }
+        catch (Exception ex)
+        {
+            status = RunArchiveStatus.Error;
+            if (archive is not null)
+                errorRecord = BuildHostRecord(ex, archive.Source, scriptPath, startedAt);
+            throw;
+        }
+        finally
+        {
+            stopwatch.Stop();
+            ArchiveBestEffort(archive, startedAt, scriptPath, function, stopwatch.Elapsed,
+                arguments, result, errorRecord, status);
         }
 
-        var result = client.Run(
-            new RunRequest
-            {
-                Script = scriptPath,
-                Function = function,
-                Arguments = arguments,
-                Kwargs = kwargs,
-            },
-            timeoutMs: timeoutMs);
-
-        return DecodeResult(result);
+        // result is non-null here: the try block either assigned it or
+        // re-threw via one of the catch arms.
+        return DecodeResult(result!);
     }
 
     /// <summary>
@@ -165,14 +189,16 @@ public static class PyRun
         string? workbookDirectory = null,
         string function = "transform",
         int timeoutMs = 60_000,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        RunArchiveContext? archive = null)
     {
         var inputs = input is null
             ? Array.Empty<object?>()
             : new[] { input };
 
         return ExecuteManyAsync(
-            script, inputs, kwargs, client, workbookDirectory, function, timeoutMs, cancellationToken);
+            script, inputs, kwargs, client, workbookDirectory, function, timeoutMs,
+            cancellationToken, archive);
     }
 
     /// <summary>
@@ -187,7 +213,8 @@ public static class PyRun
         string? workbookDirectory = null,
         string function = "transform",
         int timeoutMs = 60_000,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        RunArchiveContext? archive = null)
     {
         if (script is null) throw new ArgumentNullException(nameof(script));
         if (script.Length == 0) throw new ArgumentException("script path must be non-empty", nameof(script));
@@ -195,7 +222,64 @@ public static class PyRun
         if (client is null) throw new ArgumentNullException(nameof(client));
 
         var scriptPath = ResolveScriptPath(script, workbookDirectory);
+        var arguments = EncodeArguments(inputs);
 
+        var startedAt = DateTimeOffset.UtcNow;
+        var stopwatch = Stopwatch.StartNew();
+        RunResult? result = null;
+        RunArchiveStatus status = RunArchiveStatus.Success;
+        KernelErrorRecord? errorRecord = null;
+        try
+        {
+            result = await client.RunAsync(
+                new RunRequest
+                {
+                    Script = scriptPath,
+                    Function = function,
+                    Arguments = arguments,
+                    Kwargs = kwargs,
+                },
+                cancellationToken: cancellationToken,
+                timeoutMs: timeoutMs).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            status = RunArchiveStatus.Cancelled;
+            throw;
+        }
+        catch (KernelException kex)
+        {
+            status = string.Equals(kex.Code, "Cancelled", StringComparison.Ordinal)
+                ? RunArchiveStatus.Cancelled
+                : RunArchiveStatus.Error;
+            if (archive is not null)
+                errorRecord = BuildKernelRecord(kex, archive.Source, scriptPath, startedAt);
+            throw;
+        }
+        catch (Exception ex)
+        {
+            status = RunArchiveStatus.Error;
+            if (archive is not null)
+                errorRecord = BuildHostRecord(ex, archive.Source, scriptPath, startedAt);
+            throw;
+        }
+        finally
+        {
+            stopwatch.Stop();
+            ArchiveBestEffort(archive, startedAt, scriptPath, function, stopwatch.Elapsed,
+                arguments, result, errorRecord, status);
+        }
+
+        // See note in ExecuteMany — result is non-null on the success path.
+        return DecodeResult(result!);
+    }
+
+    // -------------------------------------------------------------------------
+    // Archive helpers — best-effort write to the run archive
+    // -------------------------------------------------------------------------
+
+    private static byte[][] EncodeArguments(IReadOnlyList<object?> inputs)
+    {
         var arguments = new byte[inputs.Count][];
         for (var i = 0; i < inputs.Count; i++)
         {
@@ -204,23 +288,74 @@ public static class PyRun
                 throw new ArgumentException(
                     $"input at index {i} is null; null positional arguments are not " +
                     $"supported (they would misalign the remaining arguments). " +
-                    $"Use ExecuteAsync(input: null) for a no-argument call.",
+                    $"Use Execute / ExecuteAsync(input: null) for a no-argument call.",
                     nameof(inputs));
             arguments[i] = buffer;
         }
+        return arguments;
+    }
 
-        var result = await client.RunAsync(
-            new RunRequest
-            {
-                Script = scriptPath,
-                Function = function,
-                Arguments = arguments,
-                Kwargs = kwargs,
-            },
-            cancellationToken: cancellationToken,
-            timeoutMs: timeoutMs).ConfigureAwait(false);
+    private static KernelErrorRecord BuildKernelRecord(
+        KernelException kex, string source, string scriptPath, DateTimeOffset timestamp)
+        => new(
+            Timestamp: timestamp,
+            Source: source,
+            Code: kex.Code,
+            PythonType: kex.PythonType,
+            Message: kex.Message,
+            PythonTraceback: kex.PythonTraceback,
+            ScriptPath: scriptPath);
 
-        return DecodeResult(result);
+    private static KernelErrorRecord BuildHostRecord(
+        Exception ex, string source, string scriptPath, DateTimeOffset timestamp)
+        => new(
+            Timestamp: timestamp,
+            Source: source,
+            Code: "HostError",
+            PythonType: ex.GetType().Name,
+            Message: ex.Message,
+            PythonTraceback: ex.ToString(),
+            ScriptPath: scriptPath);
+
+    /// <summary>
+    /// Persist the run to <paramref name="archive"/>, swallowing any I/O
+    /// failures so they can't mask the user-facing result (or
+    /// user-facing exception we're already on the way to throwing).
+    /// No-op when <paramref name="archive"/> is <see langword="null"/>.
+    /// </summary>
+    private static void ArchiveBestEffort(
+        RunArchiveContext? archive,
+        DateTimeOffset startedAt,
+        string scriptPath,
+        string function,
+        TimeSpan duration,
+        IReadOnlyList<byte[]> arguments,
+        RunResult? result,
+        KernelErrorRecord? errorRecord,
+        RunArchiveStatus status)
+    {
+        if (archive is null) return;
+        try
+        {
+            byte[]? output = result is { IsEmpty: false } ? result.Payload : null;
+            archive.Archive.Archive(new RunArchiveEntry(
+                Timestamp: startedAt,
+                WorkbookKey: archive.WorkbookKey,
+                ScriptPath: scriptPath,
+                Function: function,
+                Source: archive.Source,
+                Duration: duration,
+                Inputs: arguments,
+                Output: output,
+                Error: errorRecord,
+                Status: status));
+        }
+        catch
+        {
+            // Best-effort. Losing an archive entry is strictly less bad
+            // than masking the result (or the in-flight exception) with
+            // an I/O error from this side path.
+        }
     }
 
     // -------------------------------------------------------------------------

@@ -6,6 +6,7 @@ using System.Threading.Tasks;
 using PyExcel.Bridge;
 using PyExcel.Excel;
 using PyExcel.Kernel.Client;
+using PyExcel.State;
 using Xunit;
 
 namespace PyExcel.Bridge.Tests;
@@ -648,6 +649,86 @@ public class PyRunTests
     }
 
     // -------------------------------------------------------------------------
+    // End-to-end archive wiring — RunArchiveContext is threaded through
+    // PyRun.Execute* so every real run lands on disk for diagnostics.
+    // -------------------------------------------------------------------------
+
+    [Fact]
+    public void Execute_WithArchiveContext_ArchivesSuccessfulRun()
+    {
+        using var fx = new KernelFixture();
+        using var ax = new ArchiveFixture();
+        var script = fx.WriteScript("addone.py",
+            "def transform(x):\n    return x + 1\n");
+
+        var result = PyRun.Execute(
+            script: script,
+            input: 41.0,
+            kwargs: null,
+            client: fx.Client,
+            archive: ax.Context("PY.RUN"));
+
+        Assert.Equal(42.0, result);
+
+        var listed = ax.Archive.List();
+        var run = Assert.Single(listed);
+        Assert.Equal(RunArchiveStatus.Success, run.Status);
+        Assert.Equal("PY.RUN", run.Source);
+        Assert.Equal(script, run.ScriptPath);
+        Assert.True(File.Exists(Path.Combine(run.Directory, "input_0.arrow")));
+        Assert.True(File.Exists(Path.Combine(run.Directory, "output.arrow")));
+        Assert.True(File.Exists(Path.Combine(run.Directory, "manifest.txt")));
+        Assert.False(File.Exists(Path.Combine(run.Directory, "error.txt")));
+    }
+
+    [Fact]
+    public void Execute_WithArchiveContext_ArchivesKernelError()
+    {
+        using var fx = new KernelFixture();
+        using var ax = new ArchiveFixture();
+        var script = fx.WriteScript("boom.py",
+            "def transform(x):\n    raise ValueError('bad shape')\n");
+
+        var ex = Assert.Throws<KernelException>(() => PyRun.Execute(
+            script: script,
+            input: 1.0,
+            kwargs: null,
+            client: fx.Client,
+            archive: ax.Context("PY.RUN")));
+
+        Assert.Equal("ValueError", ex.PythonType);
+
+        var run = Assert.Single(ax.Archive.List());
+        Assert.Equal(RunArchiveStatus.Error, run.Status);
+        Assert.True(File.Exists(Path.Combine(run.Directory, "input_0.arrow")));
+        Assert.False(File.Exists(Path.Combine(run.Directory, "output.arrow")));
+        var errorTxt = File.ReadAllText(Path.Combine(run.Directory, "error.txt"));
+        Assert.Contains("ValueError", errorTxt);
+        Assert.Contains("bad shape", errorTxt);
+    }
+
+    [Fact]
+    public void Execute_NoArchiveContext_DoesNotArchive()
+    {
+        // The default is null — the kernel exchange must work just fine
+        // with no archive wired up. Belt-and-braces against an accidental
+        // null-deref slipping in.
+        using var fx = new KernelFixture();
+        using var ax = new ArchiveFixture();
+        var script = fx.WriteScript("identity.py",
+            "def transform(x):\n    return x\n");
+
+        var result = PyRun.Execute(
+            script: script,
+            input: 7.0,
+            kwargs: null,
+            client: fx.Client);
+
+        Assert.Equal(7.0, result);
+        Assert.Empty(ax.Archive.List());
+    }
+
+    // -------------------------------------------------------------------------
     // Fixture — spawns one kernel + scratch dir, cleans both up.
     // -------------------------------------------------------------------------
 
@@ -684,6 +765,31 @@ public class PyRunTests
         {
             try { Supervisor.Dispose(); } catch { /* best-effort */ }
             try { Directory.Delete(ScratchDir, recursive: true); } catch { /* best-effort */ }
+        }
+    }
+
+    /// <summary>Throwaway <see cref="RunArchive"/> rooted at a fresh temp
+    /// directory. Disposes by deleting the tree.</summary>
+    private sealed class ArchiveFixture : IDisposable
+    {
+        public string Root { get; }
+        public RunArchive Archive { get; }
+
+        public ArchiveFixture()
+        {
+            Root = Path.Combine(
+                Path.GetTempPath(),
+                "pyexcel-runarchive-" + Guid.NewGuid().ToString("N"));
+            Archive = new RunArchive(Root);
+        }
+
+        public RunArchiveContext Context(string source, string? workbookKey = null)
+            => new(Archive, source, workbookKey);
+
+        public void Dispose()
+        {
+            try { if (Directory.Exists(Root)) Directory.Delete(Root, recursive: true); }
+            catch { /* best-effort */ }
         }
     }
 }

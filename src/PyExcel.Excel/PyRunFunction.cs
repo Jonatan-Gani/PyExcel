@@ -129,6 +129,7 @@ public static class PyRunFunction
             {
                 var functionName = ResolveFunctionName(_function);
                 var inp = FromExcelArgument(_input);
+                var archiveContext = BuildArchiveContext();
 
                 var result = await PyRun.ExecuteAsync(
                     script: _script,
@@ -136,7 +137,8 @@ public static class PyRunFunction
                     kwargs: null,
                     client: KernelHost.Default.Client,
                     function: functionName,
-                    cancellationToken: token).ConfigureAwait(false);
+                    cancellationToken: token,
+                    archive: archiveContext).ConfigureAwait(false);
 
                 if (token.IsCancellationRequested) return; // observer is gone
                 observer.OnNext(ToExcelOutput(result));
@@ -212,6 +214,25 @@ public static class PyRunFunction
                 // and the message in LogDisplay; losing the ribbon's
                 // copy-button content is a worse experience than crashing
                 // the ribbon would be.
+            }
+        }
+
+        /// <summary>Build the archive context for this UDF call. Returns
+        /// <see langword="null"/> if the active <see cref="RunArchive"/>
+        /// can't be obtained — archiving is opt-in diagnostic data, not
+        /// load-bearing, so a missing one degrades gracefully.</summary>
+        private static RunArchiveContext? BuildArchiveContext()
+        {
+            try
+            {
+                var archive = PyExcelServices.RunArchive;
+                if (archive is null) return null;
+                var key = PyExcelServices.WorkbookContext.CurrentWorkbookKey;
+                return new RunArchiveContext(archive, "PY.RUN", key);
+            }
+            catch
+            {
+                return null;
             }
         }
     }
