@@ -320,19 +320,29 @@ public class PyExcelRibbon : ExcelRibbon
     }
 
     // -------------------------------------------------------------------------
-    // Import group
+    // Import group — text fields persisted through StateService; the
+    // ImportService button handler is the Phase 5 COM-bound follow-up
+    // tracked in modRibbon.bas:593.
     // -------------------------------------------------------------------------
 
     public void OnImport(IRibbonControl control)
         => StubAction(control, "OnImport", "modRibbon.bas:593 — runs ImportService");
 
-    public string GetImportInput(IRibbonControl control) => string.Empty;
+    public string GetImportInput(IRibbonControl control) => ActiveState().ImportInput ?? string.Empty;
     public void OnImportInputChange(IRibbonControl control, string text)
-        => StubChange(control, "OnImportInputChange", "modRibbon.bas:637", text);
+    {
+        var key = PyExcelServices.WorkbookContext.CurrentWorkbookKey;
+        if (key is null) return;
+        PyExcelServices.State.SetImportInput(key, text);
+    }
 
-    public string GetImportOutput(IRibbonControl control) => string.Empty;
+    public string GetImportOutput(IRibbonControl control) => ActiveState().ImportOutput ?? string.Empty;
     public void OnImportOutputChange(IRibbonControl control, string text)
-        => StubChange(control, "OnImportOutputChange", "modRibbon.bas:681", text);
+    {
+        var key = PyExcelServices.WorkbookContext.CurrentWorkbookKey;
+        if (key is null) return;
+        PyExcelServices.State.SetImportOutput(key, text);
+    }
 
     public void OnEditImport(IRibbonControl control)
         => StubAction(control, "OnEditImport", "modRibbon.bas:708 — shows EditImportForm");
@@ -344,13 +354,21 @@ public class PyExcelRibbon : ExcelRibbon
     public void OnExport(IRibbonControl control)
         => StubAction(control, "OnExport", "modRibbon.bas:740 — runs ExportService");
 
-    public string GetExportInput(IRibbonControl control) => string.Empty;
+    public string GetExportInput(IRibbonControl control) => ActiveState().ExportInput ?? string.Empty;
     public void OnExportInputChange(IRibbonControl control, string text)
-        => StubChange(control, "OnExportInputChange", "modRibbon.bas:784", text);
+    {
+        var key = PyExcelServices.WorkbookContext.CurrentWorkbookKey;
+        if (key is null) return;
+        PyExcelServices.State.SetExportInput(key, text);
+    }
 
-    public string GetExportOutput(IRibbonControl control) => string.Empty;
+    public string GetExportOutput(IRibbonControl control) => ActiveState().ExportOutput ?? string.Empty;
     public void OnExportOutputChange(IRibbonControl control, string text)
-        => StubChange(control, "OnExportOutputChange", "modRibbon.bas:827", text);
+    {
+        var key = PyExcelServices.WorkbookContext.CurrentWorkbookKey;
+        if (key is null) return;
+        PyExcelServices.State.SetExportOutput(key, text);
+    }
 
     public void OnEditExport(IRibbonControl control)
         => StubAction(control, "OnEditExport", "modRibbon.bas:853 — shows EditExportForm");
@@ -362,9 +380,13 @@ public class PyExcelRibbon : ExcelRibbon
     public void OnPaste(IRibbonControl control)
         => StubAction(control, "OnPaste", "modRibbon.bas:866 — pastes saved artifact");
 
-    public string GetPasteOutput(IRibbonControl control) => string.Empty;
+    public string GetPasteOutput(IRibbonControl control) => ActiveState().PasteOutput ?? string.Empty;
     public void OnPasteOutputChange(IRibbonControl control, string text)
-        => StubChange(control, "OnPasteOutputChange", "modRibbon.bas:913", text);
+    {
+        var key = PyExcelServices.WorkbookContext.CurrentWorkbookKey;
+        if (key is null) return;
+        PyExcelServices.State.SetPasteOutput(key, text);
+    }
 
     public void OnEditPaste(IRibbonControl control)
         => StubAction(control, "OnEditPaste", "modRibbon.bas:940 — shows EditPasteForm");
@@ -453,10 +475,5 @@ public class PyExcelRibbon : ExcelRibbon
     private void StubAction(IRibbonControl control, string name, string portNote)
     {
         _log.Info($"STUB onAction {name} (id={control.Id}) — port target: {portNote}");
-    }
-
-    private void StubChange(IRibbonControl control, string name, string portRef, string text)
-    {
-        _log.Debug($"STUB onChange {name} (id={control.Id}, text='{text}') — port target: {portRef}");
     }
 }

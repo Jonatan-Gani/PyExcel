@@ -65,6 +65,21 @@ public static class WorkbookStateCodec
             root.Add(new XElement(Ns + "py-output", state.PyOutput));
         if (state.SelectedActionName is not null)
             root.Add(new XElement(Ns + "selected-action", state.SelectedActionName));
+        // Phase 5 — Import / Export / Paste text fields. Schema stays at
+        // version 1: the new elements are optional, so a document written
+        // before this change still parses (missing → null), and a document
+        // written after still satisfies the v1 namespace contract for any
+        // reader that doesn't know about them.
+        if (state.ImportInput is not null)
+            root.Add(new XElement(Ns + "import-input", state.ImportInput));
+        if (state.ImportOutput is not null)
+            root.Add(new XElement(Ns + "import-output", state.ImportOutput));
+        if (state.ExportInput is not null)
+            root.Add(new XElement(Ns + "export-input", state.ExportInput));
+        if (state.ExportOutput is not null)
+            root.Add(new XElement(Ns + "export-output", state.ExportOutput));
+        if (state.PasteOutput is not null)
+            root.Add(new XElement(Ns + "paste-output", state.PasteOutput));
 
         var actions = new XElement(Ns + "actions");
         foreach (var a in state.Actions)
@@ -138,6 +153,13 @@ public static class WorkbookStateCodec
         var pyInput = (string?)root.Element(Ns + "py-input");
         var pyOutput = (string?)root.Element(Ns + "py-output");
         var selectedAction = (string?)root.Element(Ns + "selected-action");
+        // Phase 5 fields — optional, default to null on a document that
+        // pre-dates them.
+        var importInput = (string?)root.Element(Ns + "import-input");
+        var importOutput = (string?)root.Element(Ns + "import-output");
+        var exportInput = (string?)root.Element(Ns + "export-input");
+        var exportOutput = (string?)root.Element(Ns + "export-output");
+        var pasteOutput = (string?)root.Element(Ns + "paste-output");
 
         var actions = new List<RibbonAction>();
         var actionsEl = root.Element(Ns + "actions");
@@ -155,6 +177,11 @@ public static class WorkbookStateCodec
             PyOutput = pyOutput,
             Actions = actions,
             SelectedActionName = selectedAction,
+            ImportInput = importInput,
+            ImportOutput = importOutput,
+            ExportInput = exportInput,
+            ExportOutput = exportOutput,
+            PasteOutput = pasteOutput,
         };
     }
 
