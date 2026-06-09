@@ -23,6 +23,17 @@ public interface IWorkbookContext
     /// workbooks don't collide.
     /// </remarks>
     string? CurrentWorkbookKey { get; }
+
+    /// <summary>
+    /// Directory of the currently-active workbook, or
+    /// <see langword="null"/> if there's no workbook or the active one
+    /// hasn't been saved yet (an unsaved workbook has no on-disk
+    /// directory). Used by the Phase 5 ribbon callbacks
+    /// (<c>OnOpenExplorer</c>, <c>OnReadMe</c>, <c>OnEditPython</c>) to
+    /// derive the project root, and by the import / export services to
+    /// resolve relative paths.
+    /// </summary>
+    string? CurrentWorkbookDirectory { get; }
 }
 
 /// <summary>Null-object context — the ribbon then renders as if no
@@ -33,4 +44,5 @@ public sealed class NullWorkbookContext : IWorkbookContext
     public static readonly NullWorkbookContext Instance = new();
     private NullWorkbookContext() { }
     public string? CurrentWorkbookKey => null;
+    public string? CurrentWorkbookDirectory => null;
 }

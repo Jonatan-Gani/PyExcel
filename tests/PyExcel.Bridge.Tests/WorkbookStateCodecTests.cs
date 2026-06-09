@@ -253,4 +253,99 @@ public class WorkbookStateCodecTests
         var s = WorkbookStateCodec.Deserialize(doc, "wb.xlsx");
         Assert.True(s.Enabled);
     }
+
+    // -------------------------------------------------------------------------
+    // Phase 5 — Import / Export / Paste text fields
+    // -------------------------------------------------------------------------
+
+    [Fact]
+    public void Roundtrip_ImportExportPasteFields_AllPreserved()
+    {
+        var original = WorkbookState.Empty("wb.xlsx") with
+        {
+            ImportInput = "data.csv",
+            ImportOutput = "Sheet1!A1",
+            ExportInput = "A1:C10",
+            ExportOutput = "out.csv",
+            PasteOutput = "Sheet2!B2",
+        };
+
+        var doc = WorkbookStateCodec.Serialize(original);
+        var restored = WorkbookStateCodec.Deserialize(doc, "wb.xlsx");
+
+        Assert.Equal("data.csv", restored.ImportInput);
+        Assert.Equal("Sheet1!A1", restored.ImportOutput);
+        Assert.Equal("A1:C10", restored.ExportInput);
+        Assert.Equal("out.csv", restored.ExportOutput);
+        Assert.Equal("Sheet2!B2", restored.PasteOutput);
+    }
+
+    [Fact]
+    public void Roundtrip_EmptyState_ImportExportPasteFieldsAreNull()
+    {
+        var original = WorkbookState.Empty("wb.xlsx");
+        var doc = WorkbookStateCodec.Serialize(original);
+        var restored = WorkbookStateCodec.Deserialize(doc, "wb.xlsx");
+
+        Assert.Null(restored.ImportInput);
+        Assert.Null(restored.ImportOutput);
+        Assert.Null(restored.ExportInput);
+        Assert.Null(restored.ExportOutput);
+        Assert.Null(restored.PasteOutput);
+    }
+
+    [Fact]
+    public void Serialize_NullImportExportPasteFields_NotEmittedAsElements()
+    {
+        // Null fields stay off-disk so a never-touched workbook produces
+        // the same small XML as before this change. Element-by-element
+        // check (not "not in string") so we don't get fooled by namespace
+        // declarations or attribute strings that happen to share names.
+        var original = WorkbookState.Empty("wb.xlsx");
+        var doc = WorkbookStateCodec.Serialize(original);
+        var ns = (XNamespace)WorkbookStateCodec.XmlNamespace;
+        var root = doc.Root!;
+        Assert.Null(root.Element(ns + "import-input"));
+        Assert.Null(root.Element(ns + "import-output"));
+        Assert.Null(root.Element(ns + "export-input"));
+        Assert.Null(root.Element(ns + "export-output"));
+        Assert.Null(root.Element(ns + "paste-output"));
+    }
+
+    [Fact]
+    public void Deserialize_PreV5Document_NewFieldsDefaultToNull()
+    {
+        // A document written by a build before the Phase 5 fields existed
+        // — schema-version 1, no <import-*>/<export-*>/<paste-*>
+        // elements. The new fields must decode as null without throwing
+        // so persisted state from older sessions still loads cleanly.
+        var doc = XDocument.Parse(
+            $"<pyexcel xmlns=\"{WorkbookStateCodec.XmlNamespace}\" state-version=\"1\">" +
+            "<enabled>true</enabled>" +
+            "<py-input>A1:C10</py-input>" +
+            "<actions/>" +
+            "</pyexcel>");
+        var s = WorkbookStateCodec.Deserialize(doc, "wb.xlsx");
+
+        Assert.True(s.Enabled);
+        Assert.Equal("A1:C10", s.PyInput);
+        Assert.Null(s.ImportInput);
+        Assert.Null(s.ImportOutput);
+        Assert.Null(s.ExportInput);
+        Assert.Null(s.ExportOutput);
+        Assert.Null(s.PasteOutput);
+    }
+
+    [Fact]
+    public void Roundtrip_EmptyStringField_RoundTripsAsEmptyString()
+    {
+        // An empty string is distinct from null — the user cleared the
+        // field, and the codec preserves that distinction (null is
+        // omitted; empty becomes <import-input></import-input> which
+        // deserializes back to "").
+        var original = WorkbookState.Empty("wb.xlsx") with { ImportInput = "" };
+        var doc = WorkbookStateCodec.Serialize(original);
+        var restored = WorkbookStateCodec.Deserialize(doc, "wb.xlsx");
+        Assert.Equal("", restored.ImportInput);
+    }
 }

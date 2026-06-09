@@ -403,6 +403,39 @@ public class RunArchiveTests : IDisposable
         Assert.Equal("good.py", listed[0].ScriptPath);
     }
 
+    [Fact]
+    public void List_RunWithOutput_SetsHasOutputTrue()
+    {
+        var archive = new RunArchive(_root);
+        archive.Archive(SuccessEntry());  // default helper provides output
+
+        var run = archive.List().Single();
+        Assert.True(run.HasOutput);
+    }
+
+    [Fact]
+    public void List_RunWithoutOutput_SetsHasOutputFalse()
+    {
+        // SuccessEntry's output defaults to a non-null buffer; inline an
+        // entry with output=null so the archive doesn't write
+        // output.arrow — List() then reports HasOutput=false.
+        var archive = new RunArchive(_root);
+        archive.Archive(new RunArchiveEntry(
+            Timestamp: new DateTimeOffset(2026, 5, 30, 14, 0, 0, TimeSpan.Zero),
+            WorkbookKey: "C:\\book.xlsx",
+            ScriptPath: "C:\\scripts\\transform.py",
+            Function: "transform",
+            Source: "PY.RUN",
+            Duration: TimeSpan.FromMilliseconds(100),
+            Inputs: new[] { new byte[] { 0x1 } },
+            Output: null,
+            Error: null,
+            Status: RunArchiveStatus.Success));
+
+        var run = archive.List().Single();
+        Assert.False(run.HasOutput);
+    }
+
     // -------------------------------------------------------------------------
     // Concurrent writes — the archive must survive parallel runs without
     // corrupting its retention cap.

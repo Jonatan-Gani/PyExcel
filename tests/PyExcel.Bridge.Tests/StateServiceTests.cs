@@ -226,4 +226,86 @@ public class StateServiceTests
         Assert.Throws<ArgumentNullException>(() =>
             new StateService().Update("wb.xlsx", null!));
     }
+
+    // -------------------------------------------------------------------------
+    // Phase 5 — Import / Export / Paste text fields
+    // -------------------------------------------------------------------------
+
+    [Fact]
+    public void SetImportInput_PersistsAndPreservesOtherFields()
+    {
+        var svc = new StateService();
+        svc.SetEnabled("wb.xlsx", true);
+        svc.SetPyInput("wb.xlsx", "A1");
+
+        svc.SetImportInput("wb.xlsx", "data.csv");
+
+        var s = svc.Get("wb.xlsx");
+        Assert.Equal("data.csv", s.ImportInput);
+        Assert.True(s.Enabled);
+        Assert.Equal("A1", s.PyInput);
+    }
+
+    [Fact]
+    public void SetImportOutput_PersistsValue()
+    {
+        var svc = new StateService();
+        svc.SetImportOutput("wb.xlsx", "Sheet1!A1");
+        Assert.Equal("Sheet1!A1", svc.Get("wb.xlsx").ImportOutput);
+    }
+
+    [Fact]
+    public void SetExportInput_PersistsValue()
+    {
+        var svc = new StateService();
+        svc.SetExportInput("wb.xlsx", "A1:C10");
+        Assert.Equal("A1:C10", svc.Get("wb.xlsx").ExportInput);
+    }
+
+    [Fact]
+    public void SetExportOutput_PersistsValue()
+    {
+        var svc = new StateService();
+        svc.SetExportOutput("wb.xlsx", "out.csv");
+        Assert.Equal("out.csv", svc.Get("wb.xlsx").ExportOutput);
+    }
+
+    [Fact]
+    public void SetPasteOutput_PersistsValue()
+    {
+        var svc = new StateService();
+        svc.SetPasteOutput("wb.xlsx", "Sheet1!B2");
+        Assert.Equal("Sheet1!B2", svc.Get("wb.xlsx").PasteOutput);
+    }
+
+    [Fact]
+    public void SetImportInput_FiresStateChanged()
+    {
+        var svc = new StateService();
+        string? seenKey = null;
+        svc.StateChanged += (_, e) => seenKey = e.WorkbookKey;
+
+        svc.SetImportInput("wb.xlsx", "data.csv");
+        Assert.Equal("wb.xlsx", seenKey);
+    }
+
+    [Fact]
+    public void SetImportInput_Null_ClearsField()
+    {
+        var svc = new StateService();
+        svc.SetImportInput("wb.xlsx", "data.csv");
+        svc.SetImportInput("wb.xlsx", null);
+        Assert.Null(svc.Get("wb.xlsx").ImportInput);
+    }
+
+    [Fact]
+    public void NewSetters_NullKey_Throws()
+    {
+        var svc = new StateService();
+        Assert.Throws<ArgumentNullException>(() => svc.SetImportInput(null!, "x"));
+        Assert.Throws<ArgumentNullException>(() => svc.SetImportOutput(null!, "x"));
+        Assert.Throws<ArgumentNullException>(() => svc.SetExportInput(null!, "x"));
+        Assert.Throws<ArgumentNullException>(() => svc.SetExportOutput(null!, "x"));
+        Assert.Throws<ArgumentNullException>(() => svc.SetPasteOutput(null!, "x"));
+    }
 }

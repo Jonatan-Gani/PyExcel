@@ -146,6 +146,28 @@ public sealed class StateService
 
     public void SetSelectedAction(string key, string? name)
         => Update(key, s => s with { SelectedActionName = name });
+
+    // -------------------------------------------------------------------------
+    // Import / Export / Paste — text fields owned by Phase 5's data
+    // services. The COM-bound services (ImportService / ExportService /
+    // PasteService) read these on click; the ribbon's onChange callbacks
+    // persist edits here. See the ribbon's Import / Export / Paste groups.
+    // -------------------------------------------------------------------------
+
+    public void SetImportInput(string key, string? value)
+        => Update(key, s => s with { ImportInput = value });
+
+    public void SetImportOutput(string key, string? value)
+        => Update(key, s => s with { ImportOutput = value });
+
+    public void SetExportInput(string key, string? value)
+        => Update(key, s => s with { ExportInput = value });
+
+    public void SetExportOutput(string key, string? value)
+        => Update(key, s => s with { ExportOutput = value });
+
+    public void SetPasteOutput(string key, string? value)
+        => Update(key, s => s with { PasteOutput = value });
 }
 
 /// <summary>Carries the affected workbook key. Subscribers can skip
