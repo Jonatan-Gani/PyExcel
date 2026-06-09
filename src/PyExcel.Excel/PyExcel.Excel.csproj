@@ -43,9 +43,14 @@
     SDK-style net48 projects don't reference automatically (unlike .NET
     Core, where it's in the shared framework). netstandard2.0 doesn't
     need it — RangeRunner is #if NETFRAMEWORK and never compiles there.
+
+    PasteService also uses System.Windows.Forms.MessageBox for the
+    destructive-paste overwrite confirmation; that assembly likewise
+    isn't in the SDK-style default reference set, so add it explicitly.
   -->
   <ItemGroup Condition="'$(TargetFramework)' == 'net48'">
     <Reference Include="Microsoft.CSharp" />
+    <Reference Include="System.Windows.Forms" />
   </ItemGroup>
 
 </Project>
