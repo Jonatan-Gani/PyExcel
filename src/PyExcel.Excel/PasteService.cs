@@ -3,6 +3,7 @@ using System;
 using System.Diagnostics;
 using System.IO;
 using System.Threading.Tasks;
+using System.Windows.Forms;
 using ExcelDna.Integration;
 using ExcelDna.Logging;
 using PyExcel.State;
@@ -17,18 +18,18 @@ namespace PyExcel.Excel;
 ///
 /// <para><b>Threading / SAFE-1.</b> Same shape as
 /// <see cref="ImportService"/>: the planner + range-resolve happen on the
-/// main thread; the Arrow read + decode happen off it; the COM write-back
-/// is queued via
+/// main thread; the Arrow read + decode happen off it; the COM read of
+/// the target range, the overwrite-confirmation prompt, and the write-
+/// back are all queued via
 /// <see cref="ExcelAsyncUtil.QueueAsMacro(System.Action)"/>.</para>
 ///
-/// <para><b>Overwrite confirmation</b> is intentionally not in this
-/// service. The roadmap calls for it on the Paste flow specifically —
-/// because pasting into a populated range is destructive — but the
-/// confirmation dialog is WinForms (Phase 8). For now the paste
-/// overwrites; the run-archive retains the destination data only
-/// indirectly (via the next run that would land on the same cells), so
-/// the Phase-8 dialog is the right place to add the prompt without
-/// duplicating data.</para>
+/// <para><b>Overwrite confirmation.</b> Before writing, the service
+/// reads the target range's current <c>Value2</c> and asks
+/// <see cref="PastePreflight.RangeHasContent"/> whether the paste would
+/// destroy existing data. If so, a <see cref="MessageBox"/> with default
+/// "No" is shown; the user must explicitly click "Yes" to proceed.
+/// Cancelling logs to <see cref="LogDisplay"/> and aborts the paste
+/// without touching the sheet.</para>
 /// </summary>
 public static class PasteService
 {
@@ -93,12 +94,42 @@ public static class PasteService
                 return;
             }
 
-            // --- main thread: write back into the target range -----------
+            // --- main thread: preflight + write back ---------------------
             ExcelAsyncUtil.QueueAsMacro(() =>
             {
                 try
                 {
-                    WriteToRange(plan.TargetRangeAddress, decoded);
+                    var (rows, cols) = PastePreflight.Footprint(decoded);
+                    if (rows == 0 || cols == 0)
+                    {
+                        Warn($"Paste: run {plan.SourceRunId} payload is empty.");
+                        return;
+                    }
+
+                    dynamic app = ExcelDnaUtil.Application;
+                    dynamic anchor = app.Range[plan.TargetRangeAddress];
+                    dynamic targetRange = anchor.Resize[rows, cols];
+
+                    // Read what's at the target right now. Excel-DNA's
+                    // ExcelEmpty / ExcelMissing sentinels can appear in
+                    // the COM hand-back for empty cells; strip them to
+                    // null so the cross-platform PastePreflight (which
+                    // doesn't reference those types) sees a clean
+                    // snapshot.
+                    object? before = StripExcelSentinels(targetRange.Value2);
+
+                    if (PastePreflight.RangeHasContent(before)
+                        && !ConfirmOverwrite(plan.TargetRangeAddress, rows, cols, plan.SourceRunId))
+                    {
+                        Trace.WriteLine(
+                            $"Paste: user cancelled overwrite at " +
+                            $"'{plan.TargetRangeAddress}'.");
+                        LogDisplay.WriteLine(
+                            $"Paste: cancelled — '{plan.TargetRangeAddress}' kept.");
+                        return;
+                    }
+
+                    WriteToRange(targetRange, decoded);
                     Trace.WriteLine(
                         $"Paste: pasted run {plan.SourceRunId} into '{plan.TargetRangeAddress}'.");
                 }
@@ -112,45 +143,81 @@ public static class PasteService
         });
     }
 
-    /// <summary>Write a decoded Arrow payload into the target range.
-    /// Mirrors <see cref="RangeRunner"/>'s write semantics: a 2-D
-    /// <c>object?[,]</c> resizes the anchor to its dimensions, a 1-D
-    /// <c>object?[]</c> writes as a row (we don't have orientation
-    /// metadata for the archived buffer beyond what ArrowMarshal recovers
-    /// — table is the default), a scalar drops into the top-left
-    /// cell.</summary>
-    private static void WriteToRange(string targetAddress, object decoded)
+    /// <summary>Show the destructive-paste confirmation. Defaults to
+    /// <see cref="MessageBoxDefaultButton.Button2"/> ("No") so an
+    /// accidental Enter doesn't overwrite the user's data. Returns
+    /// <see langword="true"/> iff the user clicked Yes.</summary>
+    private static bool ConfirmOverwrite(string targetAddress, int rows, int cols, string runId)
     {
-        dynamic app = ExcelDnaUtil.Application;
-        dynamic anchor = app.Range[targetAddress];
+        var prompt =
+            $"The target range '{targetAddress}' ({rows}×{cols}) contains " +
+            $"values that will be overwritten by the paste from run {runId}." +
+            Environment.NewLine + Environment.NewLine +
+            "Continue?";
 
+        var answer = MessageBox.Show(
+            prompt,
+            "PyExcel — confirm overwrite",
+            MessageBoxButtons.YesNo,
+            MessageBoxIcon.Warning,
+            MessageBoxDefaultButton.Button2);
+        return answer == DialogResult.Yes;
+    }
+
+    /// <summary>Recursively replace Excel-DNA's <see cref="ExcelEmpty"/>
+    /// and <see cref="ExcelMissing"/> sentinels with <see langword="null"/>
+    /// so the cross-platform preflight sees a clean snapshot.
+    /// <see cref="ExcelError"/> is preserved — an error cell is content
+    /// the user might still care about, and a paste over it is destructive
+    /// in the same way as a paste over a number.</summary>
+    private static object? StripExcelSentinels(object? value2)
+    {
+        if (value2 is null) return null;
+        if (value2 is ExcelEmpty || value2 is ExcelMissing) return null;
+
+        if (value2 is object[,] arr)
+        {
+            int r0 = arr.GetLowerBound(0);
+            int c0 = arr.GetLowerBound(1);
+            int height = arr.GetLength(0);
+            int width = arr.GetLength(1);
+            var cleaned = new object?[height, width];
+            for (int i = 0; i < height; i++)
+                for (int j = 0; j < width; j++)
+                {
+                    var cell = arr[r0 + i, c0 + j];
+                    cleaned[i, j] = (cell is ExcelEmpty || cell is ExcelMissing)
+                        ? null
+                        : cell;
+                }
+            return cleaned;
+        }
+
+        return value2;
+    }
+
+    /// <summary>Write a decoded Arrow payload into the resolved target
+    /// range. Mirrors the previous write semantics: a 2-D
+    /// <c>object?[,]</c> sets <paramref name="targetRange"/>'s
+    /// <c>Value2</c> directly (the caller has already sized the range to
+    /// the payload's footprint), a 1-D <c>object?[]</c> writes as a row,
+    /// a scalar drops into the top-left cell.</summary>
+    private static void WriteToRange(dynamic targetRange, object decoded)
+    {
         switch (decoded)
         {
             case object?[,] table:
-            {
-                int rows = table.GetLength(0);
-                int cols = table.GetLength(1);
-                if (rows == 0 || cols == 0) return;
-                dynamic target = anchor.Resize[rows, cols];
-                target.Value2 = table;
+                targetRange.Value2 = table;
                 return;
-            }
             case object?[] vector:
             {
-                if (vector.Length == 0) return;
-                // ArrowMarshal preserves vector orientation via metadata;
-                // its decode returns a 1-D array which we spill as a row.
-                // A column-vector caller (rare from the archive path
-                // where outputs are usually tables or scalars) can still
-                // transpose at the cell level.
-                dynamic target = anchor.Resize[1, vector.Length];
                 var grid = new object?[1, vector.Length];
                 for (int i = 0; i < vector.Length; i++) grid[0, i] = vector[i];
-                target.Value2 = grid;
+                targetRange.Value2 = grid;
                 return;
             }
             default:
-                anchor.Value2 = decoded;
+                targetRange.Value2 = decoded;
                 return;
         }
     }
