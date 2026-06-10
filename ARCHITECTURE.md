@@ -139,8 +139,7 @@ C# side talks to it over a **named pipe**.
 | `PyExcel.Bridge` | Frame transport, named pipe, `KernelSupervisor` | Phase 2 — framing ✅, transport ✅, supervisor ✅ (POSIX; win32 client pending) |
 | `PyExcel.Kernel.Client` | Typed run/cancel/progress API over frames | Phase 2 |
 | `PyExcel.State` | Workbook registry, enabled state, ribbon state | Phase 3 |
-| `PyExcel.Excel` | Range ↔ Arrow marshalling, paste, import/export | Phase 4–5 |
-| `PyExcel.ChartBuilder` | Chart spec → native Excel chart | Phase 6 |
+| `PyExcel.Excel` | Range ↔ Arrow marshalling, paste, import/export, charts (`ChartBuilder`) | Phase 4–6 |
 | `PyExcel.Setup` | venv, pip, project provisioning | Phase 7 |
 | `PyExcel.Forms` | WinForms dialogs | Phase 8 |
 | `pyexcel.kernel` (Python) | framing, supervisor, worker, transform runner | Phase 2+ |
@@ -152,8 +151,11 @@ C# side talks to it over a **named pipe**.
 2. `PyExcel.Excel` marshals the input ranges into an **Arrow IPC stream**.
 3. `PyExcel.Kernel.Client` sends a `RUN_REQUEST` frame; the kernel runs the
    user `transform()` and streams `PROGRESS` then `RUN_RESULT` frames back.
-4. `PyExcel.Excel` writes the Arrow result tables to the mapped ranges;
-   `PyExcel.ChartBuilder` builds any charts.
+4. `PyExcel.Excel` writes the Arrow result tables to the mapped ranges; a
+   Plotly figure return rides the wire as a JSON **chart spec**
+   (`pyexcel.kernel.chart` → `ChartSpecParser` → `ChartBuilder` renders a
+   native chart); a Matplotlib figure rides as a rendered SVG/PNG the host
+   embeds as a picture.
 
 ### The kernel protocol
 
@@ -174,7 +176,7 @@ both encode and decode to bound memory against a malformed peer.
 | How a run is orchestrated | `python.bas` | `PyExcel.Kernel.Client` + `PyExcel.Bridge` |
 | Range → Python data marshalling | `xmlParsing.bas` + `xmlParsing.py` | `PyExcel.Excel` + `pyexcel.kernel` (Arrow) |
 | Writing results back to ranges | `pythonUtils.bas` | `PyExcel.Excel` |
-| Chart rendering | `chartBuilder.bas` | `PyExcel.ChartBuilder` |
+| Chart rendering | `chartBuilder.bas` | `embedded/pyexcel/kernel/chart.py` (figure → spec) + `PyExcel.Excel/ChartBuilder.cs` (spec → chart) |
 | The `transform()` contract / runner | `src/embedded/tools.py` | `embedded/pyexcel/kernel/worker.py` |
 | The wire protocol | n/a | `embedded/pyexcel/kernel/framing.py` ↔ `PyExcel.Bridge/Framing.cs` |
 | Import / Export / Paste | `Import.bas` / `Export.bas` / `Paste.bas` | `PyExcel.Excel` services |

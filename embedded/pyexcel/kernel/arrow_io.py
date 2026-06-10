@@ -41,7 +41,8 @@ from typing import Any, List, Tuple
 import pyarrow as pa
 import pyarrow.ipc as ipc
 
-from .types import Formula
+from .chart import convert_figure
+from .types import ChartImage, ChartSpec, Formula
 
 try:
     import pandas as pd
@@ -67,6 +68,10 @@ _META_ORIENT = b"pyexcel-orientation"
 _FIELD_META_CELL_TYPE = b"pyexcel-cell-type"
 _CELL_TYPE_FORMULA = b"formula"
 
+# Field-level metadata key for image payloads: the rendered format of the
+# binary column ("svg" or "png"). Only present on shape=image buffers.
+_FIELD_META_IMAGE_FORMAT = b"pyexcel-image-format"
+
 
 class Shape(bytes, enum.Enum):
     """The high-level shape of a value flowing across the kernel boundary.
@@ -77,6 +82,10 @@ class Shape(bytes, enum.Enum):
     TABLE = b"table"
     VECTOR = b"vector"
     SCALAR = b"scalar"
+    # Chart spec JSON (string scalar) — the host builds a native Excel chart.
+    CHART = b"chart"
+    # Rendered figure image (binary scalar) — the host embeds a picture.
+    IMAGE = b"image"
 
 
 class Orientation(bytes, enum.Enum):
@@ -110,6 +119,11 @@ def encode(value: Any, *, orientation: Orientation = Orientation.COLUMN) -> byte
     Raises:
         TypeError: ``value`` is not one of the supported shapes.
     """
+    # Plotly figure → ChartSpec, Matplotlib figure → ChartImage; everything
+    # else passes through untouched. Conversion happens at the encode door
+    # so user transform() functions can return figures directly.
+    value = convert_figure(value)
+
     table, shape = _value_to_table(value)
 
     metadata = dict(table.schema.metadata) if table.schema.metadata else {}
@@ -148,6 +162,21 @@ def _value_to_table(value: Any) -> Tuple[pa.Table, Shape]:
         raise TypeError(
             f"numpy arrays must be 1-D or 2-D for kernel transport, got {value.ndim}-D"
         )
+
+    if isinstance(value, ChartSpec):
+        # Chart spec: 1×1 string table; the CHART shape marker is what the
+        # host dispatches on, no field metadata needed.
+        arr = pa.array([value.json], type=pa.string())
+        return pa.Table.from_arrays([arr], names=["0"]), Shape.CHART
+
+    if isinstance(value, ChartImage):
+        # Image: 1×1 binary table with the rendered format on the field so
+        # the host knows the file extension to embed with.
+        field = pa.field("0", pa.binary()).with_metadata(
+            {_FIELD_META_IMAGE_FORMAT: value.format.encode("ascii")}
+        )
+        arr = pa.array([value.data], type=pa.binary())
+        return pa.Table.from_arrays([arr], schema=pa.schema([field])), Shape.IMAGE
 
     if isinstance(value, Formula):
         # Scalar formula: 1×1 string table with the formula field marker so
@@ -214,6 +243,18 @@ def decode(buf: bytes) -> Any:
     table = reader.read_all()
     metadata = table.schema.metadata or {}
     shape_bytes = metadata.get(_META_SHAPE, Shape.TABLE.value)
+
+    if shape_bytes == Shape.CHART.value:
+        if table.num_columns == 0 or table.num_rows == 0:
+            raise ValueError("chart-shaped buffer carries no spec cell")
+        return ChartSpec(table.column(0)[0].as_py())
+
+    if shape_bytes == Shape.IMAGE.value:
+        if table.num_columns == 0 or table.num_rows == 0:
+            raise ValueError("image-shaped buffer carries no data cell")
+        field_md = table.schema.field(0).metadata or {}
+        fmt = field_md.get(_FIELD_META_IMAGE_FORMAT, b"png").decode("ascii")
+        return ChartImage(table.column(0)[0].as_py(), fmt)
 
     if shape_bytes == Shape.SCALAR.value:
         if table.num_columns == 0 or table.num_rows == 0:

@@ -622,6 +622,86 @@ public class PyRunTests
     }
 
     // -------------------------------------------------------------------------
+    // Chart round-trip — user transform() returns a Plotly / Matplotlib
+    // figure; the kernel converts (chart spec JSON / rendered image) and
+    // the host decodes the typed wire value. Cross-language conformance
+    // for the Phase 6 chart pipeline; the COM ChartBuilder consuming
+    // these is the Windows smoke test.
+    // -------------------------------------------------------------------------
+
+    [Fact]
+    public void Execute_PythonReturnsPlotlyFigure_DecodesAsChartSpec()
+    {
+        using var fx = new KernelFixture();
+        var script = fx.WriteScript("plotly_chart.py",
+            "import plotly.graph_objects as go\n" +
+            "def transform():\n" +
+            "    fig = go.Figure(data=[go.Scatter(x=[1, 2, 3], y=[4, 5, 6], name='prices')])\n" +
+            "    fig.update_layout(title='Demo')\n" +
+            "    return fig\n");
+
+        var result = PyRun.Execute(
+            script: script,
+            input: null,
+            kwargs: null,
+            client: fx.Client);
+
+        var spec = Assert.IsType<ChartSpec>(result);
+        var doc = ChartSpecParser.Parse(spec.Json);
+        Assert.Equal(1, doc.Version);
+        Assert.Equal("Demo", doc.Title);
+        var trace = Assert.Single(doc.Traces);
+        Assert.Equal("prices", trace.Style.Name);
+        Assert.Equal(new object?[] { 1L, 2L, 3L }, trace.X);
+        Assert.Equal(new object?[] { 4L, 5L, 6L }, trace.Y);
+    }
+
+    [Fact]
+    public void Execute_PythonReturnsMatplotlibFigure_DecodesAsSvgChartImage()
+    {
+        using var fx = new KernelFixture();
+        var script = fx.WriteScript("mpl_chart.py",
+            "import matplotlib\n" +
+            "matplotlib.use('Agg')\n" +
+            "import matplotlib.pyplot as plt\n" +
+            "def transform():\n" +
+            "    fig, ax = plt.subplots()\n" +
+            "    ax.plot([1, 2, 3], [4, 5, 6])\n" +
+            "    return fig\n");
+
+        var result = PyRun.Execute(
+            script: script,
+            input: null,
+            kwargs: null,
+            client: fx.Client);
+
+        var image = Assert.IsType<ChartImage>(result);
+        Assert.Equal(ChartImage.FormatSvg, image.Format);
+        var head = System.Text.Encoding.UTF8.GetString(
+            image.Data, 0, Math.Min(image.Data.Length, 1024));
+        Assert.Contains("<svg", head);
+    }
+
+    [Fact]
+    public void Execute_PythonReturnsUnsupportedFigure_SurfacesBadReturnType()
+    {
+        using var fx = new KernelFixture();
+        var script = fx.WriteScript("box_chart.py",
+            "import plotly.graph_objects as go\n" +
+            "def transform():\n" +
+            "    return go.Figure(data=[go.Box(y=[1, 2, 3])])\n");
+
+        var ex = Assert.Throws<KernelException>(() => PyRun.Execute(
+            script: script,
+            input: null,
+            kwargs: null,
+            client: fx.Client));
+
+        Assert.Equal("BadReturnType", ex.Code);
+        Assert.Contains("box", ex.Message);
+    }
+
+    // -------------------------------------------------------------------------
     // Argument validation (no kernel needed)
     // -------------------------------------------------------------------------
 

@@ -45,10 +45,16 @@ public static class ArrowMarshal
     private const string FieldMetaCellTypeKey = "pyexcel-cell-type";
     private const string CellTypeFormula = "formula";
 
+    // Field-level metadata key for image payloads: the rendered format of
+    // the binary column ("svg" or "png"). Only present on shape=image.
+    private const string FieldMetaImageFormatKey = "pyexcel-image-format";
+
     // Wire values.
     private const string ShapeTable = "table";
     private const string ShapeVector = "vector";
     private const string ShapeScalar = "scalar";
+    private const string ShapeChart = "chart";
+    private const string ShapeImage = "image";
     private const string OrientRow = "row";
     private const string OrientColumn = "column";
 
@@ -169,6 +175,8 @@ public static class ArrowMarshal
             {
                 ArrowShape.Scalar => DecodeScalar(batches, schema),
                 ArrowShape.Vector => DecodeVector(batches, schema),
+                ArrowShape.Chart => DecodeChart(batches),
+                ArrowShape.Image => DecodeImage(batches, schema),
                 _ => DecodeTable(batches, schema),
             };
         }
@@ -367,6 +375,8 @@ public static class ArrowMarshal
         {
             ShapeScalar => ArrowShape.Scalar,
             ShapeVector => ArrowShape.Vector,
+            ShapeChart => ArrowShape.Chart,
+            ShapeImage => ArrowShape.Image,
             _ => ArrowShape.Table,
         };
         var orientation = orientationValue switch
@@ -463,6 +473,46 @@ public static class ArrowMarshal
         var isFormula =
             schema.FieldsList.Count > 0 && IsFormulaField(schema.GetFieldByIndex(0));
         return isFormula ? WrapFormula(cell) : cell;
+    }
+
+    /// <summary>Decode a chart-shaped buffer (1×1 string batch carrying
+    /// the spec JSON) to a typed <see cref="ChartSpec"/>. A chart buffer
+    /// with no cell is a wire-format violation, not a "None" — surface it.</summary>
+    private static ChartSpec DecodeChart(List<RecordBatch> batches)
+    {
+        if (batches.Count == 0 || batches[0].Length == 0 || batches[0].ColumnCount == 0)
+            throw new FormatException("chart-shaped buffer carries no spec cell");
+        if (batches[0].Column(0) is not StringArray strings)
+            throw new FormatException(
+                $"chart-shaped buffer must carry a string column, got {batches[0].Column(0).GetType().Name}");
+        var json = strings.GetString(0);
+        if (json is null)
+            throw new FormatException("chart-shaped buffer carries a null spec cell");
+        return new ChartSpec(json);
+    }
+
+    /// <summary>Decode an image-shaped buffer (1×1 binary batch carrying
+    /// the rendered bytes, format on the field metadata) to a typed
+    /// <see cref="ChartImage"/>.</summary>
+    private static ChartImage DecodeImage(List<RecordBatch> batches, Schema schema)
+    {
+        if (batches.Count == 0 || batches[0].Length == 0 || batches[0].ColumnCount == 0)
+            throw new FormatException("image-shaped buffer carries no data cell");
+        if (batches[0].Column(0) is not BinaryArray binary)
+            throw new FormatException(
+                $"image-shaped buffer must carry a binary column, got {batches[0].Column(0).GetType().Name}");
+        if (binary.IsNull(0))
+            throw new FormatException("image-shaped buffer carries a null data cell");
+        var data = binary.GetBytes(0).ToArray();
+
+        var format = ChartImage.FormatPng;
+        if (schema.FieldsList.Count > 0)
+        {
+            var md = schema.GetFieldByIndex(0).Metadata;
+            if (md is { } && md.TryGetValue(FieldMetaImageFormatKey, out var f))
+                format = f;
+        }
+        return new ChartImage(data, format);
     }
 
     /// <summary>True iff <paramref name="field"/> carries the
