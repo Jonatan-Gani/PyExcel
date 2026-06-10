@@ -357,3 +357,37 @@ These were open; now settled. Recorded here as the source of truth.
 2. **List/scalar transport — everything as Arrow.** Lists become 1-column Arrow batches and scalars 1×1 batches — one uniform marshalling path with full type fidelity, including timestamps. *(Phase 2 `arrow_io.py`, Phase 4)*
 3. **State storage — `CustomXMLPart`.** Per-workbook state is stored as a workbook-attached `CustomXMLPart`: invisible, no length limits, no Name Manager clutter. Phase 9 needs a converter that reads v1's defined Names and writes the new part. *(Phase 3, Phase 9)*
 4. **Forms UI — WinForms.** The 9 dialogs are rebuilt as WinForms — lowest hosting friction with Excel-DNA, near 1:1 with the existing layouts. *(Phase 8)*
+
+## Phase 6 chart transfer — open hardening notes
+
+Robustness assessment of the Phase 6 chart pipeline as it stands. The
+contract layer (figure → spec → JSON → Arrow → typed `ChartSpec` →
+parsed document) is pinned by ~170 tests on both sides and is robust
+against malformed/hostile specs and unsupported figure types (both
+surface clean errors that name the offending element). The items below
+are the residual gaps a Windows + Excel session needs to close.
+
+- [ ] **COM render is unverified.** `ChartBuilder.cs` compiles clean on both target frameworks but has never executed against a real Excel instance. The COM calls are late-bound `dynamic`, so a wrong member name or hand-entered enum constant (`xlXYScatter = -4169` and ~25 friends) only surfaces at runtime. Same posture as every Phase 3–5 COM tail; the Windows smoke test (a Plotly figure renders, a Matplotlib figure embeds, a malformed spec fails clean with no orphan ChartObject) is the gating verification.
+- [ ] **Cosmetic styling degrades quietly.** Colours / dashes / markers / per-point labels are individually `try`-guarded so a rejected COM call logs to `Trace` and the chart still appears, possibly less styled. This is deliberate (a missed colour must not cost the user the chart) but means "chart looks slightly off" doesn't throw. A user-facing toggle to surface cosmetic failures (or a per-run summary in `LogDisplay` listing what was skipped) would close this.
+- [ ] **No point-count guard.** Excel's series cap is ~32k points; a million-point scatter would produce a huge JSON spec and a COM rejection at `Series.Values =` assignment time. Failure mode is correct (surfaced error, no corruption) but the diagnostic isn't friendly. Add an early limit in `ChartSpecParser` (configurable, default 32k) that throws `FormatException` with a clear "too many points; reduce or aggregate upstream" message.
+- [ ] **SVG embedding assumes Excel 2016+.** Pre-2016 Excel rejects SVG in `Shapes.AddPicture`; today the error surfaces to `LogDisplay` but the picture doesn't land. The kernel-side PNG fallback only triggers when SVG *rendering* fails on the Python side, not when *embedding* fails on the host side. Either detect the Excel version up-front and request PNG from the kernel, or fall back to a host-side rasteriser when `AddPicture(svg, …)` throws.
+
+## Future development — chart support expansion
+
+Plotly is broad; the Phase 6 port covers the v1 subset of trace types
+plus a few Phase-6-era additions (bubble auto-detection, `scatter+fill`
+→ area, pie via `labels`/`values`). The list below is what a user
+following the Plotly docs might reach for that the v2 chart pipeline
+currently does not render — none of these are bugs in what's shipped;
+they are scope to expand when there is a clear user case.
+
+- [ ] **Subplots / facets.** A `plotly.subplots.make_subplots` figure renders only the first subplot's traces against a single chart area. Native Excel has no equivalent multi-pane container; the realistic path is to emit one `ChartObject` per subplot tiled in a grid (output range divided into N×M cells). Requires a new `subplots` block in the spec schema.
+- [ ] **Multiple secondary axes.** Anything beyond `yaxis="y2"` (so `y3`, `y4`, …) is collapsed into the single `secondary` axis group. Excel itself only natively supports one secondary y-axis per chart group, so this is partly a fundamental limit, but the parser could at least surface a warning instead of silently merging.
+- [ ] **Per-point colour arrays.** A `marker=dict(color=[…per point colors…])` is currently reduced to a single representative colour for the series. Rendering per-point colour needs a `Points(i).Format.Fill` loop in `ChartBuilder` and a per-point colour array on the spec (currently only `pt[].style.color` exists for annotations, not data points).
+- [ ] **Area `stackgroup`.** Plotly's stacked-area mode (`stackgroup="one"`) currently lands as overlapping area series rather than a true stacked area. The series-type map already handles `area_stacked` for the explicit case; wiring `stackgroup` detection into `_series_type_for` would close it.
+- [ ] **Horizontal histogram.** `go.Histogram(y=...)` (a horizontal histogram) currently yields no data because the binning path reads `trace.x` only. Either bin `y` symmetrically and swap axes, or surface "horizontal histogram not supported" instead of an empty trace.
+- [ ] **Box / violin / heatmap / waterfall / candlestick / OHLC.** Today these raise `UnsupportedChartTypeError` with a clear message — the right behaviour for "we don't render this". A future slice could add native renders for the subset Excel supports directly (Excel has native box plot, waterfall, and histogram chart types since 2016; `xlBoxwhisker = 121`, `xlWaterfall = 119` already exist in the COM enum), gated on user demand.
+- [ ] **3-D charts.** `scatter3d` / `surface` / `mesh3d` — Excel's 3-D chart types are weak, and the v1 add-in never supported these. Probably permanent "no".
+- [ ] **Animation frames.** Plotly's `frames` (sliders, play button) have no Excel counterpart. Permanent "no".
+
+
