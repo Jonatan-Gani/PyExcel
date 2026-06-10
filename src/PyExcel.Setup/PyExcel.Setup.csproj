@@ -1,0 +1,61 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <!--
+      Multi-target so Linux CI can build the netstandard2.0 slice and the
+      .xll consumes the net48 slice in-proc. Nothing in here references
+      Excel COM, ExcelDna, or WinForms — the first-run wizard UI is the
+      Phase 8 deliverable that wraps this assembly with WinForms forms;
+      everything below the UI line (kernel extraction, venv creation,
+      pip install, dependency verification, path resolution) is pure .NET
+      so it can be unit-tested on both lanes.
+    -->
+    <TargetFrameworks>net48;netstandard2.0</TargetFrameworks>
+    <RootNamespace>PyExcel.Setup</RootNamespace>
+    <AssemblyName>PyExcel.Setup</AssemblyName>
+    <Platforms>x64;AnyCPU</Platforms>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\PyExcel.Common\PyExcel.Common.csproj" />
+  </ItemGroup>
+
+  <!--
+    Embed the kernel Python sources and the canonical requirements file
+    as .NET resources so the .xll is fully self-contained. v1 used a
+    base64-encoded sheet plus chunked assembly via Setup.bas; v2 ships
+    the same bytes as ordinary <EmbeddedResource> items, and
+    KernelResourceExtractor writes them back to disk at first-run.
+
+    LogicalName forces a flat naming scheme that mirrors the on-disk
+    layout: `pyexcel/__init__.py`, `pyexcel/kernel/__main__.py`, etc.
+    Without LogicalName, MSBuild would derive the manifest name from the
+    project's RootNamespace + path-with-dots, which would break round-
+    tripping back to a directory tree.
+  -->
+  <ItemGroup>
+    <EmbeddedResource Include="..\..\embedded\pyexcel\__init__.py"
+                      LogicalName="pyexcel/__init__.py" />
+    <EmbeddedResource Include="..\..\embedded\pyexcel\kernel\__init__.py"
+                      LogicalName="pyexcel/kernel/__init__.py" />
+    <EmbeddedResource Include="..\..\embedded\pyexcel\kernel\__main__.py"
+                      LogicalName="pyexcel/kernel/__main__.py" />
+    <EmbeddedResource Include="..\..\embedded\pyexcel\kernel\arrow_io.py"
+                      LogicalName="pyexcel/kernel/arrow_io.py" />
+    <EmbeddedResource Include="..\..\embedded\pyexcel\kernel\chart.py"
+                      LogicalName="pyexcel/kernel/chart.py" />
+    <EmbeddedResource Include="..\..\embedded\pyexcel\kernel\framing.py"
+                      LogicalName="pyexcel/kernel/framing.py" />
+    <EmbeddedResource Include="..\..\embedded\pyexcel\kernel\supervisor.py"
+                      LogicalName="pyexcel/kernel/supervisor.py" />
+    <EmbeddedResource Include="..\..\embedded\pyexcel\kernel\transport.py"
+                      LogicalName="pyexcel/kernel/transport.py" />
+    <EmbeddedResource Include="..\..\embedded\pyexcel\kernel\types.py"
+                      LogicalName="pyexcel/kernel/types.py" />
+    <EmbeddedResource Include="..\..\embedded\pyexcel\kernel\worker.py"
+                      LogicalName="pyexcel/kernel/worker.py" />
+    <EmbeddedResource Include="..\..\requirements.txt"
+                      LogicalName="pyexcel/requirements.txt" />
+  </ItemGroup>
+
+</Project>

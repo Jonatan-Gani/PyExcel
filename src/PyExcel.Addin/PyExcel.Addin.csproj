@@ -92,6 +92,10 @@
     <ProjectReference Include="..\PyExcel.Common\PyExcel.Common.csproj" />
     <ProjectReference Include="..\PyExcel.Ribbon\PyExcel.Ribbon.csproj" />
     <ProjectReference Include="..\PyExcel.State\PyExcel.State.csproj" />
+    <!-- PyExcel.Setup ships the embedded kernel sources + the venv/pip
+         pipeline; first-run wizard (Phase 8) plus any future bootstrap
+         path drives it from this assembly. -->
+    <ProjectReference Include="..\PyExcel.Setup\PyExcel.Setup.csproj" />
   </ItemGroup>
 
   <!--
