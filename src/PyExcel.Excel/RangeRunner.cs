@@ -240,13 +240,43 @@ public static class RangeRunner
 
     /// <summary>Write a decoded result into the output range. A table
     /// result resizes the anchor to its dimensions; a scalar drops into
-    /// the top-left cell. A <c>None</c> return writes nothing.</summary>
+    /// the top-left cell. A <c>None</c> return writes nothing. A chart
+    /// spec builds a native chart anchored at the output range; a chart
+    /// image embeds as a picture there.</summary>
     private static void WriteResult(string outputAddress, object result)
     {
         if (ReferenceEquals(result, PyRun.EmptyResult)) return;
 
         dynamic app = ExcelDnaUtil.Application;
         dynamic anchor = app.Range[outputAddress];
+
+        if (result is ChartSpec chartSpec)
+        {
+            // Parse before touching the sheet so a malformed spec fails
+            // with a clean message and no orphan ChartObject.
+            var document = ChartSpecParser.Parse(chartSpec.Json);
+
+            double left = (double)anchor.Left;
+            double top = (double)anchor.Top;
+            // A multi-cell output range doubles as the chart's footprint;
+            // a single-cell anchor gets the v1 default size.
+            double width = (double)anchor.Width;
+            double height = (double)anchor.Height;
+            if ((int)anchor.Cells.Count <= 1)
+            {
+                width = 800;
+                height = 500;
+            }
+            ChartBuilder.Build(anchor.Worksheet, document, left, top, width, height);
+            return;
+        }
+
+        if (result is ChartImage chartImage)
+        {
+            ChartBuilder.EmbedImage(
+                anchor.Worksheet, chartImage, (double)anchor.Left, (double)anchor.Top);
+            return;
+        }
 
         if (result is object?[,] table)
         {

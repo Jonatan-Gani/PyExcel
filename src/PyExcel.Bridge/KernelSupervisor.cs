@@ -13,6 +13,9 @@ using System.Threading;
 using System.Threading.Tasks;
 
 [assembly: InternalsVisibleTo("PyExcel.Kernel.Client")]
+// PyExcel.Excel's ChartSpecParser reuses CanonicalJson to parse the chart
+// spec document — same dependency-free JSON codec on both wire layers.
+[assembly: InternalsVisibleTo("PyExcel.Excel")]
 [assembly: InternalsVisibleTo("PyExcel.Bridge.Tests")]
 
 namespace PyExcel.Bridge;

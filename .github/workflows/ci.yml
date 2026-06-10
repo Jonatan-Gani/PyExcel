@@ -26,10 +26,11 @@ jobs:
           python-version: '3.12'
 
       - name: Install Python kernel dependencies
-        # Kernel runtime requires pyarrow/pandas/numpy (see requirements.txt).
-        # plotly/matplotlib are intentionally excluded until worker.py needs them —
-        # they add ~150 MB to the CI install for no test benefit yet.
-        run: python -m pip install --upgrade pip pytest pyarrow pandas numpy
+        # The full requirements.txt set: pyarrow/pandas/numpy for the data
+        # plane, plotly/matplotlib for the Phase 6 chart pipeline (figure →
+        # chart spec / image tests in tests/kernel/test_chart.py and the
+        # PyRunTests chart round-trips).
+        run: python -m pip install --upgrade pip pytest pyarrow pandas numpy plotly matplotlib
 
       - name: Build PyExcel.Common (netstandard2.0)
         run: >-
@@ -82,7 +83,7 @@ jobs:
           python-version: '3.12'
 
       - name: Install Python kernel dependencies
-        run: python -m pip install --upgrade pip pyarrow pandas numpy
+        run: python -m pip install --upgrade pip pyarrow pandas numpy plotly matplotlib
         shell: pwsh
 
       - name: Restore

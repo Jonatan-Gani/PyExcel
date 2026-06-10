@@ -94,6 +94,18 @@ public static class PasteService
                 return;
             }
 
+            if (decoded is ChartSpec or ChartImage)
+            {
+                // A chart isn't cell data — pasting it would write a
+                // ToString() artefact. Charts render at run time via the
+                // Run Python button; pointing the user there is the
+                // actionable path.
+                Warn($"Paste: run {plan.SourceRunId} produced a chart, which " +
+                     "can't be pasted into cells — re-run the script with " +
+                     "the Run Python button to render it.");
+                return;
+            }
+
             // --- main thread: preflight + write back ---------------------
             ExcelAsyncUtil.QueueAsMacro(() =>
             {

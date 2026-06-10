@@ -287,9 +287,18 @@ public static class PyRunFunction
 
     private static object ToExcelOutput(object result)
     {
-        return ReferenceEquals(result, PyRun.EmptyResult)
-            ? ExcelEmpty.Value
-            : result;
+        if (ReferenceEquals(result, PyRun.EmptyResult))
+            return ExcelEmpty.Value;
+
+        // Charts can't live in a cell, and a UDF re-runs on every recalc —
+        // building a new ChartObject per calc would litter the sheet. The
+        // ribbon's Run Python button (RangeRunner) is the chart path; the
+        // cell gets an explicit pointer there instead of a silent
+        // ToString() artefact.
+        if (result is ChartSpec or ChartImage)
+            return "[PyExcel chart — use the ribbon's Run Python button to render it]";
+
+        return result;
     }
 
     private static string ResolveFunctionName(object function)
