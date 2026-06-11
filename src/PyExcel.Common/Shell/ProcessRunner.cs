@@ -2,10 +2,17 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
+using System.Runtime.CompilerServices;
 using System.Text;
 using System.Threading;
-using System.Threading.Tasks;
 using PyExcel.Common.Logging;
+
+// The argv quoter (QuoteArgs) is an internal implementation detail of
+// the CommandLineToArgvW round-trip, but its correctness is worth
+// testing directly — the edge cases (trailing backslashes, embedded
+// quotes) are exactly the kind that break silently. Expose internals to
+// the test assembly, same pattern PyExcel.Bridge uses for its tests.
+[assembly: InternalsVisibleTo("PyExcel.Bridge.Tests")]
 
 namespace PyExcel.Common.Shell;
 
