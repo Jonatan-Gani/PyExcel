@@ -85,6 +85,37 @@ public static class RibbonRangeParser
 
         return result;
     }
+
+    /// <summary>
+    /// Serialise bindings back into the ribbon text syntax that
+    /// <see cref="Parse"/> reads — the inverse of <see cref="Parse"/>. A named
+    /// binding becomes <c>name=range</c>; an anonymous one is just the range;
+    /// entries join with <c>"; "</c>. Rows whose range text is blank are
+    /// skipped. <c>Parse(Format(x))</c> round-trips back to the same bindings.
+    /// </summary>
+    public static string Format(IEnumerable<RangeBinding> bindings)
+    {
+        if (bindings is null) throw new ArgumentNullException(nameof(bindings));
+
+        var sb = new System.Text.StringBuilder();
+        foreach (var b in bindings)
+        {
+            if (b is null) continue;
+            var range = (b.RangeText ?? string.Empty).Trim();
+            if (range.Length == 0) continue;
+
+            if (sb.Length > 0) sb.Append("; ");
+
+            var name = b.Name?.Trim();
+            if (name is not null && name.Length > 0)
+            {
+                sb.Append(name);
+                sb.Append('=');
+            }
+            sb.Append(range);
+        }
+        return sb.ToString();
+    }
 }
 
 /// <summary>

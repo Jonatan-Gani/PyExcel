@@ -9,61 +9,61 @@ namespace PyExcel.Forms;
 
 /// <summary>
 /// The Add / Edit-action dialog (Phase 8 port of v1's <c>frmEditAction</c>,
-/// reshaped onto the slimmer v2 <see cref="RibbonAction"/> model: a name,
-/// a script, an input range, an output range, and optional keyword
-/// arguments). The COM-bound ribbon shows it from <c>OnAddAction</c> /
-/// <c>OnEditAction</c> and hands the result to <c>StateService.AddAction</c>.
+/// reshaped onto the slimmer v2 <see cref="RibbonAction"/> model: a name, a
+/// script, input ranges, output ranges, and optional keyword arguments).
 ///
-/// <para>All field validation runs through the cross-platform
-/// <see cref="EditActionValidator"/> and <see cref="KwargsText"/>, so the
-/// dialog's decisions are tested on Linux CI; this class is only the
-/// WinForms shell and so lives behind <c>#if NETFRAMEWORK</c>.</para>
+/// <para>Notes 2 &amp; 4: the input/output ranges are edited as lists
+/// (<see cref="RangeListEditor"/> — add/edit/remove/reorder, each row picked
+/// with Excel's native range selector and optionally named), and the Script
+/// field has a "New…" button (<see cref="ScriptScaffold"/>) so a fresh
+/// workbook with no scripts isn't a dead end.</para>
 ///
-/// <para>The form is shown modally with an owner (no off-screen
-/// <c>(-20000,-20000)</c> hide hack from v1), validates on Save, and only
-/// closes when the input is valid — invalid input is surfaced inline,
-/// never pushed downstream.</para>
+/// <para>Field validation runs through the cross-platform
+/// <see cref="EditActionValidator"/> and <see cref="KwargsText"/>; the list
+/// editors serialise back to the same <c>{name}=range; …</c> string the
+/// validator already expects, so the decisions stay unit-tested on Linux CI.
+/// This class is only the WinForms shell, behind <c>#if NETFRAMEWORK</c>.</para>
 /// </summary>
 public sealed class EditActionForm : Form
 {
     private readonly TextBox _nameBox;
     private readonly ComboBox _scriptBox;
-    private readonly TextBox _inputBox;
-    private readonly TextBox _outputBox;
+    private readonly RangeListEditor _inputEditor;
+    private readonly RangeListEditor _outputEditor;
     private readonly TextBox _kwargsBox;
     private readonly Label _errorLabel;
 
     private readonly IReadOnlyList<string> _existingActionNames;
     private readonly string? _originalName;
-    private readonly Func<string?>? _selectionProvider;
+    private readonly string? _userScriptsDirectory;
 
     /// <summary>The action the user built, valid only after the dialog
     /// returns <see cref="DialogResult.OK"/>.</summary>
     public RibbonAction? Result { get; private set; }
 
     /// <summary>
-    /// Show the dialog modally and return the resulting action, or null if
-    /// the user cancelled. The single entry point the ribbon calls.
+    /// Show the dialog modally and return the resulting action, or null if the
+    /// user cancelled.
     /// </summary>
-    /// <param name="owner">The Excel main window to own the modal, so it
-    /// can't be lost behind Excel or off-screen.</param>
+    /// <param name="owner">Excel's main window, so the modal can't be lost.</param>
     /// <param name="availableScripts">Scripts the user can pick from.</param>
-    /// <param name="existingActionNames">Names already in the workbook,
-    /// used to reject a duplicate name.</param>
-    /// <param name="existing">The action being edited, or null to add a
-    /// new one.</param>
-    /// <param name="selectionProvider">Optional provider of the active
-    /// Excel selection's address; when supplied, the input/output range
-    /// fields get a "Pick…" button opening the range picker.</param>
+    /// <param name="existingActionNames">Names already in the workbook, used
+    /// to reject a duplicate.</param>
+    /// <param name="existing">The action being edited, or null to add.</param>
+    /// <param name="rangePicker">Native range picker (initial → picked
+    /// address). When supplied, the range rows get a "Pick…" button.</param>
+    /// <param name="userScriptsDirectory">The workbook's <c>userScripts</c>
+    /// folder. When supplied, the "New…" script button is enabled.</param>
     public static RibbonAction? Prompt(
         IWin32Window? owner,
         IReadOnlyList<string> availableScripts,
         IReadOnlyList<string> existingActionNames,
         RibbonAction? existing,
-        Func<string?>? selectionProvider = null)
+        Func<string?, string?>? rangePicker = null,
+        string? userScriptsDirectory = null)
     {
         using var form = new EditActionForm(
-            availableScripts, existingActionNames, existing, selectionProvider);
+            availableScripts, existingActionNames, existing, rangePicker, userScriptsDirectory);
         var result = owner is null ? form.ShowDialog() : form.ShowDialog(owner);
         return result == DialogResult.OK ? form.Result : null;
     }
@@ -72,11 +72,12 @@ public sealed class EditActionForm : Form
         IReadOnlyList<string> availableScripts,
         IReadOnlyList<string> existingActionNames,
         RibbonAction? existing,
-        Func<string?>? selectionProvider)
+        Func<string?, string?>? rangePicker,
+        string? userScriptsDirectory)
     {
         _existingActionNames = existingActionNames ?? Array.Empty<string>();
         _originalName = existing?.Name;
-        _selectionProvider = selectionProvider;
+        _userScriptsDirectory = userScriptsDirectory;
 
         Text = existing is null ? "Add Action" : "Edit Action";
         FormBorderStyle = FormBorderStyle.FixedDialog;
@@ -84,12 +85,12 @@ public sealed class EditActionForm : Form
         MaximizeBox = false;
         MinimizeBox = false;
         ShowInTaskbar = false;
-        ClientSize = new Size(420, 360);
+        ClientSize = new Size(440, 500);
         Font = SystemFonts.MessageBoxFont;
 
         const int labelX = 12;
         const int fieldX = 110;
-        const int fieldWidth = 296;
+        const int fieldWidth = 316;
         var y = 14;
 
         AddLabel("Name:", labelX, y + 3);
@@ -102,29 +103,35 @@ public sealed class EditActionForm : Form
         {
             Left = fieldX,
             Top = y,
-            Width = fieldWidth,
+            Width = fieldWidth - 84,
             DropDownStyle = ComboBoxStyle.DropDownList,
             TabIndex = 1,
         };
         foreach (var s in availableScripts ?? Array.Empty<string>())
             _scriptBox.Items.Add(s);
         Controls.Add(_scriptBox);
-        y += 32;
+        var newScript = new Button
+        {
+            Text = "New…",
+            Left = fieldX + fieldWidth - 80,
+            Top = y - 1,
+            Width = 80,
+            TabIndex = 2,
+            Enabled = _userScriptsDirectory is not null,
+        };
+        newScript.Click += (_, _) => OnNewScript();
+        Controls.Add(newScript);
+        y += 34;
 
-        bool canPick = _selectionProvider is not null;
-        int rangeWidth = canPick ? fieldWidth - 84 : fieldWidth;
+        AddLabel("Input ranges:", labelX, y + 3);
+        _inputEditor = new RangeListEditor(rangePicker) { Left = fieldX, Top = y, TabIndex = 3 };
+        Controls.Add(_inputEditor);
+        y += 128;
 
-        AddLabel("Input range:", labelX, y + 3);
-        _inputBox = new TextBox { Left = fieldX, Top = y, Width = rangeWidth, TabIndex = 2 };
-        Controls.Add(_inputBox);
-        if (canPick) AddPickButton(_inputBox, fieldX + rangeWidth + 4, y - 1, tabIndex: 7);
-        y += 32;
-
-        AddLabel("Output range:", labelX, y + 3);
-        _outputBox = new TextBox { Left = fieldX, Top = y, Width = rangeWidth, TabIndex = 3 };
-        Controls.Add(_outputBox);
-        if (canPick) AddPickButton(_outputBox, fieldX + rangeWidth + 4, y - 1, tabIndex: 8);
-        y += 32;
+        AddLabel("Output ranges:", labelX, y + 3);
+        _outputEditor = new RangeListEditor(rangePicker) { Left = fieldX, Top = y, TabIndex = 4 };
+        Controls.Add(_outputEditor);
+        y += 128;
 
         AddLabel("Keyword args:", labelX, y + 3);
         _kwargsBox = new TextBox
@@ -132,15 +139,15 @@ public sealed class EditActionForm : Form
             Left = fieldX,
             Top = y,
             Width = fieldWidth,
-            Height = 96,
+            Height = 56,
             Multiline = true,
             ScrollBars = ScrollBars.Vertical,
             AcceptsReturn = true,
-            TabIndex = 4,
+            TabIndex = 5,
         };
         Controls.Add(_kwargsBox);
-        AddLabel("one name=value per line", fieldX, y + 100, dim: true);
-        y += 124;
+        AddLabel("one name=value per line", fieldX, y + 58, dim: true);
+        y += 84;
 
         _errorLabel = new Label
         {
@@ -160,7 +167,7 @@ public sealed class EditActionForm : Form
             Left = ClientSize.Width - 178,
             Top = ClientSize.Height - 36,
             Width = 80,
-            TabIndex = 5,
+            TabIndex = 6,
         };
         saveButton.Click += OnSaveClick;
         Controls.Add(saveButton);
@@ -172,7 +179,7 @@ public sealed class EditActionForm : Form
             Left = ClientSize.Width - 92,
             Top = ClientSize.Height - 36,
             Width = 80,
-            TabIndex = 6,
+            TabIndex = 7,
         };
         Controls.Add(cancelButton);
 
@@ -183,21 +190,28 @@ public sealed class EditActionForm : Form
         {
             _nameBox.Text = existing.Name;
             _scriptBox.SelectedItem = existing.Script;
-            _inputBox.Text = existing.Input;
-            _outputBox.Text = existing.Output;
             _kwargsBox.Text = KwargsText.Format(existing.Kwargs);
         }
+        _inputEditor.LoadFrom(existing?.Input);
+        _outputEditor.LoadFrom(existing?.Output);
     }
 
-    private void AddPickButton(TextBox target, int left, int top, int tabIndex)
+    private void OnNewScript()
     {
-        var pick = new Button { Text = "Pick…", Left = left, Top = top, Width = 80, TabIndex = tabIndex };
-        pick.Click += (_, _) =>
+        if (_userScriptsDirectory is null) return;
+        try
         {
-            var picked = RangePickerForm.Prompt(this, target.Text, _selectionProvider);
-            if (picked is not null) target.Text = picked;
-        };
-        Controls.Add(pick);
+            var name = TextPromptForm.Prompt(this, "New Script", "Script name:");
+            if (string.IsNullOrWhiteSpace(name)) return;
+            var fileName = ScriptScaffold.Create(_userScriptsDirectory, name);
+            if (!_scriptBox.Items.Contains(fileName)) _scriptBox.Items.Add(fileName);
+            _scriptBox.SelectedItem = fileName;
+            _errorLabel.Visible = false;
+        }
+        catch (Exception ex)
+        {
+            ShowError("Couldn't create the script: " + ex.Message);
+        }
     }
 
     private void AddLabel(string text, int x, int top, bool dim = false)
@@ -224,8 +238,8 @@ public sealed class EditActionForm : Form
         var result = EditActionValidator.Validate(
             _nameBox.Text,
             _scriptBox.SelectedItem as string,
-            _inputBox.Text,
-            _outputBox.Text,
+            _inputEditor.ToBindingText(),
+            _outputEditor.ToBindingText(),
             kwargs,
             _existingActionNames,
             _originalName);

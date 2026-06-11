@@ -444,7 +444,8 @@ public class PyExcelRibbon : ExcelRibbon
             state.AvailableScripts,
             ActionNames(state),
             existing: null,
-            selectionProvider: CurrentSelectionAddress);
+            rangePicker: PickRangeNative,
+            userScriptsDirectory: UserScriptsDir());
         if (result is null) { _log.Info("OnAddAction: cancelled"); return; }
 
         PyExcelServices.State.AddAction(key, result);
@@ -465,7 +466,8 @@ public class PyExcelRibbon : ExcelRibbon
             state.AvailableScripts,
             ActionNames(state),
             existing,
-            selectionProvider: CurrentSelectionAddress);
+            rangePicker: PickRangeNative,
+            userScriptsDirectory: UserScriptsDir());
         if (result is null) { _log.Info("OnEditAction: cancelled"); return; }
 
         // AddAction upserts by name, so a rename would leave the original
@@ -498,24 +500,14 @@ public class PyExcelRibbon : ExcelRibbon
         public IntPtr Handle { get; }
     }
 
-    /// <summary>The active selection's address as <c>Sheet!A1:B2</c>, for
-    /// the range picker's "Use current selection" button. Returns null when
-    /// the selection isn't a range (a chart, a shape) or COM is unhappy —
-    /// the picker then just hides the button / keeps the typed text.</summary>
-    private static string? CurrentSelectionAddress()
+    /// <summary>The active workbook's <c>userScripts</c> folder, or null if the
+    /// workbook hasn't been saved (no on-disk location yet). Passed to the
+    /// EditAction dialog so its "New…" button can scaffold a script there
+    /// (Note 2). The convention matches OnEditPython / ScriptDirectoryWatcher.</summary>
+    private static string? UserScriptsDir()
     {
-        try
-        {
-            dynamic app = ExcelDnaUtil.Application;
-            dynamic selection = app.Selection;
-            string address = (string)selection.Address[false, false];
-            string sheet = (string)selection.Worksheet.Name;
-            return $"{sheet}!{address}";
-        }
-        catch
-        {
-            return null;
-        }
+        var dir = PyExcelServices.WorkbookContext.CurrentWorkbookDirectory;
+        return string.IsNullOrEmpty(dir) ? null : Path.Combine(dir!, "userScripts");
     }
 
     /// <summary>
