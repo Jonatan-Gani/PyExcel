@@ -7,6 +7,8 @@ namespace PyExcel.Addin;
 
 // Declared inside the namespace deliberately — see the note in AppEventSink.cs.
 using Excel = Microsoft.Office.Interop.Excel;
+// Alias for the v1 Name-key constants so the reads below stay readable.
+using LN = PyExcel.State.LegacyStateConverter.LegacyNames;
 
 /// <summary>
 /// The Windows-only COM half of the v1 → v2 state migration: reads the v1
@@ -40,7 +42,7 @@ internal static class LegacyStateReader
         if (workbook is null) throw new ArgumentNullException(nameof(workbook));
         try
         {
-            string? enabled = ReadFromNames(workbook.Names, LegacyStateConverter.LegacyNames.Enabled);
+            string? enabled = ReadFromNames(workbook.Names, LN.Enabled);
 
             foreach (Excel.Worksheet ws in workbook.Worksheets)
             {
@@ -65,20 +67,19 @@ internal static class LegacyStateReader
     private static LegacyWorkbookState ReadSheet(Excel.Worksheet ws, string? enabled)
     {
         Excel.Names names = ws.Names;
-        var N = LegacyStateConverter.LegacyNames;
         return new LegacyWorkbookState
         {
             Enabled = enabled,
-            SelectedAction = ReadFromNames(names, N.SelectedAction),
-            Actions = ReadFromNames(names, N.Actions),
-            SelectedScript = ReadFromNames(names, N.SelectedScript),
-            PyInput = ReadFromNames(names, N.PyInput),
-            PyOutput = ReadFromNames(names, N.PyOutput),
-            ImportInput = ReadFromNames(names, N.ImportInput),
-            ImportOutput = ReadFromNames(names, N.ImportOutput),
-            ExportInput = ReadFromNames(names, N.ExportInput),
-            ExportOutput = ReadFromNames(names, N.ExportOutput),
-            PasteOutput = ReadFromNames(names, N.PasteOutput),
+            SelectedAction = ReadFromNames(names, LN.SelectedAction),
+            Actions = ReadFromNames(names, LN.Actions),
+            SelectedScript = ReadFromNames(names, LN.SelectedScript),
+            PyInput = ReadFromNames(names, LN.PyInput),
+            PyOutput = ReadFromNames(names, LN.PyOutput),
+            ImportInput = ReadFromNames(names, LN.ImportInput),
+            ImportOutput = ReadFromNames(names, LN.ImportOutput),
+            ExportInput = ReadFromNames(names, LN.ExportInput),
+            ExportOutput = ReadFromNames(names, LN.ExportOutput),
+            PasteOutput = ReadFromNames(names, LN.PasteOutput),
         };
     }
 
@@ -89,7 +90,7 @@ internal static class LegacyStateReader
     {
         try
         {
-            Excel.Name nm = names[id];
+            Excel.Name nm = names.Item(id);
             return LegacyFormulaDecoder.Decode(nm.RefersTo as string);
         }
         catch
