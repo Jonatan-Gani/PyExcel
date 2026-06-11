@@ -329,4 +329,66 @@ public class LegacyStateConverterTests
         Assert.Equal(migrated.Actions[0], restored.Actions[0]);
         Assert.Equal(migrated.Actions[1], restored.Actions[1]);
     }
+
+    // -------------------------------------------------------------------------
+    // HasSheetContent — the migration driver's "is this sheet worth carrying?"
+    // -------------------------------------------------------------------------
+
+    [Fact]
+    public void HasSheetContent_EmptyOrEnabledOnly_IsFalse()
+    {
+        Assert.False(LegacyStateConverter.HasSheetContent(new LegacyWorkbookState()));
+        // Enabled is workbook-scoped, not sheet content — ignored here.
+        Assert.False(LegacyStateConverter.HasSheetContent(
+            new LegacyWorkbookState { Enabled = "1" }));
+        // Blank/whitespace fields don't count.
+        Assert.False(LegacyStateConverter.HasSheetContent(
+            new LegacyWorkbookState { PyInput = "   ", ExportOutput = "" }));
+    }
+
+    [Theory]
+    [InlineData("SelectedScript")]
+    [InlineData("PyInput")]
+    [InlineData("PyOutput")]
+    [InlineData("SelectedAction")]
+    [InlineData("ImportInput")]
+    [InlineData("ImportOutput")]
+    [InlineData("ExportInput")]
+    [InlineData("ExportOutput")]
+    [InlineData("PasteOutput")]
+    public void HasSheetContent_AnySingleField_IsTrue(string field)
+    {
+        var legacy = field switch
+        {
+            "SelectedScript" => new LegacyWorkbookState { SelectedScript = "s.py" },
+            "PyInput" => new LegacyWorkbookState { PyInput = "A1" },
+            "PyOutput" => new LegacyWorkbookState { PyOutput = "B1" },
+            "SelectedAction" => new LegacyWorkbookState { SelectedAction = "act" },
+            "ImportInput" => new LegacyWorkbookState { ImportInput = "in.csv" },
+            "ImportOutput" => new LegacyWorkbookState { ImportOutput = "A1" },
+            "ExportInput" => new LegacyWorkbookState { ExportInput = "A1:C3" },
+            "ExportOutput" => new LegacyWorkbookState { ExportOutput = "out.csv" },
+            "PasteOutput" => new LegacyWorkbookState { PasteOutput = "B2" },
+            _ => new LegacyWorkbookState(),
+        };
+        Assert.True(LegacyStateConverter.HasSheetContent(legacy));
+    }
+
+    [Fact]
+    public void HasSheetContent_ParseableActions_IsTrue()
+    {
+        var legacy = new LegacyWorkbookState
+        {
+            Actions = "a|script=s.py|input=A1|output=B1" + GS,
+        };
+        Assert.True(LegacyStateConverter.HasSheetContent(legacy));
+    }
+
+    [Fact]
+    public void HasSheetContent_UnparseableActions_IsFalse()
+    {
+        // A stray Actions value with no valid rows isn't content.
+        var legacy = new LegacyWorkbookState { Actions = "   " };
+        Assert.False(LegacyStateConverter.HasSheetContent(legacy));
+    }
 }

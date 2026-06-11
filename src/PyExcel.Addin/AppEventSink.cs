@@ -93,6 +93,26 @@ internal sealed class AppEventSink : IDisposable
             // persisted one. Update validates the key matches.
             _state.Update(key, _ => restored);
         }
+        else
+        {
+            // No v2 part — this may be a v1 workbook opened for the first
+            // time in v2. Read its legacy defined Names and migrate them into
+            // a v2 CustomXMLPart so the user's saved actions/fields carry over.
+            // Best-effort: a null reader result means there's nothing to
+            // migrate (a brand-new or non-PyExcel workbook).
+            var legacy = LegacyStateReader.TryRead(wb);
+            if (legacy is not null)
+            {
+                var migrated = LegacyStateConverter.Convert(legacy, key);
+                // Only populate the in-memory registry so the ribbon renders
+                // the migrated state immediately. We deliberately don't write
+                // the v2 CustomXMLPart here — that would dirty the workbook
+                // just by opening it. The existing WorkbookBeforeSave handler
+                // flushes this state into the part when the user actually
+                // saves, so the migration becomes durable then.
+                _state.Update(key, _ => migrated);
+            }
+        }
         InvalidateRibbon();
     });
 

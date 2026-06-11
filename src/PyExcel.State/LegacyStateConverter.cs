@@ -191,6 +191,28 @@ public static class LegacyStateConverter
     private static string Accumulate(string current, string next)
         => current.Length == 0 ? next : current + "; " + next;
 
+    /// <summary>True when <paramref name="legacy"/> carries any per-<em>sheet</em>
+    /// PyExcel state (a script, a range field, an import/export/paste field, or
+    /// at least one parseable action). The workbook-scoped
+    /// <see cref="LegacyWorkbookState.Enabled"/> flag is deliberately ignored:
+    /// the migration driver uses this to find the one sheet whose state to
+    /// carry forward, and an enabled-but-otherwise-empty workbook has no sheet
+    /// worth choosing on this basis.</summary>
+    public static bool HasSheetContent(LegacyWorkbookState legacy)
+    {
+        if (legacy is null) throw new ArgumentNullException(nameof(legacy));
+        return Optional(legacy.SelectedAction) is not null
+            || Optional(legacy.SelectedScript) is not null
+            || Optional(legacy.PyInput) is not null
+            || Optional(legacy.PyOutput) is not null
+            || Optional(legacy.ImportInput) is not null
+            || Optional(legacy.ImportOutput) is not null
+            || Optional(legacy.ExportInput) is not null
+            || Optional(legacy.ExportOutput) is not null
+            || Optional(legacy.PasteOutput) is not null
+            || ParseActions(legacy.Actions).Count > 0;
+    }
+
     /// <summary>Trim a v1 text field; an empty/blank result becomes
     /// <see langword="null"/> so the codec omits the element (v1's
     /// <c>GetSheetValue</c> returns <c>""</c> for an absent Name).</summary>

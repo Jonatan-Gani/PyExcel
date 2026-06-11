@@ -207,6 +207,32 @@ public class PyExcelRibbon : ExcelRibbon
         }
     }
 
+    public void OnSetup(IRibbonControl control)
+    {
+        _log.Info("OnSetup clicked");
+        try
+        {
+            // The venv lives next to the workbook (PythonResolver's layout),
+            // so an unsaved workbook has nowhere to provision into.
+            var dir = PyExcelServices.WorkbookContext.CurrentWorkbookDirectory;
+            if (string.IsNullOrEmpty(dir))
+            {
+                LogDisplay.WriteLine(
+                    "Setup: save the workbook first — the Python environment is " +
+                    "provisioned in a .pyexcel-venv next to the workbook file.");
+                return;
+            }
+            var success = SetupForm.Run(ExcelWindowOwner(), dir!, _log);
+            if (success is not null)
+                _log.Info($"OnSetup: finished, success={success}");
+        }
+        catch (Exception ex)
+        {
+            _log.Error("OnSetup failed", ex);
+            LogDisplay.WriteLine($"Setup: {ex.Message}");
+        }
+    }
+
     public void OnOpenExplorer(IRibbonControl control)
     {
         _log.Info("OnOpenExplorer clicked");

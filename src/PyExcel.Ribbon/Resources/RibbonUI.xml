@@ -16,6 +16,7 @@
             <tab id="tabPython" label="Python">
                 <group id="grpMain" label="Main">
                     <button id="btnEnablePyExcel" label="Enable PyExcel" imageMso="FileSaveAs" onAction="OnEnablePyExcel"/>
+                    <button id="btnSetup" label="Setup" imageMso="ServerConnection" onAction="OnSetup"/>
                     <button id="btnOpenExplorer" label="Open In Explorer" imageMso="FolderOpen" onAction="OnOpenExplorer" getEnabled="RibbonEnabled"/>
                     <button id="btnReadMe" label="Read Me" imageMso="Help" onAction="OnReadMe" getEnabled="RibbonEnabled"/>
                 </group>
