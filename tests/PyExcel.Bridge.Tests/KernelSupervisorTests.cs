@@ -15,6 +15,16 @@ namespace PyExcel.Bridge.Tests;
 /// </summary>
 public class KernelSupervisorTests
 {
+    // PING/PONG and SHUTDOWN round-trips against a freshly-spawned kernel are
+    // timing-sensitive on a loaded CI runner: a cold child process can be
+    // starved of CPU — and the .NET-side Task.Run read in ReadFrameWithDeadline
+    // can sit in a saturated thread pool — for several seconds before the reply
+    // is observed. These are generous *ceilings* that only trip on a genuinely
+    // hung kernel; they are NOT latency gates (a healthy kernel replies in
+    // milliseconds, and Ping/Shutdown already throw/return on a wrong reply).
+    private const int PingTimeoutMs = 30_000;
+    private const int ShutdownTimeoutMs = 30_000;
+
     [Fact]
     public void Spawn_Handshake_Ping_Shutdown_RoundTrip()
     {
@@ -35,12 +45,12 @@ public class KernelSupervisorTests
         // elapsed time is not asserted as a hard latency bound — that's a
         // perf gate that flakes under CI load (the timeoutMs argument already
         // bounds correctness). We only sanity-check it's a real duration.
-        var rtt = sup.Ping(timeoutMs: 2000);
+        var rtt = sup.Ping(timeoutMs: PingTimeoutMs);
         Assert.True(rtt >= TimeSpan.Zero,
             $"PING returned a negative round-trip: {rtt.TotalMilliseconds}ms");
 
-        Assert.True(sup.Shutdown(timeoutMs: 5000),
-            "kernel did not exit within 5s of SHUTDOWN");
+        Assert.True(sup.Shutdown(timeoutMs: ShutdownTimeoutMs),
+            "kernel did not exit after SHUTDOWN");
         Assert.True(sup.Process.HasExited);
         Assert.Equal(0, sup.Process.ExitCode);
     }
@@ -63,11 +73,11 @@ public class KernelSupervisorTests
         // that flakes under CI load while telling us nothing about correctness.
         for (var i = 0; i < 10; i++)
         {
-            var rtt = sup.Ping(timeoutMs: 2000);
+            var rtt = sup.Ping(timeoutMs: PingTimeoutMs);
             Assert.True(rtt >= TimeSpan.Zero, $"PING {i} returned a negative round-trip");
         }
 
-        Assert.True(sup.Shutdown(timeoutMs: 5000));
+        Assert.True(sup.Shutdown(timeoutMs: ShutdownTimeoutMs));
         Assert.Equal(0, sup.Process.ExitCode);
     }
 
