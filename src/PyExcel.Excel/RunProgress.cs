@@ -14,8 +14,8 @@ namespace PyExcel.Excel;
 public interface IRunProgressSink
 {
     /// <summary>Report progress. <paramref name="percent"/> is null for an
-    /// indeterminate step.</summary>
-    void Report(double? percent, string message);
+    /// indeterminate step; <paramref name="message"/> may be null/empty.</summary>
+    void Report(double? percent, string? message);
 
     /// <summary>The run finished (success or failure) — tear the UI down.</summary>
     void Complete();

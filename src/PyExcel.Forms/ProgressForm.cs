@@ -84,7 +84,7 @@ public sealed class ProgressForm : Form, IRunProgressSink
         CancelButton = _cancelButton;
     }
 
-    public void Report(double? percent, string message)
+    public void Report(double? percent, string? message)
     {
         if (IsDisposed) return;
         if (InvokeRequired)
