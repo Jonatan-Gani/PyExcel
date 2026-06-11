@@ -53,8 +53,8 @@ internal sealed class RangeListEditor : UserControl
         AddButton("Add", bx, 0, btnW, btnH, (_, _) => AddNew());
         _editButton = AddButton("Edit", bx, 24, btnW, btnH, (_, _) => EditSelected());
         _removeButton = AddButton("Remove", bx, 48, btnW, btnH, (_, _) => RemoveSelected());
-        _upButton = AddButton("Up", bx, 72, btnW, btnH, (_, _) => Move(-1));
-        _downButton = AddButton("Down", bx, 96, btnW, btnH, (_, _) => Move(1));
+        _upButton = AddButton("Up", bx, 72, btnW, btnH, (_, _) => MoveItem(-1));
+        _downButton = AddButton("Down", bx, 96, btnW, btnH, (_, _) => MoveItem(1));
 
         UpdateButtons();
     }
@@ -116,7 +116,7 @@ internal sealed class RangeListEditor : UserControl
         if (_items.Count > 0) _list.SelectedIndex = Math.Min(i, _items.Count - 1);
     }
 
-    private void Move(int delta)
+    private void MoveItem(int delta)
     {
         var i = _list.SelectedIndex;
         var j = i + delta;
