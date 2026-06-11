@@ -34,6 +34,7 @@
     <ProjectReference Include="..\..\src\PyExcel.Excel\PyExcel.Excel.csproj" />
     <ProjectReference Include="..\..\src\PyExcel.State\PyExcel.State.csproj" />
     <ProjectReference Include="..\..\src\PyExcel.Setup\PyExcel.Setup.csproj" />
+    <ProjectReference Include="..\..\src\PyExcel.Forms\PyExcel.Forms.csproj" />
   </ItemGroup>
 
 </Project>

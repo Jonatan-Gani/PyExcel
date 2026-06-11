@@ -7,6 +7,7 @@ using ExcelDna.Integration.CustomUI;
 using ExcelDna.Logging;
 using PyExcel.Common.Logging;
 using PyExcel.Common.Shell;
+using PyExcel.Forms;
 using PyExcel.State;
 
 namespace PyExcel.Ribbon;
@@ -364,14 +365,67 @@ public class PyExcelRibbon : ExcelRibbon
     }
 
     public void OnAddAction(IRibbonControl control)
-        => StubAction(control, "OnAddAction",
-            "modRibbon.bas:1340 — shows EditActionForm. " +
-            "Phase 8 ships the form; Phase 3 wires StateService.AddAction once it returns.");
+    {
+        var key = PyExcelServices.WorkbookContext.CurrentWorkbookKey;
+        if (key is null) { _log.Info("OnAddAction: no active workbook"); return; }
+
+        var state = PyExcelServices.State.Get(key);
+        var result = EditActionForm.Prompt(
+            ExcelWindowOwner(),
+            state.AvailableScripts,
+            ActionNames(state),
+            existing: null);
+        if (result is null) { _log.Info("OnAddAction: cancelled"); return; }
+
+        PyExcelServices.State.AddAction(key, result);
+        _log.Info($"OnAddAction: saved '{result.Name}' to workbook '{key}'");
+    }
 
     public void OnEditAction(IRibbonControl control)
-        => StubAction(control, "OnEditAction",
-            "modRibbon.bas:1447 — shows EditActionForm pre-populated. " +
-            "Phase 8 ships the form; Phase 3 wires StateService.AddAction (upserts) once it returns.");
+    {
+        var key = PyExcelServices.WorkbookContext.CurrentWorkbookKey;
+        if (key is null) { _log.Info("OnEditAction: no active workbook"); return; }
+
+        var state = PyExcelServices.State.Get(key);
+        var existing = state.SelectedAction;
+        if (existing is null) { _log.Info("OnEditAction: no action selected"); return; }
+
+        var result = EditActionForm.Prompt(
+            ExcelWindowOwner(),
+            state.AvailableScripts,
+            ActionNames(state),
+            existing);
+        if (result is null) { _log.Info("OnEditAction: cancelled"); return; }
+
+        // AddAction upserts by name, so a rename would leave the original
+        // entry behind under its old name — drop it first when the name
+        // changed. (The validator already guaranteed the new name doesn't
+        // collide with a *different* action.)
+        if (!string.Equals(existing.Name, result.Name, StringComparison.Ordinal))
+            PyExcelServices.State.DeleteAction(key, existing.Name);
+        PyExcelServices.State.AddAction(key, result);
+        _log.Info($"OnEditAction: saved '{result.Name}' to workbook '{key}'");
+    }
+
+    /// <summary>The existing action names, in order, for the EditAction
+    /// dialog's duplicate-name check.</summary>
+    private static System.Collections.Generic.IReadOnlyList<string> ActionNames(WorkbookState state)
+    {
+        var names = new System.Collections.Generic.List<string>(state.Actions.Count);
+        foreach (var a in state.Actions) names.Add(a.Name);
+        return names;
+    }
+
+    /// <summary>Wraps Excel's main window so a modal dialog is owned by it
+    /// — never lost behind Excel or off-screen (the v1 hide hack is gone).</summary>
+    private static System.Windows.Forms.IWin32Window ExcelWindowOwner()
+        => new ExcelWindow(ExcelDnaUtil.WindowHandle);
+
+    private sealed class ExcelWindow : System.Windows.Forms.IWin32Window
+    {
+        public ExcelWindow(IntPtr handle) => Handle = handle;
+        public IntPtr Handle { get; }
+    }
 
     public void OnDeleteAction(IRibbonControl control)
     {
