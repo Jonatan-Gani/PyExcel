@@ -97,6 +97,30 @@ public static class ImportPlanner
         return (input, null);
     }
 
+    /// <summary>Compose the user-facing <c>path!Sheet</c> input from a path
+    /// and a chosen sheet — the inverse of <see cref="ParsePathAndSheet"/>,
+    /// used by the sheet picker to write its choice back into the Import
+    /// field. A null/blank sheet returns the path unchanged (first sheet).
+    /// Pinning a sheet only round-trips on an Excel-format path, so a sheet
+    /// on a non-Excel path is rejected.</summary>
+    /// <exception cref="FormatException">A sheet was given for a path that
+    /// is not an Excel-format file (.xlsx / .xlsm / .xlsb).</exception>
+    public static string Compose(string path, string? sheetName)
+    {
+        if (path is null) throw new ArgumentNullException(nameof(path));
+
+        var sheet = (sheetName ?? string.Empty).Trim();
+        if (sheet.Length == 0) return path;
+
+        var ext = Path.GetExtension(path).ToLowerInvariant();
+        if (ext is not (".xlsx" or ".xlsm" or ".xlsb"))
+            throw new FormatException(
+                "Import: a sheet can only be pinned on an Excel-format path " +
+                "(.xlsx / .xlsm / .xlsb).");
+
+        return path + "!" + sheet;
+    }
+
     /// <summary>Resolve a (possibly relative) source path against the
     /// workbook directory. Absolute paths pass through; rooted-but-no-drive
     /// paths (like <c>/foo</c> on Windows) also pass through because

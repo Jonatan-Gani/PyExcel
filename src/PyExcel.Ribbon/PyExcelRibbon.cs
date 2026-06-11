@@ -451,7 +451,11 @@ public class PyExcelRibbon : ExcelRibbon
         {
             var key = PyExcelServices.WorkbookContext.CurrentWorkbookKey;
             if (key is null) { _log.Info("OnImport: no active workbook"); return; }
-            PyExcel.Excel.ImportService.RunActiveImport(PyExcelServices.State.Get(key));
+            // The chooser runs on the macro thread, where the import opens
+            // the workbook — show the picker owned by Excel's window.
+            PyExcel.Excel.ImportService.RunActiveImport(
+                PyExcelServices.State.Get(key),
+                sheets => SheetPickerForm.Prompt(ExcelWindowOwner(), sheets, preselected: null));
         }
         catch (Exception ex)
         {

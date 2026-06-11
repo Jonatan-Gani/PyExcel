@@ -1,5 +1,6 @@
 #if NETFRAMEWORK
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Threading.Tasks;
@@ -47,7 +48,17 @@ public static class ImportService
     /// Returns immediately; the file read and the write-back happen
     /// asynchronously.
     /// </summary>
-    public static void RunActiveImport(WorkbookState state)
+    /// <param name="state">The active workbook state carrying the Import
+    /// source / target fields.</param>
+    /// <param name="sheetChooser">Optional callback invoked (on the macro
+    /// thread) when an Excel import needs the user to pick a sheet — the
+    /// workbook has several and none was pinned with the <c>!Sheet</c>
+    /// syntax. Returns the chosen sheet, or null to cancel the import.
+    /// When null (no UI available), the import falls back to the first
+    /// sheet, preserving the pre-picker behaviour.</param>
+    public static void RunActiveImport(
+        WorkbookState state,
+        Func<IReadOnlyList<string>, string?>? sheetChooser = null)
     {
         if (state is null) throw new ArgumentNullException(nameof(state));
 
@@ -75,7 +86,7 @@ public static class ImportService
                 RunCsvImport(plan);
                 break;
             case ImportFormat.Excel:
-                RunExcelImport(plan);
+                RunExcelImport(plan, sheetChooser);
                 break;
             default:
                 Warn($"Import: unsupported format '{plan.Format}'.");
@@ -172,7 +183,9 @@ public static class ImportService
     /// <see cref="ExcelAsyncUtil.QueueAsMacro(System.Action)"/> that
     /// opens, reads, closes, and writes — all COM, all on the macro
     /// queue (where the STA wants it).</summary>
-    private static void RunExcelImport(ImportPlan plan)
+    private static void RunExcelImport(
+        ImportPlan plan,
+        Func<IReadOnlyList<string>, string?>? sheetChooser)
     {
         if (!File.Exists(plan.AbsoluteSourcePath))
         {
@@ -182,10 +195,10 @@ public static class ImportService
 
         ExcelAsyncUtil.QueueAsMacro(() =>
         {
-            object?[,] table;
+            object?[,]? table;
             try
             {
-                table = ReadExcelSource(plan.AbsoluteSourcePath, plan.SheetName);
+                table = ReadExcelSource(plan.AbsoluteSourcePath, plan.SheetName, sheetChooser);
             }
             catch (FormatException fex)
             {
@@ -195,6 +208,13 @@ public static class ImportService
             catch (Exception ex)
             {
                 Fail($"Import: failed to read '{plan.AbsoluteSourcePath}' — {ex.Message}", ex);
+                return;
+            }
+
+            // Null = the user cancelled at the sheet picker — abort quietly.
+            if (table is null)
+            {
+                Warn("Import: cancelled at sheet selection.");
                 return;
             }
 
@@ -225,7 +245,10 @@ public static class ImportService
     /// and a corrupt-file prompt is suppressed (and surfaced to the user
     /// via the normal exception path instead).</para>
     /// </summary>
-    private static object?[,] ReadExcelSource(string filePath, string? sheetName)
+    private static object?[,]? ReadExcelSource(
+        string filePath,
+        string? sheetName,
+        Func<IReadOnlyList<string>, string?>? sheetChooser)
     {
         dynamic app = ExcelDnaUtil.Application;
 
@@ -250,23 +273,46 @@ public static class ImportService
             }
 
             dynamic wb = wbHandle!;
-            dynamic sheet;
-            if (sheetName is null)
+
+            // Decide the sheet: a pinned !Sheet wins; otherwise one sheet
+            // resolves automatically and several prompt the user (via the
+            // injected chooser — null falls back to the first sheet).
+            var resolution = SheetSelection.Resolve(sheetName, EnumerateSheetNames(wb));
+            string? chosenSheet;
+            switch (resolution.Kind)
             {
-                sheet = wb.Sheets[1];
-            }
-            else
-            {
-                try
-                {
-                    sheet = wb.Sheets[sheetName];
-                }
-                catch
-                {
+                case SheetResolutionKind.Empty:
                     throw new FormatException(
-                        $"Import: sheet '{sheetName}' not found in " +
-                        $"'{filePath}'.");
-                }
+                        $"Import: '{filePath}' has no worksheets to import.");
+
+                case SheetResolutionKind.Prompt:
+                    if (sheetChooser is null)
+                    {
+                        // No UI available — preserve the pre-picker default.
+                        chosenSheet = resolution.AvailableSheets[0];
+                    }
+                    else
+                    {
+                        chosenSheet = sheetChooser(resolution.AvailableSheets);
+                        if (string.IsNullOrEmpty(chosenSheet))
+                            return null; // cancelled
+                    }
+                    break;
+
+                default: // Resolved
+                    chosenSheet = resolution.Sheet;
+                    break;
+            }
+
+            dynamic sheet;
+            try
+            {
+                sheet = wb.Sheets[chosenSheet];
+            }
+            catch
+            {
+                throw new FormatException(
+                    $"Import: sheet '{chosenSheet}' not found in '{filePath}'.");
             }
 
             dynamic used = sheet.UsedRange;
@@ -282,6 +328,23 @@ public static class ImportService
             try { app.ScreenUpdating = prevScreenUpdating; } catch { }
             try { app.DisplayAlerts = prevDisplayAlerts; } catch { }
         }
+    }
+
+    /// <summary>List the workbook's worksheet names in tab order, so the
+    /// sheet picker offers exactly what <c>Workbook.Sheets[name]</c> can
+    /// later look up. Chart sheets are skipped — they have no
+    /// <c>UsedRange</c> for the importer to read.</summary>
+    private static IReadOnlyList<string> EnumerateSheetNames(dynamic wb)
+    {
+        var names = new List<string>();
+        dynamic sheets = wb.Worksheets;
+        int count = (int)sheets.Count;
+        for (int i = 1; i <= count; i++)
+        {
+            try { names.Add((string)sheets[i].Name); }
+            catch { /* skip an unreadable sheet rather than fail the import */ }
+        }
+        return names;
     }
 
     /// <summary>Walk the running app's open workbooks, returning the one
