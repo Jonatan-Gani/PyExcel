@@ -20,16 +20,28 @@ namespace PyExcel.Excel;
 ///     Python install before Setup runs.</item>
 ///  </list>
 ///
-/// The embedded-path resolver walks up from the assembly directory looking
-/// for a sibling <c>embedded/pyexcel/kernel/__main__.py</c> — same logic
-/// the integration tests already use, lifted here so production code
-/// uses one source of truth.
+/// The embedded-path resolver mirrors that precedence: a per-project
+/// kernel that <c>PyExcel.Setup</c> extracted into
+/// <c>&lt;workbook-dir&gt;/.pyexcel-kernel/</c> wins over the copy bundled
+/// beside the <c>.xll</c> (which the resolver finds by walking up from
+/// the assembly directory for a sibling
+/// <c>embedded/pyexcel/kernel/__main__.py</c> — the same logic the
+/// integration tests use against the repo-root <c>embedded/</c>).
 /// </summary>
 public static class PythonResolver
 {
     /// <summary>Environment variable a user (or test) can set to point at
     /// a specific python executable.</summary>
     public const string PythonEnvVar = "PYEXCEL_PYTHON";
+
+    /// <summary>
+    /// Directory name <c>PyExcel.Setup</c> extracts the kernel package
+    /// into, next to the per-project <c>.pyexcel-venv</c>. Kept in sync
+    /// with the literal in <c>PyExcel.Setup.SetupService</c>; the two
+    /// halves agree on this name so what Setup writes is what the runtime
+    /// reads.
+    /// </summary>
+    public const string ExtractedKernelDirName = ".pyexcel-kernel";
 
     /// <summary>
     /// Resolve a python executable path. Throws
@@ -64,25 +76,47 @@ public static class PythonResolver
     }
 
     /// <summary>
-    /// Resolve the path to the embedded <c>pyexcel</c> package — i.e. the
-    /// directory the kernel needs on <c>PYTHONPATH</c>.
+    /// Resolve the path to the <c>pyexcel</c> package's parent — i.e. the
+    /// directory the kernel needs on <c>PYTHONPATH</c> so
+    /// <c>import pyexcel.kernel</c> resolves.
     /// </summary>
+    /// <param name="workbookDir">Optional workbook directory. When
+    /// supplied, a Setup-extracted kernel at
+    /// <c>&lt;workbookDir&gt;/.pyexcel-kernel</c> is preferred over the
+    /// bundled copy — the same per-project-wins precedence
+    /// <see cref="ResolvePython"/> gives the venv.</param>
     /// <remarks>
-    /// Walks up from the calling assembly's directory until it finds a
-    /// sibling <c>embedded/pyexcel/kernel/__main__.py</c>, the canonical
-    /// marker. In production the .xll ships with <c>embedded/</c> alongside
-    /// it; in tests the marker lives at the repo root.
+    /// Resolution order:
+    /// <list type="number">
+    ///   <item>The Setup-extracted package under
+    ///     <c>&lt;workbookDir&gt;/.pyexcel-kernel</c> (written by
+    ///     <c>PyExcel.Setup</c>'s <c>KernelResourceExtractor</c>), when a
+    ///     workbook directory is supplied and the package is present.</item>
+    ///   <item>The bundled <c>embedded/</c> found by walking up from the
+    ///     assembly directory for a sibling
+    ///     <c>embedded/pyexcel/kernel/__main__.py</c>. In production the
+    ///     .xll ships with <c>embedded/</c> alongside it; in tests the
+    ///     marker lives at the repo root.</item>
+    /// </list>
     /// </remarks>
-    public static string ResolveEmbeddedPath()
+    public static string ResolveEmbeddedPath(string? workbookDir = null)
     {
-        var startDir = new DirectoryInfo(AppContext.BaseDirectory);
-        var found = WalkUpForEmbedded(startDir);
+        if (!string.IsNullOrWhiteSpace(workbookDir))
+        {
+            var extracted = Path.Combine(workbookDir!, ExtractedKernelDirName);
+            if (HasKernelPackage(extracted)) return extracted;
+        }
+
+        var found = WalkUpForEmbedded(new DirectoryInfo(AppContext.BaseDirectory));
         if (found is { }) return found;
 
         throw new DirectoryNotFoundException(
-            $"could not locate embedded/pyexcel/kernel/__main__.py walking up " +
-            $"from {AppContext.BaseDirectory}. The .xll must ship with embedded/ " +
-            $"as a sibling directory.");
+            $"could not locate the pyexcel kernel package: no " +
+            $"{ExtractedKernelDirName}/pyexcel/kernel/__main__.py under the " +
+            $"workbook directory, and no embedded/pyexcel/kernel/__main__.py " +
+            $"walking up from {AppContext.BaseDirectory}. The .xll must ship " +
+            $"with embedded/ as a sibling directory, or PyExcel.Setup must " +
+            $"extract the kernel into the project first.");
     }
 
     // -------------------------------------------------------------------------
@@ -122,12 +156,18 @@ public static class PythonResolver
     {
         for (var i = 0; i < 8 && start != null; i++)
         {
-            var candidate = Path.Combine(
-                start.FullName, "embedded", "pyexcel", "kernel", "__main__.py");
-            if (File.Exists(candidate))
-                return Path.Combine(start.FullName, "embedded");
+            var embedded = Path.Combine(start.FullName, "embedded");
+            if (HasKernelPackage(embedded)) return embedded;
             start = start.Parent;
         }
         return null;
     }
+
+    /// <summary>True when <paramref name="root"/> contains the importable
+    /// <c>pyexcel</c> package — keyed on the canonical
+    /// <c>pyexcel/kernel/__main__.py</c> marker. <paramref name="root"/>
+    /// is the directory that goes on <c>PYTHONPATH</c>, not the package
+    /// directory itself.</summary>
+    private static bool HasKernelPackage(string root) =>
+        File.Exists(Path.Combine(root, "pyexcel", "kernel", "__main__.py"));
 }
