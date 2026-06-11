@@ -7,6 +7,7 @@ using ExcelDna.Integration.CustomUI;
 using ExcelDna.Logging;
 using PyExcel.Common.Logging;
 using PyExcel.Common.Shell;
+using PyExcel.Forms;
 using PyExcel.State;
 
 namespace PyExcel.Ribbon;
@@ -147,14 +148,29 @@ public class PyExcelRibbon : ExcelRibbon
 
     public override object? LoadImage(string imageName)
     {
-        // imageName="customLogo" — load the embedded PNG. Phase 1 returns
-        // null so Excel falls back to no image; Phase 8 will ship the PNG
-        // as an EmbeddedResource and return a System.Drawing.Bitmap here.
-        if (string.Equals(imageName, "customLogo", StringComparison.Ordinal))
+        // imageName="customLogo" — load the PNG shipped as an embedded
+        // resource (LogicalName "customLogo.png" in PyExcel.Ribbon.csproj).
+        // Returned as a System.Drawing.Bitmap, which Excel-DNA converts to
+        // the IPictureDisp the ribbon expects.
+        if (!string.Equals(imageName, "customLogo", StringComparison.Ordinal))
+            return null;
+
+        try
         {
+            var assembly = typeof(PyExcelRibbon).Assembly;
+            using var stream = assembly.GetManifestResourceStream("customLogo.png");
+            if (stream is null) return null;
+            // Clone off the stream so the Bitmap doesn't depend on it
+            // staying open (the classic Bitmap(Stream) lifetime trap).
+            using var fromStream = new System.Drawing.Bitmap(stream);
+            return new System.Drawing.Bitmap(fromStream);
+        }
+        catch
+        {
+            // A missing/corrupt resource must never break ribbon load —
+            // fall back to no image.
             return null;
         }
-        return null;
     }
 
     // -------------------------------------------------------------------------
@@ -263,7 +279,13 @@ public class PyExcelRibbon : ExcelRibbon
             // so this callback returns promptly and never blocks on the
             // pipe (SAFE-1).
             var state = PyExcelServices.State.Get(key);
-            PyExcel.Excel.RangeRunner.RunActiveScript(state);
+            // Supply a modeless progress dialog with a working Cancel; the
+            // factory is invoked on this (main) thread so the form pumps
+            // while the kernel runs on the background task.
+            PyExcel.Excel.RangeRunner.RunActiveScript(
+                state,
+                progressFactory: () =>
+                    ProgressForm.StartModeless(ExcelWindowOwner(), "Running Python…"));
         }
         catch (Exception ex)
         {
@@ -364,14 +386,89 @@ public class PyExcelRibbon : ExcelRibbon
     }
 
     public void OnAddAction(IRibbonControl control)
-        => StubAction(control, "OnAddAction",
-            "modRibbon.bas:1340 — shows EditActionForm. " +
-            "Phase 8 ships the form; Phase 3 wires StateService.AddAction once it returns.");
+    {
+        var key = PyExcelServices.WorkbookContext.CurrentWorkbookKey;
+        if (key is null) { _log.Info("OnAddAction: no active workbook"); return; }
+
+        var state = PyExcelServices.State.Get(key);
+        var result = EditActionForm.Prompt(
+            ExcelWindowOwner(),
+            state.AvailableScripts,
+            ActionNames(state),
+            existing: null,
+            selectionProvider: CurrentSelectionAddress);
+        if (result is null) { _log.Info("OnAddAction: cancelled"); return; }
+
+        PyExcelServices.State.AddAction(key, result);
+        _log.Info($"OnAddAction: saved '{result.Name}' to workbook '{key}'");
+    }
 
     public void OnEditAction(IRibbonControl control)
-        => StubAction(control, "OnEditAction",
-            "modRibbon.bas:1447 — shows EditActionForm pre-populated. " +
-            "Phase 8 ships the form; Phase 3 wires StateService.AddAction (upserts) once it returns.");
+    {
+        var key = PyExcelServices.WorkbookContext.CurrentWorkbookKey;
+        if (key is null) { _log.Info("OnEditAction: no active workbook"); return; }
+
+        var state = PyExcelServices.State.Get(key);
+        var existing = state.SelectedAction;
+        if (existing is null) { _log.Info("OnEditAction: no action selected"); return; }
+
+        var result = EditActionForm.Prompt(
+            ExcelWindowOwner(),
+            state.AvailableScripts,
+            ActionNames(state),
+            existing,
+            selectionProvider: CurrentSelectionAddress);
+        if (result is null) { _log.Info("OnEditAction: cancelled"); return; }
+
+        // AddAction upserts by name, so a rename would leave the original
+        // entry behind under its old name — drop it first when the name
+        // changed. (The validator already guaranteed the new name doesn't
+        // collide with a *different* action.)
+        if (!string.Equals(existing.Name, result.Name, StringComparison.Ordinal))
+            PyExcelServices.State.DeleteAction(key, existing.Name);
+        PyExcelServices.State.AddAction(key, result);
+        _log.Info($"OnEditAction: saved '{result.Name}' to workbook '{key}'");
+    }
+
+    /// <summary>The existing action names, in order, for the EditAction
+    /// dialog's duplicate-name check.</summary>
+    private static System.Collections.Generic.IReadOnlyList<string> ActionNames(WorkbookState state)
+    {
+        var names = new System.Collections.Generic.List<string>(state.Actions.Count);
+        foreach (var a in state.Actions) names.Add(a.Name);
+        return names;
+    }
+
+    /// <summary>Wraps Excel's main window so a modal dialog is owned by it
+    /// — never lost behind Excel or off-screen (the v1 hide hack is gone).</summary>
+    private static System.Windows.Forms.IWin32Window ExcelWindowOwner()
+        => new ExcelWindow(ExcelDnaUtil.WindowHandle);
+
+    private sealed class ExcelWindow : System.Windows.Forms.IWin32Window
+    {
+        public ExcelWindow(IntPtr handle) => Handle = handle;
+        public IntPtr Handle { get; }
+    }
+
+    /// <summary>The active selection's address as <c>Sheet!A1:B2</c>, for
+    /// the range picker's "Use current selection" button. Returns null when
+    /// the selection isn't a range (a chart, a shape) or COM is unhappy —
+    /// the picker then just hides the button / keeps the typed text.</summary>
+    private static string? CurrentSelectionAddress()
+    {
+        try
+        {
+            dynamic app = ExcelDnaUtil.Application;
+            dynamic selection = app.Selection;
+            string address = (string)selection.Address[false, false];
+            string sheet = (string)selection.Worksheet.Name;
+            return $"{sheet}!{address}";
+        }
+        catch
+        {
+            return null;
+        }
+    }
 
     public void OnDeleteAction(IRibbonControl control)
     {
@@ -397,7 +494,11 @@ public class PyExcelRibbon : ExcelRibbon
         {
             var key = PyExcelServices.WorkbookContext.CurrentWorkbookKey;
             if (key is null) { _log.Info("OnImport: no active workbook"); return; }
-            PyExcel.Excel.ImportService.RunActiveImport(PyExcelServices.State.Get(key));
+            // The chooser runs on the macro thread, where the import opens
+            // the workbook — show the picker owned by Excel's window.
+            PyExcel.Excel.ImportService.RunActiveImport(
+                PyExcelServices.State.Get(key),
+                sheets => SheetPickerForm.Prompt(ExcelWindowOwner(), sheets, preselected: null));
         }
         catch (Exception ex)
         {
@@ -422,7 +523,28 @@ public class PyExcelRibbon : ExcelRibbon
     }
 
     public void OnEditImport(IRibbonControl control)
-        => StubAction(control, "OnEditImport", "modRibbon.bas:708 — shows EditImportForm");
+    {
+        try
+        {
+            var key = PyExcelServices.WorkbookContext.CurrentWorkbookKey;
+            if (key is null) { _log.Info("OnEditImport: no active workbook"); return; }
+            var state = PyExcelServices.State.Get(key);
+            var result = EditIoForm.PromptImport(
+                ExcelWindowOwner(),
+                state.ImportInput,
+                state.ImportOutput,
+                PyExcelServices.WorkbookContext.CurrentWorkbookDirectory,
+                CurrentSelectionAddress);
+            if (result is null) { _log.Info("OnEditImport: cancelled"); return; }
+            PyExcelServices.State.SetImportInput(key, result.Input);
+            PyExcelServices.State.SetImportOutput(key, result.Output);
+            _log.Info($"OnEditImport: saved for workbook '{key}'");
+        }
+        catch (Exception ex)
+        {
+            _log.Error("OnEditImport failed", ex);
+        }
+    }
 
     // -------------------------------------------------------------------------
     // Export group
@@ -460,7 +582,63 @@ public class PyExcelRibbon : ExcelRibbon
     }
 
     public void OnEditExport(IRibbonControl control)
-        => StubAction(control, "OnEditExport", "modRibbon.bas:853 — shows EditExportForm");
+    {
+        try
+        {
+            var key = PyExcelServices.WorkbookContext.CurrentWorkbookKey;
+            if (key is null) { _log.Info("OnEditExport: no active workbook"); return; }
+            var state = PyExcelServices.State.Get(key);
+            var result = EditIoForm.PromptExport(
+                ExcelWindowOwner(),
+                state.ExportInput,
+                state.ExportOutput,
+                PyExcelServices.WorkbookContext.CurrentWorkbookDirectory,
+                CurrentSelectionAddress);
+            if (result is null) { _log.Info("OnEditExport: cancelled"); return; }
+            PyExcelServices.State.SetExportInput(key, result.Input);
+            PyExcelServices.State.SetExportOutput(key, result.Output);
+            _log.Info($"OnEditExport: saved for workbook '{key}'");
+        }
+        catch (Exception ex)
+        {
+            _log.Error("OnEditExport failed", ex);
+        }
+    }
+
+    public void OnExportWizard(IRibbonControl control)
+    {
+        try
+        {
+            var key = PyExcelServices.WorkbookContext.CurrentWorkbookKey;
+            if (key is null) { _log.Info("OnExportWizard: no active workbook"); return; }
+            var state = PyExcelServices.State.Get(key);
+
+            // Seed the wizard's first row from the single-export fields if set.
+            System.Collections.Generic.IReadOnlyList<PyExcel.Excel.ExportJob>? seed = null;
+            if (!string.IsNullOrWhiteSpace(state.ExportInput) ||
+                !string.IsNullOrWhiteSpace(state.ExportOutput))
+            {
+                seed = new[]
+                {
+                    new PyExcel.Excel.ExportJob(state.ExportInput ?? string.Empty,
+                                                state.ExportOutput ?? string.Empty),
+                };
+            }
+
+            var jobs = ExportWizardForm.Prompt(
+                ExcelWindowOwner(), seed,
+                PyExcelServices.WorkbookContext.CurrentWorkbookDirectory);
+            if (jobs is null) { _log.Info("OnExportWizard: cancelled"); return; }
+
+            PyExcel.Excel.ExportService.RunBatch(
+                jobs, PyExcelServices.WorkbookContext.CurrentWorkbookDirectory);
+            _log.Info($"OnExportWizard: running {jobs.Count} export(s)");
+        }
+        catch (Exception ex)
+        {
+            _log.Error("OnExportWizard failed", ex);
+        }
+    }
 
     // -------------------------------------------------------------------------
     // Paste group
@@ -473,7 +651,9 @@ public class PyExcelRibbon : ExcelRibbon
         {
             var key = PyExcelServices.WorkbookContext.CurrentWorkbookKey;
             if (key is null) { _log.Info("OnPaste: no active workbook"); return; }
-            PyExcel.Excel.PasteService.RunActivePaste(PyExcelServices.State.Get(key));
+            PyExcel.Excel.PasteService.RunActivePaste(
+                PyExcelServices.State.Get(key),
+                orientationChooser: () => OrientationForm.Prompt(ExcelWindowOwner()));
         }
         catch (Exception ex)
         {
@@ -490,7 +670,23 @@ public class PyExcelRibbon : ExcelRibbon
     }
 
     public void OnEditPaste(IRibbonControl control)
-        => StubAction(control, "OnEditPaste", "modRibbon.bas:940 — shows EditPasteForm");
+    {
+        try
+        {
+            var key = PyExcelServices.WorkbookContext.CurrentWorkbookKey;
+            if (key is null) { _log.Info("OnEditPaste: no active workbook"); return; }
+            var state = PyExcelServices.State.Get(key);
+            var result = EditIoForm.PromptPaste(
+                ExcelWindowOwner(), state.PasteOutput, CurrentSelectionAddress);
+            if (result is null) { _log.Info("OnEditPaste: cancelled"); return; }
+            PyExcelServices.State.SetPasteOutput(key, result.Output);
+            _log.Info($"OnEditPaste: saved for workbook '{key}'");
+        }
+        catch (Exception ex)
+        {
+            _log.Error("OnEditPaste failed", ex);
+        }
+    }
 
     // -------------------------------------------------------------------------
     // Errors group — Show / Copy Last Error. Surfaces what the kernel

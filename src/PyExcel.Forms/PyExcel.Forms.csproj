@@ -1,0 +1,50 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <!--
+      The WinForms dialog layer (Phase 8). Multi-targets net48 (the
+      production .xll hosts the real WinForms forms in-proc) and
+      netstandard2.0 (Linux CI builds the cross-platform half: the pure
+      validation logic each form delegates to, so the dialog's decisions
+      are unit-testable without Excel or a Windows desktop).
+
+      The forms themselves (EditActionForm etc.) are #if NETFRAMEWORK so
+      the netstandard2.0 build never sees System.Windows.Forms — exactly
+      the split PyExcel.Excel uses for its COM-bound RangeRunner.
+    -->
+    <TargetFrameworks>net48;netstandard2.0</TargetFrameworks>
+    <RootNamespace>PyExcel.Forms</RootNamespace>
+    <AssemblyName>PyExcel.Forms</AssemblyName>
+    <Platforms>x64;AnyCPU</Platforms>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!--
+      The forms read available scripts / existing actions and produce a
+      RibbonAction the ribbon hands to StateService.AddAction. Both halves
+      multi-target the same TFMs, so the reference resolves for net48 and
+      netstandard2.0 alike.
+    -->
+    <ProjectReference Include="..\PyExcel.Common\PyExcel.Common.csproj" />
+    <ProjectReference Include="..\PyExcel.State\PyExcel.State.csproj" />
+    <!--
+      The Edit-Import / Edit-Export / Edit-Paste dialogs validate through
+      PyExcel.Excel's EditIoValidator (which reuses ImportPlanner /
+      ExportPlanner), so the dialog rejects exactly what the run-time
+      service would. Both multi-target net48 + netstandard2.0, so the
+      reference resolves on both lanes.
+    -->
+    <ProjectReference Include="..\PyExcel.Excel\PyExcel.Excel.csproj" />
+  </ItemGroup>
+
+  <!--
+    System.Windows.Forms isn't in the SDK-style net48 default reference
+    set; the forms need it. netstandard2.0 never compiles the form .cs
+    files (they're #if NETFRAMEWORK), so it doesn't reference WinForms.
+  -->
+  <ItemGroup Condition="'$(TargetFramework)' == 'net48'">
+    <Reference Include="System.Windows.Forms" />
+    <Reference Include="System.Drawing" />
+  </ItemGroup>
+
+</Project>

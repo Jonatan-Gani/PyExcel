@@ -52,6 +52,7 @@
                     <editBox id="txtExportInput" label="Source" getText="GetExportInput" sizeString="XXXXXXXXXXXXXXXXXXXX" onChange="OnExportInputChange" getEnabled="RibbonEnabled"/>
                     <editBox id="txtExportOutput" label="Destination" getText="GetExportOutput" sizeString="XXXXXXXXXXXXXXXXXXXX" onChange="OnExportOutputChange" getEnabled="RibbonEnabled"/>
                     <button id="btnEditExport" label="Edit" imageMso="EditQuery" size="large" onAction="OnEditExport" getEnabled="RibbonEnabled"/>
+                    <button id="btnExportWizard" label="Wizard" imageMso="TableExcelSpreadsheetInsertGallery" size="large" onAction="OnExportWizard" getEnabled="RibbonEnabled"/>
                 </group>
                 <group id="grpPaste" label="Paste">
                     <button id="btnPaste" label="Paste" size="large" imageMso="Paste" onAction="OnPaste" getEnabled="RibbonEnabled"/>

@@ -289,6 +289,61 @@ public class ImportPlannerTests
     }
 
     // -------------------------------------------------------------------------
+    // Compose — inverse of ParsePathAndSheet (drives the sheet picker's
+    // write-back into the Import field)
+    // -------------------------------------------------------------------------
+
+    [Fact]
+    public void Compose_NullPath_Throws()
+    {
+        Assert.Throws<ArgumentNullException>(() => ImportPlanner.Compose(null!, "Q2"));
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    public void Compose_BlankSheet_ReturnsPathUnchanged(string? sheet)
+    {
+        Assert.Equal("data.xlsx", ImportPlanner.Compose("data.xlsx", sheet));
+    }
+
+    [Fact]
+    public void Compose_ExcelPathWithSheet_AppendsBangSheet()
+    {
+        Assert.Equal("data.xlsx!Q2", ImportPlanner.Compose("data.xlsx", "Q2"));
+    }
+
+    [Fact]
+    public void Compose_TrimsSheet()
+    {
+        Assert.Equal("data.xlsx!Q2", ImportPlanner.Compose("data.xlsx", "  Q2  "));
+    }
+
+    [Theory]
+    [InlineData("data.csv")]
+    [InlineData("data.tsv")]
+    [InlineData("data.txt")]
+    [InlineData("data")]
+    public void Compose_SheetOnNonExcelPath_Throws(string path)
+    {
+        Assert.Throws<FormatException>(() => ImportPlanner.Compose(path, "Q2"));
+    }
+
+    [Theory]
+    [InlineData("data.xlsx", "Q2")]
+    [InlineData("model.xlsm", "Inputs")]
+    [InlineData("big.xlsb", "Data")]
+    [InlineData("data.xlsx", "My Inputs")]
+    public void Compose_RoundTripsWithParsePathAndSheet(string path, string sheet)
+    {
+        var composed = ImportPlanner.Compose(path, sheet);
+        var (parsedPath, parsedSheet) = ImportPlanner.ParsePathAndSheet(composed);
+        Assert.Equal(path, parsedPath);
+        Assert.Equal(sheet, parsedSheet);
+    }
+
+    // -------------------------------------------------------------------------
     // End-to-end Create() composition
     // -------------------------------------------------------------------------
 

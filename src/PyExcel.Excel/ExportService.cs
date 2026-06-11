@@ -1,5 +1,6 @@
 #if NETFRAMEWORK
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Threading.Tasks;
@@ -89,6 +90,67 @@ public static class ExportService
             {
                 Fail($"Export: failed to write '{plan.AbsoluteTargetPath}' — {ex.Message}", ex);
             }
+        });
+    }
+
+    /// <summary>Run a batch of exports (the Export Wizard). Reads every
+    /// source range on the main thread, then writes each file on a
+    /// background thread — the same per-export pipeline as
+    /// <see cref="RunActiveExport"/>, looped. Each job's planning reuses
+    /// <see cref="ExportPlanner"/>; the wizard has already validated them,
+    /// so a plan failure here is surfaced and the row skipped.</summary>
+    public static void RunBatch(IReadOnlyList<ExportJob> jobs, string? workbookDirectory)
+    {
+        if (jobs is null) throw new ArgumentNullException(nameof(jobs));
+        if (jobs.Count == 0) { Warn("Export Wizard: no rows to export."); return; }
+
+        // --- main thread: plan + read every source range ----------------
+        var planned = new List<(ExportPlan Plan, string?[,] Rows)>(jobs.Count);
+        try
+        {
+            foreach (var job in jobs)
+            {
+                var plan = ExportPlanner.Create(job.SourceRange, job.TargetPath, workbookDirectory);
+                planned.Add((plan, ReadAsStringGrid(plan.SourceRangeAddress)));
+            }
+        }
+        catch (FormatException fex) { Warn(fex.Message); return; }
+        catch (Exception ex)
+        {
+            Fail($"Export Wizard: failed to read a source range — {ex.Message}", ex);
+            return;
+        }
+
+        // --- background thread: write each file --------------------------
+        Task.Run(() =>
+        {
+            int written = 0;
+            foreach (var (plan, rows) in planned)
+            {
+                int height = rows.GetLength(0);
+                int width = rows.GetLength(1);
+                if (height == 0 || width == 0)
+                {
+                    Warn($"Export Wizard: '{plan.SourceRangeAddress}' is empty — skipped.");
+                    continue;
+                }
+                try
+                {
+                    EnsureDirectory(plan.AbsoluteTargetPath);
+                    using var stream = new FileStream(
+                        plan.AbsoluteTargetPath, FileMode.Create, FileAccess.Write, FileShare.Read);
+                    CsvWriter.Write(
+                        stream, EnumerateRows(rows),
+                        delimiter: plan.Delimiter, lineTerminator: "\r\n",
+                        encoding: null, writeBom: false);
+                    written++;
+                }
+                catch (Exception ex)
+                {
+                    Fail($"Export Wizard: failed to write '{plan.AbsoluteTargetPath}' — {ex.Message}", ex);
+                }
+            }
+            Trace.WriteLine($"Export Wizard: wrote {written}/{planned.Count} file(s).");
         });
     }
 

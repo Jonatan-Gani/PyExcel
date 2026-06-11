@@ -26,10 +26,23 @@
       dependency closure — fine for the production .xll, which is net48.
     -->
     <ProjectReference Include="..\PyExcel.Excel\PyExcel.Excel.csproj" />
+    <!--
+      OnAddAction / OnEditAction show the WinForms EditActionForm (Phase 8)
+      and hand its RibbonAction result to StateService.AddAction. The forms
+      assembly multi-targets net48 + netstandard2.0; the ribbon is net48,
+      so it binds the net48 slice with the real WinForms dialog.
+    -->
+    <ProjectReference Include="..\PyExcel.Forms\PyExcel.Forms.csproj" />
   </ItemGroup>
 
   <ItemGroup>
     <EmbeddedResource Include="Resources\RibbonUI.xml" />
+    <!--
+      The ribbon logo. LogicalName pins the manifest resource name to
+      "customLogo.png" so PyExcelRibbon.LoadImage("customLogo") can fetch
+      it by a stable name. The source PNG lives with the v1 ribbon assets.
+    -->
+    <EmbeddedResource Include="..\Ribbon\customLogo.png" LogicalName="customLogo.png" />
   </ItemGroup>
 
   <!--
@@ -40,6 +53,14 @@
   -->
   <ItemGroup>
     <Reference Include="System.Windows.Forms" />
+    <!-- LoadImage decodes the embedded PNG into a System.Drawing.Bitmap. -->
+    <Reference Include="System.Drawing" />
+    <!--
+      CurrentSelectionAddress reads Application.Selection late-bound via
+      `dynamic`; the C# dynamic binder lives in Microsoft.CSharp.dll, which
+      SDK-style net48 projects don't reference automatically.
+    -->
+    <Reference Include="Microsoft.CSharp" />
   </ItemGroup>
 
 </Project>

@@ -55,7 +55,15 @@ public static class RangeRunner
     /// Must be called on Excel's main thread (a ribbon callback satisfies
     /// this) because it reads ranges synchronously before handing off.
     /// </remarks>
-    public static void RunActiveScript(WorkbookState state)
+    /// <param name="state">The active workbook state.</param>
+    /// <param name="progressFactory">Optional factory creating a modeless
+    /// progress sink (the WinForms <c>ProgressForm</c>). When supplied the
+    /// run goes through the async, cancellable path and forwards the
+    /// kernel's <c>PROGRESS</c> frames to the sink; when null the original
+    /// synchronous path runs unchanged.</param>
+    public static void RunActiveScript(
+        WorkbookState state,
+        Func<IRunProgressSink>? progressFactory = null)
     {
         if (state is null) throw new ArgumentNullException(nameof(state));
 
@@ -99,18 +107,40 @@ public static class RangeRunner
 
         var archiveContext = BuildArchiveContext();
 
+        // Optional progress UI: created on the main thread (shows a modeless
+        // dialog) and fed the kernel's PROGRESS frames. When absent the run
+        // takes the original synchronous, non-cancellable path.
+        IRunProgressSink? progress = progressFactory?.Invoke();
+        EventHandler<ProgressReceivedEventArgs>? progressHandler = null;
+        if (progress is not null)
+        {
+            IRunProgressSink sink = progress;
+            progressHandler = (_, ev) => sink.Report(ev.Percent, ev.Message);
+            KernelHost.Default.Client.ProgressReceived += progressHandler;
+        }
+        var runToken = progress?.CancellationToken ?? default;
+
         // --- background thread: the kernel exchange (may block) -----------
         Task.Run(() =>
         {
             try
             {
-                var result = PyRun.ExecuteMany(
-                    script: script,
-                    inputs: inputs,
-                    kwargs: null,
-                    client: KernelHost.Default.Client,
-                    workbookDirectory: workbookDir,
-                    archive: archiveContext);
+                var result = progress is not null
+                    ? PyRun.ExecuteManyAsync(
+                        script: script,
+                        inputs: inputs,
+                        kwargs: null,
+                        client: KernelHost.Default.Client,
+                        workbookDirectory: workbookDir,
+                        cancellationToken: runToken,
+                        archive: archiveContext).GetAwaiter().GetResult()
+                    : PyRun.ExecuteMany(
+                        script: script,
+                        inputs: inputs,
+                        kwargs: null,
+                        client: KernelHost.Default.Client,
+                        workbookDirectory: workbookDir,
+                        archive: archiveContext);
 
                 // --- main thread: write the result back ------------------
                 if (outputAddress is null)
@@ -153,6 +183,12 @@ public static class RangeRunner
                     ScriptPath: script);
                 RecordError(record);
                 Fail(record.FormatForClipboard(), ex);
+            }
+            finally
+            {
+                if (progressHandler is not null)
+                    KernelHost.Default.Client.ProgressReceived -= progressHandler;
+                progress?.Complete();
             }
         });
     }

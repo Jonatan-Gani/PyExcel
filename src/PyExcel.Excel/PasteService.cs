@@ -38,7 +38,16 @@ public static class PasteService
     /// Returns immediately; the file read and the write-back happen
     /// asynchronously.
     /// </summary>
-    public static void RunActivePaste(WorkbookState state)
+    /// <param name="state">The active workbook state carrying the paste
+    /// target.</param>
+    /// <param name="orientationChooser">Optional callback (on the macro
+    /// thread) asked which way a 1-D list should spill when the target is a
+    /// single cell, where the direction is ambiguous. Returns null to
+    /// cancel the paste. When null (no UI), a 1-D list spills across a row,
+    /// preserving the pre-dialog behaviour.</param>
+    public static void RunActivePaste(
+        WorkbookState state,
+        Func<ListOrientation?>? orientationChooser = null)
     {
         if (state is null) throw new ArgumentNullException(nameof(state));
 
@@ -111,15 +120,48 @@ public static class PasteService
             {
                 try
                 {
-                    var (rows, cols) = PastePreflight.Footprint(decoded);
+                    dynamic app = ExcelDnaUtil.Application;
+                    dynamic anchor = app.Range[plan.TargetRangeAddress];
+
+                    // A 1-D list into a single cell is ambiguous — ask which
+                    // way to spill (the v1 frmOrientation rule). A multi-cell
+                    // target dictates the direction by its shape. Vertical is
+                    // realised by reshaping the vector into an N×1 column so
+                    // the rest of the pipeline treats it as a table.
+                    object writeData = decoded;
+                    if (decoded is object?[] vector && vector.Length > 0)
+                    {
+                        int anchorRows = (int)anchor.Rows.Count;
+                        int anchorCols = (int)anchor.Columns.Count;
+                        var resolution = OrientationResolver.Resolve(anchorRows, anchorCols);
+                        ListOrientation orientation;
+                        if (resolution.Ask)
+                        {
+                            var chosen = orientationChooser?.Invoke();
+                            if (orientationChooser is not null && chosen is null)
+                            {
+                                Trace.WriteLine("Paste: cancelled at the orientation prompt.");
+                                LogDisplay.WriteLine("Paste: cancelled — no direction chosen.");
+                                return;
+                            }
+                            orientation = chosen ?? ListOrientation.Horizontal;
+                        }
+                        else
+                        {
+                            orientation = resolution.Orientation;
+                        }
+
+                        if (orientation == ListOrientation.Vertical)
+                            writeData = ToColumn(vector);
+                    }
+
+                    var (rows, cols) = PastePreflight.Footprint(writeData);
                     if (rows == 0 || cols == 0)
                     {
                         Warn($"Paste: run {plan.SourceRunId} payload is empty.");
                         return;
                     }
 
-                    dynamic app = ExcelDnaUtil.Application;
-                    dynamic anchor = app.Range[plan.TargetRangeAddress];
                     dynamic targetRange = anchor.Resize[rows, cols];
 
                     // Read what's at the target right now. Excel-DNA's
@@ -141,7 +183,7 @@ public static class PasteService
                         return;
                     }
 
-                    WriteToRange(targetRange, decoded);
+                    WriteToRange(targetRange, writeData);
                     Trace.WriteLine(
                         $"Paste: pasted run {plan.SourceRunId} into '{plan.TargetRangeAddress}'.");
                 }
@@ -206,6 +248,17 @@ public static class PasteService
         }
 
         return value2;
+    }
+
+    /// <summary>Reshape a 1-D vector into an N×1 column (a 2-D array) so a
+    /// vertical paste flows through the same table-write path as any other
+    /// 2-D payload.</summary>
+    private static object?[,] ToColumn(object?[] vector)
+    {
+        var column = new object?[vector.Length, 1];
+        for (int i = 0; i < vector.Length; i++)
+            column[i, 0] = vector[i];
+        return column;
     }
 
     /// <summary>Write a decoded Arrow payload into the resolved target
