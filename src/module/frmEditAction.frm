@@ -36,7 +36,7 @@ EH:
 End Sub
 
 Private Sub UserForm_Activate()
-    ' intentionally empty — do NOT refresh here
+    ' intentionally empty ï¿½ do NOT refresh here
 End Sub
 
 Private Sub RefreshFromContext()
@@ -254,100 +254,94 @@ End Sub
 
 
 Private Sub btnAddInput_Click()
-    Dim rng As Range
-    On Error Resume Next
-    Set rng = Application.InputBox("Select Input Range", Type:=8)
-    On Error GoTo 0
-    If rng Is Nothing Then Exit Sub
-    AddListBoxRow ListBoxInput, "", rng.Address(False, False), rng.parent.name, "Range"
+    AddListBoxRange ListBoxInput, "Input"
 End Sub
 
 Private Sub btnAddOutput_Click()
+    AddListBoxRange ListBoxOutput, "Output"
+End Sub
+
+' Add a new row using the NATIVE Excel range picker. Name is optional.
+Private Sub AddListBoxRange(lb As MSForms.ListBox, kind As String)
     Dim rng As Range
+    Dim newAlias As String
+
     On Error Resume Next
-    Set rng = Application.InputBox("Select Output Range", Type:=8)
+    Set rng = Application.InputBox( _
+        Prompt:="Select the " & LCase$(kind) & " range (drag on the sheet):", _
+        Title:="Add " & kind & " Range", _
+        Type:=8)
     On Error GoTo 0
     If rng Is Nothing Then Exit Sub
-    AddListBoxRow ListBoxOutput, "", rng.Address(False, False), rng.parent.name, "Range"
+
+    newAlias = Trim$(InputBox( _
+        "Optional name for this " & LCase$(kind) & " (leave blank for none):", _
+        "Name (optional)", ""))
+
+    AddListBoxRow lb, newAlias, rng.Address(False, False), rng.parent.name, "Range"
 End Sub
 
 
 
 Private Sub btnEditInput_Click()
-    Dim i As Long
-    Dim rawRef As String
-    Dim updated As String
-    Dim savedLeft As Single
-    Dim savedTop As Single
-    Dim aliasName As String, rangeAddr As String, sheetName As String, itemType As String
-
-    i = ListBoxInput.ListIndex
-    If i < 0 Then
-        MsgBox "Select an input item to edit.", vbExclamation
-        Exit Sub
-    End If
-
-    rawRef = BuildRefFromCols(ListBoxInput.List(i, 0), ListBoxInput.List(i, 2), ListBoxInput.List(i, 1))
-
-    savedLeft = Me.Left
-    savedTop = Me.Top
-    Me.Left = -20000
-    Me.Top = -20000
-
-    updated = frmRangeSet.GetUpdatedValue(rawRef)
-
-    Me.Left = savedLeft
-    Me.Top = savedTop
-
-    ParseRefToColumns updated, aliasName, rangeAddr, sheetName, itemType
-    ListBoxInput.List(i, 0) = aliasName
-    ListBoxInput.List(i, 1) = rangeAddr
-    ListBoxInput.List(i, 2) = sheetName
-    ListBoxInput.List(i, 3) = itemType
+    EditListBoxRange ListBoxInput, "Input"
 End Sub
 
 
 
 Private Sub btnEditOutput_Click()
-    Dim i As Long
-    Dim rawRef As String
-    Dim updated As String
-    Dim savedLeft As Single
-    Dim savedTop As Single
-    Dim aliasName As String, rangeAddr As String, sheetName As String, itemType As String
+    EditListBoxRange ListBoxOutput, "Output"
+End Sub
 
-    i = ListBoxOutput.ListIndex
+
+
+' Edit an existing row using the NATIVE Excel range picker (Application.InputBox
+' Type:=8), pre-seeded to the row's current range so the user can re-select on
+' the sheet instead of being stuck with the old reference. The name is optional.
+Private Sub EditListBoxRange(lb As MSForms.ListBox, kind As String)
+    Dim i As Long
+    Dim curAlias As String, curRange As String, curSheet As String
+    Dim defaultRef As String
+    Dim picked As Range
+    Dim newAlias As String
+
+    i = lb.ListIndex
     If i < 0 Then
-        MsgBox "Select an output item to edit.", vbExclamation
+        MsgBox "Select a" & IIf(kind = "Input", "n input", "n output") & " item to edit.", vbExclamation
         Exit Sub
     End If
 
-    rawRef = BuildRefFromCols(ListBoxOutput.List(i, 0), ListBoxOutput.List(i, 2), ListBoxOutput.List(i, 1))
+    curAlias = lb.List(i, 0)
+    curRange = lb.List(i, 1)
+    curSheet = lb.List(i, 2)
 
-    savedLeft = Me.Left
-    savedTop = Me.Top
+    ' Seed the picker with the fully-qualified current reference
+    If Len(curSheet) > 0 And Len(curRange) > 0 Then
+        defaultRef = "'" & curSheet & "'!" & curRange
+    Else
+        defaultRef = curRange
+    End If
 
+    On Error Resume Next
+    Set picked = Application.InputBox( _
+        Prompt:="Select the " & LCase$(kind) & " range (drag on the sheet to change it):", _
+        Title:="Edit " & kind & " Range", _
+        Default:=defaultRef, _
+        Type:=8)
+    On Error GoTo 0
 
-    Me.Left = -20000
-    Me.Top = -20000
+    ' User cancelled - leave the row untouched
+    If picked Is Nothing Then Exit Sub
 
-    updated = frmRangeSet.GetUpdatedValue(rawRef)
+    ' Optional name, pre-filled with the existing alias
+    newAlias = Trim$(InputBox( _
+        "Optional name for this " & LCase$(kind) & " (leave blank for none):", _
+        "Name (optional)", curAlias))
 
-
-
-
-
-    Me.Left = savedLeft
-    Me.Top = savedTop
-
-    ParseRefToColumns updated, aliasName, rangeAddr, sheetName, itemType
-    ListBoxOutput.List(i, 0) = aliasName
-    ListBoxOutput.List(i, 1) = rangeAddr
-    ListBoxOutput.List(i, 2) = sheetName
-    ListBoxOutput.List(i, 3) = itemType
-
-
-
+    lb.List(i, 0) = newAlias
+    lb.List(i, 1) = picked.Address(False, False)
+    lb.List(i, 2) = picked.parent.name
+    lb.List(i, 3) = "Range"
 End Sub
 
 
@@ -752,7 +746,7 @@ End Sub
 
 
 ' ---------------------------------------------------------------
-' SERIALIZATION — JSON
+' SERIALIZATION ï¿½ JSON
 ' ---------------------------------------------------------------
 
 Private Function ActionsToJSON(dict As Object) As String
@@ -857,7 +851,7 @@ End Function
 
 
 ' ---------------------------------------------------------------
-' SERIALIZATION — XML
+' SERIALIZATION ï¿½ XML
 ' ---------------------------------------------------------------
 
 Private Function ActionsToXML(dict As Object) As String
@@ -927,7 +921,7 @@ End Function
 
 
 ' ---------------------------------------------------------------
-' SERIALIZATION — TXT (pipe-delimited)
+' SERIALIZATION ï¿½ TXT (pipe-delimited)
 ' ---------------------------------------------------------------
 
 Private Function ActionsToTXT(dict As Object) As String
