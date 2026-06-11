@@ -18,6 +18,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "PyExcel.Excel", "src\PyExce
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "PyExcel.State", "src\PyExcel.State\PyExcel.State.csproj", "{6F3C2C4E-1A1A-4E5D-9C7E-1F4C2D9E5A08}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "PyExcel.Setup", "src\PyExcel.Setup\PyExcel.Setup.csproj", "{6F3C2C4E-1A1A-4E5D-9C7E-1F4C2D9E5A09}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|x64 = Debug|x64
@@ -56,6 +58,10 @@ Global
 		{6F3C2C4E-1A1A-4E5D-9C7E-1F4C2D9E5A08}.Debug|x64.Build.0 = Debug|x64
 		{6F3C2C4E-1A1A-4E5D-9C7E-1F4C2D9E5A08}.Release|x64.ActiveCfg = Release|x64
 		{6F3C2C4E-1A1A-4E5D-9C7E-1F4C2D9E5A08}.Release|x64.Build.0 = Release|x64
+		{6F3C2C4E-1A1A-4E5D-9C7E-1F4C2D9E5A09}.Debug|x64.ActiveCfg = Debug|x64
+		{6F3C2C4E-1A1A-4E5D-9C7E-1F4C2D9E5A09}.Debug|x64.Build.0 = Debug|x64
+		{6F3C2C4E-1A1A-4E5D-9C7E-1F4C2D9E5A09}.Release|x64.ActiveCfg = Release|x64
+		{6F3C2C4E-1A1A-4E5D-9C7E-1F4C2D9E5A09}.Release|x64.Build.0 = Release|x64
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
