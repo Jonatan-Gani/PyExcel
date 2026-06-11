@@ -397,6 +397,27 @@ Public Function SelectAndSetupRootPath(wb As Workbook, fso As Object) As String
         defaultPath = Environ$("USERPROFILE")
     End If
 
+    ' If the workbook is already saved to a LOCAL folder, offer to install
+    ' PyExcel directly INTO that folder. At run time ResolveProjectPath looks
+    ' for the project in the workbook's own folder, so installing there keeps
+    ' setup and runtime in agreement (no orphaned install in a sibling
+    ' "projectName" subfolder). Decline to fall back to the name+location prompts.
+    If Len(wb.path) > 0 And (wb.path Like "[A-Za-z]:\*") Then
+        Dim useWbFolder As VbMsgBoxResult
+        useWbFolder = MsgBox( _
+            "Install PyExcel into this workbook's own folder?" & vbCrLf & vbCrLf & _
+            wb.path & vbCrLf & vbCrLf & _
+            "Recommended - keeps the Python project next to the workbook so it" & vbCrLf & _
+            "is always found. Choose No to pick a different location.", _
+            vbYesNoCancel + vbQuestion, "PyExcel Setup Location")
+        If useWbFolder = vbCancel Then Exit Function
+        If useWbFolder = vbYes Then
+            Call EnsureFolderExists(wb.path)
+            SelectAndSetupRootPath = wb.path
+            Exit Function
+        End If
+    End If
+
     ' Determine default project name
     If Len(wb.path) = 0 Then
         ' Unsaved workbook - check if it's a default name like "Book1"
@@ -616,6 +637,25 @@ Public Function SaveHostAsXLSM(wb As Workbook, rootPath As String) As Boolean
         Debug.Print "[SaveHostAsXLSM] Root path created successfully"
     Else
         Debug.Print "[SaveHostAsXLSM] Root path exists: OK"
+    End If
+
+    ' Installing into the workbook's OWN folder: keep the workbook's existing
+    ' base name (just ensure the .xlsm macro-enabled format) and save in place.
+    ' ResolveProjectPath only depends on the folder, not the file name, so there
+    ' is no reason to rename the workbook to the folder name here.
+    If LCase$(wb.path) = LCase$(rootPath) Then
+        Dim ownTarget As String
+        ownTarget = rootPath & "\" & fso.GetBaseName(wb.name) & ".xlsm"
+        Debug.Print "[SaveHostAsXLSM] In-place install; target: " & ownTarget
+        If LCase$(wb.FullName) = LCase$(ownTarget) Then
+            wb.Save
+        Else
+            Application.DisplayAlerts = False
+            wb.SaveAs ownTarget, xlOpenXMLWorkbookMacroEnabled
+            Application.DisplayAlerts = True
+        End If
+        SaveHostAsXLSM = True
+        Exit Function
     End If
 
     Dim targetPath As String
