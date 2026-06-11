@@ -35,6 +35,7 @@ public sealed class EditIoForm : Form
     private readonly TextBox _outputBox;
     private readonly Label _errorLabel;
     private readonly Func<string?, string?, EditIoValidationResult> _validate;
+    private readonly Func<string?>? _selectionProvider;
 
     /// <summary>The validated result, valid only after the dialog returns
     /// <see cref="DialogResult.OK"/>.</summary>
@@ -42,29 +43,35 @@ public sealed class EditIoForm : Form
 
     /// <summary>Show the Edit-Import dialog (source file → target range).</summary>
     public static EditIoValidationResult? PromptImport(
-        IWin32Window? owner, string? input, string? output, string? workbookDir)
+        IWin32Window? owner, string? input, string? output, string? workbookDir,
+        Func<string?>? selectionProvider = null)
         => Show(owner, new EditIoForm(
             title: "Edit Import",
             inputLabel: "Source file:", inputKind: FieldKind.OpenFile, input: input,
             outputLabel: "Target range:", outputKind: FieldKind.Range, output: output,
-            validate: (i, o) => EditIoValidator.ValidateImport(i, o, workbookDir)));
+            validate: (i, o) => EditIoValidator.ValidateImport(i, o, workbookDir),
+            selectionProvider: selectionProvider));
 
     /// <summary>Show the Edit-Export dialog (source range → target file).</summary>
     public static EditIoValidationResult? PromptExport(
-        IWin32Window? owner, string? input, string? output, string? workbookDir)
+        IWin32Window? owner, string? input, string? output, string? workbookDir,
+        Func<string?>? selectionProvider = null)
         => Show(owner, new EditIoForm(
             title: "Edit Export",
             inputLabel: "Source range:", inputKind: FieldKind.Range, input: input,
             outputLabel: "Target file:", outputKind: FieldKind.SaveFile, output: output,
-            validate: (i, o) => EditIoValidator.ValidateExport(i, o, workbookDir)));
+            validate: (i, o) => EditIoValidator.ValidateExport(i, o, workbookDir),
+            selectionProvider: selectionProvider));
 
     /// <summary>Show the Edit-Paste dialog (target range only).</summary>
-    public static EditIoValidationResult? PromptPaste(IWin32Window? owner, string? output)
+    public static EditIoValidationResult? PromptPaste(
+        IWin32Window? owner, string? output, Func<string?>? selectionProvider = null)
         => Show(owner, new EditIoForm(
             title: "Edit Paste",
             inputLabel: null, inputKind: FieldKind.Range, input: null,
             outputLabel: "Target range:", outputKind: FieldKind.Range, output: output,
-            validate: (i, o) => EditIoValidator.ValidatePaste(o)));
+            validate: (i, o) => EditIoValidator.ValidatePaste(o),
+            selectionProvider: selectionProvider));
 
     private static EditIoValidationResult? Show(IWin32Window? owner, EditIoForm form)
     {
@@ -79,9 +86,11 @@ public sealed class EditIoForm : Form
         string title,
         string? inputLabel, FieldKind inputKind, string? input,
         string outputLabel, FieldKind outputKind, string? output,
-        Func<string?, string?, EditIoValidationResult> validate)
+        Func<string?, string?, EditIoValidationResult> validate,
+        Func<string?>? selectionProvider)
     {
         _validate = validate;
+        _selectionProvider = selectionProvider;
 
         Text = title;
         FormBorderStyle = FormBorderStyle.FixedDialog;
@@ -153,30 +162,35 @@ public sealed class EditIoForm : Form
 
         const int fieldX = 100;
         int fieldRight = ClientSize.Width - 12;
-        bool browses = kind != FieldKind.Range;
+        bool isFile = kind != FieldKind.Range;
+        bool canPickRange = kind == FieldKind.Range && _selectionProvider is not null;
+        bool hasButton = isFile || canPickRange;
 
         var box = new TextBox
         {
             Left = fieldX,
             Top = y,
-            Width = browses ? fieldRight - fieldX - 84 : fieldRight - fieldX,
+            Width = hasButton ? fieldRight - fieldX - 84 : fieldRight - fieldX,
             Text = value ?? string.Empty,
             TabIndex = tabStart,
         };
         Controls.Add(box);
 
-        if (browses)
+        if (hasButton)
         {
-            var browse = new Button
+            var button = new Button
             {
-                Text = "Browse…",
+                Text = isFile ? "Browse…" : "Pick…",
                 Left = fieldRight - 80,
                 Top = y - 1,
                 Width = 80,
                 TabIndex = tabStart + 1,
             };
-            browse.Click += (_, _) => BrowseInto(box, kind);
-            Controls.Add(browse);
+            if (isFile)
+                button.Click += (_, _) => BrowseInto(box, kind);
+            else
+                button.Click += (_, _) => PickRangeInto(box);
+            Controls.Add(button);
         }
 
         return box;
@@ -201,6 +215,12 @@ public sealed class EditIoForm : Form
             if (!string.IsNullOrWhiteSpace(target.Text)) dlg.FileName = target.Text;
             if (dlg.ShowDialog(this) == DialogResult.OK) target.Text = dlg.FileName;
         }
+    }
+
+    private void PickRangeInto(TextBox target)
+    {
+        var picked = RangePickerForm.Prompt(this, target.Text, _selectionProvider);
+        if (picked is not null) target.Text = picked;
     }
 
     private void OnOkClick(object? sender, EventArgs e)

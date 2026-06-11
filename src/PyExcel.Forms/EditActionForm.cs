@@ -35,6 +35,7 @@ public sealed class EditActionForm : Form
 
     private readonly IReadOnlyList<string> _existingActionNames;
     private readonly string? _originalName;
+    private readonly Func<string?>? _selectionProvider;
 
     /// <summary>The action the user built, valid only after the dialog
     /// returns <see cref="DialogResult.OK"/>.</summary>
@@ -51,13 +52,18 @@ public sealed class EditActionForm : Form
     /// used to reject a duplicate name.</param>
     /// <param name="existing">The action being edited, or null to add a
     /// new one.</param>
+    /// <param name="selectionProvider">Optional provider of the active
+    /// Excel selection's address; when supplied, the input/output range
+    /// fields get a "Pick…" button opening the range picker.</param>
     public static RibbonAction? Prompt(
         IWin32Window? owner,
         IReadOnlyList<string> availableScripts,
         IReadOnlyList<string> existingActionNames,
-        RibbonAction? existing)
+        RibbonAction? existing,
+        Func<string?>? selectionProvider = null)
     {
-        using var form = new EditActionForm(availableScripts, existingActionNames, existing);
+        using var form = new EditActionForm(
+            availableScripts, existingActionNames, existing, selectionProvider);
         var result = owner is null ? form.ShowDialog() : form.ShowDialog(owner);
         return result == DialogResult.OK ? form.Result : null;
     }
@@ -65,10 +71,12 @@ public sealed class EditActionForm : Form
     private EditActionForm(
         IReadOnlyList<string> availableScripts,
         IReadOnlyList<string> existingActionNames,
-        RibbonAction? existing)
+        RibbonAction? existing,
+        Func<string?>? selectionProvider)
     {
         _existingActionNames = existingActionNames ?? Array.Empty<string>();
         _originalName = existing?.Name;
+        _selectionProvider = selectionProvider;
 
         Text = existing is null ? "Add Action" : "Edit Action";
         FormBorderStyle = FormBorderStyle.FixedDialog;
@@ -103,14 +111,19 @@ public sealed class EditActionForm : Form
         Controls.Add(_scriptBox);
         y += 32;
 
+        bool canPick = _selectionProvider is not null;
+        int rangeWidth = canPick ? fieldWidth - 84 : fieldWidth;
+
         AddLabel("Input range:", labelX, y + 3);
-        _inputBox = new TextBox { Left = fieldX, Top = y, Width = fieldWidth, TabIndex = 2 };
+        _inputBox = new TextBox { Left = fieldX, Top = y, Width = rangeWidth, TabIndex = 2 };
         Controls.Add(_inputBox);
+        if (canPick) AddPickButton(_inputBox, fieldX + rangeWidth + 4, y - 1, tabIndex: 7);
         y += 32;
 
         AddLabel("Output range:", labelX, y + 3);
-        _outputBox = new TextBox { Left = fieldX, Top = y, Width = fieldWidth, TabIndex = 3 };
+        _outputBox = new TextBox { Left = fieldX, Top = y, Width = rangeWidth, TabIndex = 3 };
         Controls.Add(_outputBox);
+        if (canPick) AddPickButton(_outputBox, fieldX + rangeWidth + 4, y - 1, tabIndex: 8);
         y += 32;
 
         AddLabel("Keyword args:", labelX, y + 3);
@@ -174,6 +187,17 @@ public sealed class EditActionForm : Form
             _outputBox.Text = existing.Output;
             _kwargsBox.Text = KwargsText.Format(existing.Kwargs);
         }
+    }
+
+    private void AddPickButton(TextBox target, int left, int top, int tabIndex)
+    {
+        var pick = new Button { Text = "Pick…", Left = left, Top = top, Width = 80, TabIndex = tabIndex };
+        pick.Click += (_, _) =>
+        {
+            var picked = RangePickerForm.Prompt(this, target.Text, _selectionProvider);
+            if (picked is not null) target.Text = picked;
+        };
+        Controls.Add(pick);
     }
 
     private void AddLabel(string text, int x, int top, bool dim = false)
