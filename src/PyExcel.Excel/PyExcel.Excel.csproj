@@ -35,6 +35,12 @@
       builds even though RangeRunner itself is #if NETFRAMEWORK.
     -->
     <ProjectReference Include="..\PyExcel.State\PyExcel.State.csproj" />
+    <!--
+      KernelHost resolves the per-project environment directory via
+      PyExcel.Common.ProjectDirectory, the single rule shared with
+      PyExcel.Setup so the runtime looks where Setup provisioned.
+    -->
+    <ProjectReference Include="..\PyExcel.Common\PyExcel.Common.csproj" />
   </ItemGroup>
 
   <!--

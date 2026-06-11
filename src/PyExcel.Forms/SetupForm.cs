@@ -120,6 +120,8 @@ public sealed class SetupForm : Form
     protected override void OnShown(EventArgs e)
     {
         base.OnShown(e);
+        AppendLine("Project directory: " + _projectPath, false);
+        AppendLine(string.Empty, false);
         // Kick the headless pipeline off the UI thread; stream its log here.
         var sink = new SinkLog(AppendLine, _innerLog);
         Task.Run(() => new SetupService(sink).Run(_projectPath))
