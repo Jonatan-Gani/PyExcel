@@ -308,6 +308,7 @@ input is caught in the dialog, not downstream.
 - [x] Delete `src/module/`, `src/embedded/`, `src/Ribbon/`, `PyExcel.xlam`. *(Ribbon logo `customLogo.png` relocated into `PyExcel.Ribbon/Resources/` first — the v2 ribbon embeds it.)*
 - [ ] Rewrite `README.md` to describe v2 as the product.
 - [ ] Tag the release; update `Directory.Build.props` version off `-alpha`.
+- [ ] **Update mechanism (open — placeholder shipped).** "Enable" now also installs/sets up a workbook — install + enable are one button, greyed once the workbook is enabled (Note 3, `OnEnablePyExcel` + `RibbonNotEnabled`). A separate **Update** path is only stubbed: the ribbon's Update button is a disabled placeholder (`RibbonUpdateAvailable` returns false; `OnUpdate` only logs). To finish: decide how the bundled build version is compared against a workbook's provisioned version, add a launch-time "is a newer build available?" check that drives `RibbonUpdateAvailable`, and define what Update re-runs (refresh the extracted kernel + re-sync deps via the idempotent `SetupService`).
 
 **Exit criteria.** v2 ships; no VBA remains in the repository.
 

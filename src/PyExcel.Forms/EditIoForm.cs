@@ -35,7 +35,7 @@ public sealed class EditIoForm : Form
     private readonly TextBox _outputBox;
     private readonly Label _errorLabel;
     private readonly Func<string?, string?, EditIoValidationResult> _validate;
-    private readonly Func<string?>? _selectionProvider;
+    private readonly Func<string?, string?>? _rangePicker;
 
     /// <summary>The validated result, valid only after the dialog returns
     /// <see cref="DialogResult.OK"/>.</summary>
@@ -44,34 +44,34 @@ public sealed class EditIoForm : Form
     /// <summary>Show the Edit-Import dialog (source file → target range).</summary>
     public static EditIoValidationResult? PromptImport(
         IWin32Window? owner, string? input, string? output, string? workbookDir,
-        Func<string?>? selectionProvider = null)
+        Func<string?, string?>? rangePicker = null)
         => Show(owner, new EditIoForm(
             title: "Edit Import",
             inputLabel: "Source file:", inputKind: FieldKind.OpenFile, input: input,
             outputLabel: "Target range:", outputKind: FieldKind.Range, output: output,
             validate: (i, o) => EditIoValidator.ValidateImport(i, o, workbookDir),
-            selectionProvider: selectionProvider));
+            rangePicker: rangePicker));
 
     /// <summary>Show the Edit-Export dialog (source range → target file).</summary>
     public static EditIoValidationResult? PromptExport(
         IWin32Window? owner, string? input, string? output, string? workbookDir,
-        Func<string?>? selectionProvider = null)
+        Func<string?, string?>? rangePicker = null)
         => Show(owner, new EditIoForm(
             title: "Edit Export",
             inputLabel: "Source range:", inputKind: FieldKind.Range, input: input,
             outputLabel: "Target file:", outputKind: FieldKind.SaveFile, output: output,
             validate: (i, o) => EditIoValidator.ValidateExport(i, o, workbookDir),
-            selectionProvider: selectionProvider));
+            rangePicker: rangePicker));
 
     /// <summary>Show the Edit-Paste dialog (target range only).</summary>
     public static EditIoValidationResult? PromptPaste(
-        IWin32Window? owner, string? output, Func<string?>? selectionProvider = null)
+        IWin32Window? owner, string? output, Func<string?, string?>? rangePicker = null)
         => Show(owner, new EditIoForm(
             title: "Edit Paste",
             inputLabel: null, inputKind: FieldKind.Range, input: null,
             outputLabel: "Target range:", outputKind: FieldKind.Range, output: output,
             validate: (i, o) => EditIoValidator.ValidatePaste(o),
-            selectionProvider: selectionProvider));
+            rangePicker: rangePicker));
 
     private static EditIoValidationResult? Show(IWin32Window? owner, EditIoForm form)
     {
@@ -87,10 +87,10 @@ public sealed class EditIoForm : Form
         string? inputLabel, FieldKind inputKind, string? input,
         string outputLabel, FieldKind outputKind, string? output,
         Func<string?, string?, EditIoValidationResult> validate,
-        Func<string?>? selectionProvider)
+        Func<string?, string?>? rangePicker)
     {
         _validate = validate;
-        _selectionProvider = selectionProvider;
+        _rangePicker = rangePicker;
 
         Text = title;
         FormBorderStyle = FormBorderStyle.FixedDialog;
@@ -163,7 +163,7 @@ public sealed class EditIoForm : Form
         const int fieldX = 100;
         int fieldRight = ClientSize.Width - 12;
         bool isFile = kind != FieldKind.Range;
-        bool canPickRange = kind == FieldKind.Range && _selectionProvider is not null;
+        bool canPickRange = kind == FieldKind.Range && _rangePicker is not null;
         bool hasButton = isFile || canPickRange;
 
         var box = new TextBox
@@ -219,7 +219,9 @@ public sealed class EditIoForm : Form
 
     private void PickRangeInto(TextBox target)
     {
-        var picked = RangePickerForm.Prompt(this, target.Text, _selectionProvider);
+        // Native Excel range picker — hide this dialog while the user
+        // selects on the sheet, then restore it with the chosen address.
+        var picked = RangePick.OnSheet(_rangePicker, target.Text, this);
         if (picked is not null) target.Text = picked;
     }
 

@@ -103,7 +103,7 @@ A single **Python** tab groups the controls:
 
 | Group  | Controls                                                                                |
 | ------ | --------------------------------------------------------------------------------------- |
-| Main   | Enable PyExcel · Setup · Open In Explorer · Read Me                                      |
+| Main   | Enable (install + enable) · Update · Open In Explorer · Read Me                          |
 | Errors | Show Last Error · Copy Last Error                                                        |
 | Python | Run · Edit · Script · Input · Output · Actions · Add / Edit / Delete Action              |
 | Import | Import · Source · Destination · Edit                                                     |

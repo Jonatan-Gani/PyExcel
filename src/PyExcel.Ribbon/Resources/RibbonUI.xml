@@ -14,8 +14,19 @@
         <tabs>
             <tab id="tabPython" label="Python">
                 <group id="grpMain" label="Main">
-                    <button id="btnEnablePyExcel" label="Enable PyExcel" imageMso="FileSaveAs" onAction="OnEnablePyExcel"/>
-                    <button id="btnSetup" label="Setup" imageMso="ServerConnection" onAction="OnSetup"/>
+                    <!--
+                      "Enable" installs + enables in one action (Note 3): it
+                      provisions the workbook (folders, venv, kernel, deps) and
+                      marks it enabled. getEnabled=RibbonNotEnabled greys it once
+                      the workbook is enabled so it can't be re-run by accident.
+                    -->
+                    <button id="btnEnablePyExcel" label="Enable" imageMso="ServerConnection" onAction="OnEnablePyExcel" getEnabled="RibbonNotEnabled"/>
+                    <!--
+                      Update is a placeholder for now: RibbonUpdateAvailable
+                      always returns false (disabled) until the update mechanism
+                      and a launch-time update check are built. See ROADMAP.md.
+                    -->
+                    <button id="btnUpdate" label="Update" imageMso="RefreshAll" onAction="OnUpdate" getEnabled="RibbonUpdateAvailable"/>
                     <button id="btnOpenExplorer" label="Open In Explorer" imageMso="FolderOpen" onAction="OnOpenExplorer" getEnabled="RibbonEnabled"/>
                     <button id="btnReadMe" label="Read Me" imageMso="Help" onAction="OnReadMe" getEnabled="RibbonEnabled"/>
                 </group>

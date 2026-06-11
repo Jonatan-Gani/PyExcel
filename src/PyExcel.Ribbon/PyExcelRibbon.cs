@@ -180,61 +180,79 @@ public class PyExcelRibbon : ExcelRibbon
 
     public bool RibbonEnabled(IRibbonControl control) => ActiveState().Enabled;
 
+    /// <summary>getEnabled for the "Enable" button — true only while the active
+    /// workbook is NOT yet enabled, so the button greys out once a workbook has
+    /// been set up/enabled (Note 3).</summary>
+    public bool RibbonNotEnabled(IRibbonControl control) => !ActiveState().Enabled;
+
+    /// <summary>getEnabled for the "Update" button. PLACEHOLDER (Note 3):
+    /// always false until the update mechanism and a launch-time update check
+    /// land — see OnUpdate and ROADMAP.md (Phase 9).</summary>
+    public bool RibbonUpdateAvailable(IRibbonControl control) => false;
+
     // -------------------------------------------------------------------------
     // Main group
     // -------------------------------------------------------------------------
 
     public void OnEnablePyExcel(IRibbonControl control)
     {
-        // v1 (modRibbon.bas:461) ran a full setup wizard that provisioned
-        // the workbook and then marked it enabled; that wizard is Phase 7.
-        // For now this button is the enable/disable toggle for the active
-        // workbook. Flipping Enabled fires StateChanged, which the
-        // RibbonOnLoad handler turns into an IRibbonUI.Invalidate — so every
-        // getEnabled-gated control lights up (or greys out) on the next
-        // repaint without any extra wiring here.
+        // "Enable" turns a plain workbook into a PyExcel workbook: it runs the
+        // full setup (create the project folders, provision the venv, extract
+        // the kernel, install dependencies) and, on success, marks the workbook
+        // enabled. Install and enable are deliberately one action (Note 3). The
+        // ribbon greys this button once the workbook is enabled (getEnabled =
+        // RibbonNotEnabled), so it can't be re-run by accident; flipping Enabled
+        // fires StateChanged, which RibbonOnLoad turns into an
+        // IRibbonUI.Invalidate so every getEnabled-gated control repaints.
+        _log.Info("OnEnablePyExcel clicked");
         try
         {
             var key = PyExcelServices.WorkbookContext.CurrentWorkbookKey;
             if (key is null) { _log.Info("OnEnablePyExcel: no active workbook"); return; }
-            var now = !PyExcelServices.State.Get(key).Enabled;
-            PyExcelServices.State.SetEnabled(key, now);
-            _log.Info($"OnEnablePyExcel: workbook '{key}' enabled={now}");
-        }
-        catch (Exception ex)
-        {
-            _log.Error("OnEnablePyExcel failed", ex);
-        }
-    }
 
-    public void OnSetup(IRibbonControl control)
-    {
-        _log.Info("OnSetup clicked");
-        try
-        {
             // An unsaved workbook has no location to anchor the environment to.
             var dir = PyExcelServices.WorkbookContext.CurrentWorkbookDirectory;
             if (string.IsNullOrEmpty(dir))
             {
                 LogDisplay.WriteLine(
-                    "Setup: save the workbook first — the Python environment is " +
+                    "Enable: save the workbook first — the Python environment is " +
                     "anchored to the workbook's location.");
                 return;
             }
+
             // For a local workbook this is the workbook folder; for a
             // SharePoint/OneDrive-online workbook (whose folder is a URL) it
             // maps to a local %LOCALAPPDATA%\PyExcel folder. KernelHost resolves
             // the same directory at run time, so the kernel finds this venv.
-            var projectDir = PyExcel.Common.ProjectDirectory.Resolve(dir);
+            var projectDir = PyExcel.Common.ProjectDirectory.Resolve(dir!);
             var success = SetupForm.Run(ExcelWindowOwner(), projectDir!, _log);
-            if (success is not null)
-                _log.Info($"OnSetup: finished, success={success}");
+            if (success == true)
+            {
+                PyExcelServices.State.SetEnabled(key, true);
+                _log.Info($"OnEnablePyExcel: workbook '{key}' set up and enabled");
+            }
+            else
+            {
+                _log.Info($"OnEnablePyExcel: setup did not complete; '{key}' left disabled");
+            }
         }
         catch (Exception ex)
         {
-            _log.Error("OnSetup failed", ex);
-            LogDisplay.WriteLine($"Setup: {ex.Message}");
+            _log.Error("OnEnablePyExcel failed", ex);
+            LogDisplay.WriteLine($"Enable: {ex.Message}");
         }
+    }
+
+    public void OnUpdate(IRibbonControl control)
+    {
+        // PLACEHOLDER (Note 3). The update path — refresh the extracted kernel
+        // and re-sync dependencies, plus a launch-time "is a newer build
+        // available?" check that would drive RibbonUpdateAvailable — isn't built
+        // yet. The button is greyed (RibbonUpdateAvailable returns false), so
+        // this is normally unreachable; it logs if invoked. Tracked as an open
+        // item in ROADMAP.md (Phase 9).
+        _log.Info("OnUpdate clicked (placeholder — update not yet implemented)");
+        LogDisplay.WriteLine("[PyExcel] Update isn't available yet.");
     }
 
     public void OnOpenExplorer(IRibbonControl control)
@@ -500,6 +518,42 @@ public class PyExcelRibbon : ExcelRibbon
         }
     }
 
+    /// <summary>
+    /// Excel's NATIVE range picker (Application.InputBox with Type:=8): shows
+    /// the collapsible "select a range" box so the user can click/drag on the
+    /// sheet, and returns the chosen range's address as <c>Sheet!A1:B2</c>.
+    /// Returns null if the user cancels or the call fails. Injected into the
+    /// dialogs as the range-pick delegate so PyExcel.Forms stays COM-free.
+    /// </summary>
+    private string? PickRangeNative(string? initial)
+    {
+        try
+        {
+            dynamic app = ExcelDnaUtil.Application;
+            // Application.InputBox(Prompt, Title, Default, Left, Top, HelpFile,
+            // HelpContextID, Type). Type 8 = a cell/range reference: Excel shows
+            // its collapsible range selector. Cancel returns the Boolean False;
+            // a pick returns a Range object.
+            object box = app.InputBox(
+                "Select a range, then click OK.",
+                "PyExcel — pick a range",
+                initial ?? string.Empty,
+                Type.Missing, Type.Missing, Type.Missing, Type.Missing, 8);
+
+            if (box is bool) return null; // user cancelled
+
+            dynamic range = box;
+            string address = (string)range.Address[false, false];
+            string sheet = (string)range.Worksheet.Name;
+            return $"{sheet}!{address}";
+        }
+        catch (Exception ex)
+        {
+            _log.Error("PickRangeNative failed", ex);
+            return null;
+        }
+    }
+
     public void OnDeleteAction(IRibbonControl control)
     {
         // Unlike Add/Edit, Delete needs no form — we can wire it now.
@@ -564,7 +618,7 @@ public class PyExcelRibbon : ExcelRibbon
                 state.ImportInput,
                 state.ImportOutput,
                 PyExcelServices.WorkbookContext.CurrentWorkbookDirectory,
-                CurrentSelectionAddress);
+                PickRangeNative);
             if (result is null) { _log.Info("OnEditImport: cancelled"); return; }
             PyExcelServices.State.SetImportInput(key, result.Input);
             PyExcelServices.State.SetImportOutput(key, result.Output);
@@ -623,7 +677,7 @@ public class PyExcelRibbon : ExcelRibbon
                 state.ExportInput,
                 state.ExportOutput,
                 PyExcelServices.WorkbookContext.CurrentWorkbookDirectory,
-                CurrentSelectionAddress);
+                PickRangeNative);
             if (result is null) { _log.Info("OnEditExport: cancelled"); return; }
             PyExcelServices.State.SetExportInput(key, result.Input);
             PyExcelServices.State.SetExportOutput(key, result.Output);
@@ -707,7 +761,7 @@ public class PyExcelRibbon : ExcelRibbon
             if (key is null) { _log.Info("OnEditPaste: no active workbook"); return; }
             var state = PyExcelServices.State.Get(key);
             var result = EditIoForm.PromptPaste(
-                ExcelWindowOwner(), state.PasteOutput, CurrentSelectionAddress);
+                ExcelWindowOwner(), state.PasteOutput, PickRangeNative);
             if (result is null) { _log.Info("OnEditPaste: cancelled"); return; }
             PyExcelServices.State.SetPasteOutput(key, result.Output);
             _log.Info($"OnEditPaste: saved for workbook '{key}'");
