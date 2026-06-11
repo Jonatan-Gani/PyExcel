@@ -480,7 +480,27 @@ public class PyExcelRibbon : ExcelRibbon
     }
 
     public void OnEditImport(IRibbonControl control)
-        => StubAction(control, "OnEditImport", "modRibbon.bas:708 — shows EditImportForm");
+    {
+        try
+        {
+            var key = PyExcelServices.WorkbookContext.CurrentWorkbookKey;
+            if (key is null) { _log.Info("OnEditImport: no active workbook"); return; }
+            var state = PyExcelServices.State.Get(key);
+            var result = EditIoForm.PromptImport(
+                ExcelWindowOwner(),
+                state.ImportInput,
+                state.ImportOutput,
+                PyExcelServices.WorkbookContext.CurrentWorkbookDirectory);
+            if (result is null) { _log.Info("OnEditImport: cancelled"); return; }
+            PyExcelServices.State.SetImportInput(key, result.Input);
+            PyExcelServices.State.SetImportOutput(key, result.Output);
+            _log.Info($"OnEditImport: saved for workbook '{key}'");
+        }
+        catch (Exception ex)
+        {
+            _log.Error("OnEditImport failed", ex);
+        }
+    }
 
     // -------------------------------------------------------------------------
     // Export group
@@ -518,7 +538,27 @@ public class PyExcelRibbon : ExcelRibbon
     }
 
     public void OnEditExport(IRibbonControl control)
-        => StubAction(control, "OnEditExport", "modRibbon.bas:853 — shows EditExportForm");
+    {
+        try
+        {
+            var key = PyExcelServices.WorkbookContext.CurrentWorkbookKey;
+            if (key is null) { _log.Info("OnEditExport: no active workbook"); return; }
+            var state = PyExcelServices.State.Get(key);
+            var result = EditIoForm.PromptExport(
+                ExcelWindowOwner(),
+                state.ExportInput,
+                state.ExportOutput,
+                PyExcelServices.WorkbookContext.CurrentWorkbookDirectory);
+            if (result is null) { _log.Info("OnEditExport: cancelled"); return; }
+            PyExcelServices.State.SetExportInput(key, result.Input);
+            PyExcelServices.State.SetExportOutput(key, result.Output);
+            _log.Info($"OnEditExport: saved for workbook '{key}'");
+        }
+        catch (Exception ex)
+        {
+            _log.Error("OnEditExport failed", ex);
+        }
+    }
 
     // -------------------------------------------------------------------------
     // Paste group
@@ -548,7 +588,22 @@ public class PyExcelRibbon : ExcelRibbon
     }
 
     public void OnEditPaste(IRibbonControl control)
-        => StubAction(control, "OnEditPaste", "modRibbon.bas:940 — shows EditPasteForm");
+    {
+        try
+        {
+            var key = PyExcelServices.WorkbookContext.CurrentWorkbookKey;
+            if (key is null) { _log.Info("OnEditPaste: no active workbook"); return; }
+            var state = PyExcelServices.State.Get(key);
+            var result = EditIoForm.PromptPaste(ExcelWindowOwner(), state.PasteOutput);
+            if (result is null) { _log.Info("OnEditPaste: cancelled"); return; }
+            PyExcelServices.State.SetPasteOutput(key, result.Output);
+            _log.Info($"OnEditPaste: saved for workbook '{key}'");
+        }
+        catch (Exception ex)
+        {
+            _log.Error("OnEditPaste failed", ex);
+        }
+    }
 
     // -------------------------------------------------------------------------
     // Errors group — Show / Copy Last Error. Surfaces what the kernel

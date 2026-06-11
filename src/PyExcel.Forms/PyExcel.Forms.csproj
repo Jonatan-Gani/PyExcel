@@ -27,6 +27,14 @@
     -->
     <ProjectReference Include="..\PyExcel.Common\PyExcel.Common.csproj" />
     <ProjectReference Include="..\PyExcel.State\PyExcel.State.csproj" />
+    <!--
+      The Edit-Import / Edit-Export / Edit-Paste dialogs validate through
+      PyExcel.Excel's EditIoValidator (which reuses ImportPlanner /
+      ExportPlanner), so the dialog rejects exactly what the run-time
+      service would. Both multi-target net48 + netstandard2.0, so the
+      reference resolves on both lanes.
+    -->
+    <ProjectReference Include="..\PyExcel.Excel\PyExcel.Excel.csproj" />
   </ItemGroup>
 
   <!--
