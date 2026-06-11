@@ -55,6 +55,12 @@
     <Reference Include="System.Windows.Forms" />
     <!-- LoadImage decodes the embedded PNG into a System.Drawing.Bitmap. -->
     <Reference Include="System.Drawing" />
+    <!--
+      CurrentSelectionAddress reads Application.Selection late-bound via
+      `dynamic`; the C# dynamic binder lives in Microsoft.CSharp.dll, which
+      SDK-style net48 projects don't reference automatically.
+    -->
+    <Reference Include="Microsoft.CSharp" />
   </ItemGroup>
 
 </Project>
