@@ -9,12 +9,25 @@
   CustomUI is wired via the ExcelRibbon-derived PyExcelRibbon class in
   PyExcel.Ribbon.dll. Excel-DNA only scans assemblies listed here as
   <ExternalLibrary> for [ExcelRibbon] classes (and [ExcelFunction]s) —
-  a merely-referenced dependency is packed for runtime loading but NOT
-  scanned. So PyExcel.Ribbon.dll must have its own entry, otherwise the
-  ribbon tab never renders even though the add-in's AutoOpen runs.
-  Likewise PyExcel.Excel.dll, which carries the =PY.RUN UDF.
+  a merely-referenced dependency is NOT packed either, contrary to an
+  earlier (wrong) comment here. ExcelDnaPack only embeds assemblies that
+  are explicitly listed in this file, via either <ExternalLibrary> (for
+  assemblies that should also be scanned for Excel-DNA content) or
+  <Reference> (for plain dependencies that should ride along but not be
+  scanned). Without these, the packed .xll references types that aren't
+  in the .xll's manifest and FileNotFoundException fires at load time —
+  symptom: "Could not load file or assembly 'PyExcel.Common, …'" the
+  first time Excel-DNA instantiates PyExcelRibbon.
+
+  When adding a new project that the .xll needs at runtime, add a
+  <Reference> entry below (use <ExternalLibrary> only if the new
+  assembly itself defines [ExcelRibbon] or [ExcelFunction] members).
 -->
 <DnaLibrary Name="PyExcel" RuntimeVersion="v4.0">
+  <!--
+    Scanned assemblies — Excel-DNA reflects over each looking for
+    [ExcelRibbon] / [ExcelFunction] / [ExcelCommand] entry points.
+  -->
   <ExternalLibrary Path="PyExcel.Addin.dll"
                    ExplicitExports="false"
                    LoadFromBytes="true"
@@ -27,4 +40,31 @@
                    ExplicitExports="false"
                    LoadFromBytes="true"
                    Pack="true" />
+
+  <!--
+    Plain dependencies — packed into the .xll so the binary is
+    standalone, but not scanned (these projects don't carry any
+    Excel-DNA-recognised attributes).
+  -->
+  <Reference Path="PyExcel.Common.dll" Pack="true" />
+  <Reference Path="PyExcel.State.dll" Pack="true" />
+  <Reference Path="PyExcel.Bridge.dll" Pack="true" />
+  <Reference Path="PyExcel.Kernel.Client.dll" Pack="true" />
+  <Reference Path="PyExcel.Setup.dll" Pack="true" />
+
+  <!--
+    Third-party data-plane: Apache.Arrow (the C# Arrow IPC) plus the
+    System.* polyfills it transitively requires on net48. The version
+    redirects in app.config (copied to PyExcel-AddIn64.xll.config) point
+    at the exact AssemblyVersion that ships in the build output; these
+    DLLs must be present in the .xll's packed resources for the
+    redirects to find a target.
+  -->
+  <Reference Path="Apache.Arrow.dll" Pack="true" />
+  <Reference Path="Google.FlatBuffers.dll" Pack="true" />
+  <Reference Path="System.Runtime.CompilerServices.Unsafe.dll" Pack="true" />
+  <Reference Path="System.Memory.dll" Pack="true" />
+  <Reference Path="System.Buffers.dll" Pack="true" />
+  <Reference Path="System.Numerics.Vectors.dll" Pack="true" />
+  <Reference Path="System.Threading.Tasks.Extensions.dll" Pack="true" />
 </DnaLibrary>
