@@ -19,6 +19,38 @@
       Apache.Arrow's System.* dependencies bind at load on net48.
     -->
     <AppConfig>app.config</AppConfig>
+
+    <!--
+      Excel-DNA add-in descriptor — auto-generated, NOT a hand-written
+      .dna file. The custom PyExcel-AddIn.dna that used to live next to
+      this csproj was removed because the CreateExcelAddIn task ignores
+      AddInInclude / AddInExports MSBuild properties when a user-supplied
+      .dna exists (it copies the user file verbatim). That blocked us
+      from feeding the OutDir glob into the pack list — see the
+      PackedReferences target at the bottom of this file plus
+      ExcelAddInExports below.
+
+      Properties that map into the generated .dna:
+        ExcelAddInName              -> <DnaLibrary Name="..." />
+        ExcelAddInExports           -> additional <ExternalLibrary> entries
+                                       (SCANNED for [ExcelRibbon] /
+                                        [ExcelFunction])
+        ExcelAddInInclude           -> additional <Reference> entries
+                                       (PACKED but not scanned) — set by
+                                       PackedReferences target from the
+                                       OutDir glob
+        ExcelAddInExplicitExports   -> per-ExternalLibrary attribute;
+                                       false = scan every public static
+                                       method as a candidate UDF
+        ExcelAddInLoadFromBytes     -> per-ExternalLibrary attribute;
+                                       true = load via Assembly.Load(byte[])
+                                       from the packed resource, not from
+                                       a loose DLL on disk
+    -->
+    <ExcelAddInName>PyExcel</ExcelAddInName>
+    <ExcelAddInExports>PyExcel.Ribbon.dll;PyExcel.Excel.dll</ExcelAddInExports>
+    <ExcelAddInExplicitExports>false</ExcelAddInExplicitExports>
+    <ExcelAddInLoadFromBytes>true</ExcelAddInLoadFromBytes>
   </PropertyGroup>
 
   <ItemGroup>
@@ -118,39 +150,45 @@
     System.Buffers, System.Numerics.Vectors, System.Runtime.Compiler-
     Services.Unsafe, System.Threading.Tasks.Extensions) embedded.
 
-    Why dynamic over hand-listing in the .dna: net48 doesn't generate
-    .deps.json, so Excel-DNA's ExcelDnaPackManagedDependencies auto-
-    pack mode is .NET-6-only and doesn't apply here. A static
-    <Reference Path="X.dll" Pack="true"> in the .dna requires us to
-    enumerate every transitive dependency by name — and bumping
-    Apache.Arrow (or any other NuGet) would silently rot the list
-    until the .xll dies at load time with a missing-assembly error.
-    The glob captures whatever the build actually produced, so a
-    PackageReference bump propagates to the packed .xll automatically.
+    Why dynamic over hand-listing: net48 doesn't generate .deps.json,
+    so Excel-DNA's ExcelDnaPackManagedDependencies auto-pack mode is
+    .NET-6-only and doesn't apply. Hand-listing each dependency by
+    name is brittle — bumping Apache.Arrow would silently rot the
+    list until the .xll dies at load time with a missing-assembly
+    error. The glob captures whatever the build actually produced.
 
-    The exclude list keeps out:
-      * $(TargetFileName) — PyExcel.Addin.dll, which is the entry
-        point already listed in <ExternalLibrary> in the .dna.
-      * PyExcel.Ribbon.dll / PyExcel.Excel.dll — also <ExternalLibrary>
-        entries (they need to be SCANNED for [ExcelRibbon] /
-        [ExcelFunction]). ExcelDnaPack would refuse to add them twice.
+    The exclude list keeps out the 3 assemblies that are already
+    <ExternalLibrary> entries in the auto-generated .dna (so they're
+    SCANNED, not just packed):
+      * $(TargetFileName) — PyExcel.Addin.dll, the implicit primary
+        ExternalLibrary entry CreateExcelAddIn always emits.
+      * PyExcel.Ribbon.dll / PyExcel.Excel.dll — listed via
+        ExcelAddInExports in the PropertyGroup above. Without these
+        exclusions ExcelDnaPack would refuse to pack them twice.
 
-    Pattern copied from Excel-DNA discussion #595; runs after the main
-    build produces the bin folder but before ExcelDnaBuild assembles
-    the .dna for packing.
+    Pattern adapted from Excel-DNA discussion #595. Must run BEFORE
+    ExcelDnaBuild — CreateExcelAddIn reads $(ExcelAddInInclude) at
+    task-invocation time and bakes its value into the generated .dna
+    via <Reference Path="X" Pack="true"/> entries. Setting the property
+    after the task ran would silently no-op.
   -->
   <Target Name="PackedReferences"
           AfterTargets="AfterBuild"
           BeforeTargets="ExcelDnaBuild">
     <ItemGroup>
-      <ExcelDnaPackedRef Include="$(OutDir)*.dll"
-                        Exclude="$(OutDir)$(TargetFileName);$(OutDir)PyExcel.Ribbon.dll;$(OutDir)PyExcel.Excel.dll" />
+      <_ExcelDnaPackedRef Include="$(OutDir)*.dll"
+                          Exclude="$(OutDir)$(TargetFileName);$(OutDir)PyExcel.Ribbon.dll;$(OutDir)PyExcel.Excel.dll" />
     </ItemGroup>
     <PropertyGroup>
-      <ExcelAddInInclude>@(ExcelDnaPackedRef)</ExcelAddInInclude>
+      <!-- Project semicolon-separated list of bare filenames — CreateExcelAddIn
+           writes them straight into <Reference Path="..."/> entries; the
+           pack tool then resolves them relative to the .dna's directory
+           (i.e. OutDir). Full paths would also work but bare names match
+           the existing entries in the generated .dna and read cleaner. -->
+      <ExcelAddInInclude>@(_ExcelDnaPackedRef->'%(Filename)%(Extension)', ';')</ExcelAddInInclude>
     </PropertyGroup>
     <Message Importance="high"
-             Text="PackedReferences: bundling @(ExcelDnaPackedRef->Count()) extra DLL(s) into the .xll" />
+             Text="PackedReferences: bundling @(_ExcelDnaPackedRef->Count()) extra DLL(s) into the .xll: $(ExcelAddInInclude)" />
   </Target>
 
 </Project>
