@@ -35,6 +35,13 @@
       reference resolves on both lanes.
     -->
     <ProjectReference Include="..\PyExcel.Excel\PyExcel.Excel.csproj" />
+    <!--
+      The first-run setup wizard (SetupForm) drives PyExcel.Setup's headless
+      SetupService and formats its result with SetupReport. PyExcel.Setup
+      multi-targets net48 + netstandard2.0, so the reference resolves on both
+      lanes; the form itself is #if NETFRAMEWORK.
+    -->
+    <ProjectReference Include="..\PyExcel.Setup\PyExcel.Setup.csproj" />
   </ItemGroup>
 
   <!--

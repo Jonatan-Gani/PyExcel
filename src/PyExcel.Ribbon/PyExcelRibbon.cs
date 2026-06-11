@@ -207,6 +207,36 @@ public class PyExcelRibbon : ExcelRibbon
         }
     }
 
+    public void OnSetup(IRibbonControl control)
+    {
+        _log.Info("OnSetup clicked");
+        try
+        {
+            // An unsaved workbook has no location to anchor the environment to.
+            var dir = PyExcelServices.WorkbookContext.CurrentWorkbookDirectory;
+            if (string.IsNullOrEmpty(dir))
+            {
+                LogDisplay.WriteLine(
+                    "Setup: save the workbook first — the Python environment is " +
+                    "anchored to the workbook's location.");
+                return;
+            }
+            // For a local workbook this is the workbook folder; for a
+            // SharePoint/OneDrive-online workbook (whose folder is a URL) it
+            // maps to a local %LOCALAPPDATA%\PyExcel folder. KernelHost resolves
+            // the same directory at run time, so the kernel finds this venv.
+            var projectDir = PyExcel.Common.ProjectDirectory.Resolve(dir);
+            var success = SetupForm.Run(ExcelWindowOwner(), projectDir!, _log);
+            if (success is not null)
+                _log.Info($"OnSetup: finished, success={success}");
+        }
+        catch (Exception ex)
+        {
+            _log.Error("OnSetup failed", ex);
+            LogDisplay.WriteLine($"Setup: {ex.Message}");
+        }
+    }
+
     public void OnOpenExplorer(IRibbonControl control)
     {
         _log.Info("OnOpenExplorer clicked");
