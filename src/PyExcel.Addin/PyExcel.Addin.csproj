@@ -109,4 +109,48 @@
     <Reference Include="Microsoft.CSharp" />
   </ItemGroup>
 
+  <!--
+    Pack every .dll that lands next to the .xll into the packed .xll's
+    resources. This is what makes the shipped .xll truly standalone — a
+    user dragging it into Excel gets one file with PyExcel.Common,
+    .State, .Bridge, .Kernel.Client, .Setup, Apache.Arrow,
+    Google.FlatBuffers, and the System.* polyfills (System.Memory,
+    System.Buffers, System.Numerics.Vectors, System.Runtime.Compiler-
+    Services.Unsafe, System.Threading.Tasks.Extensions) embedded.
+
+    Why dynamic over hand-listing in the .dna: net48 doesn't generate
+    .deps.json, so Excel-DNA's ExcelDnaPackManagedDependencies auto-
+    pack mode is .NET-6-only and doesn't apply here. A static
+    <Reference Path="X.dll" Pack="true"> in the .dna requires us to
+    enumerate every transitive dependency by name — and bumping
+    Apache.Arrow (or any other NuGet) would silently rot the list
+    until the .xll dies at load time with a missing-assembly error.
+    The glob captures whatever the build actually produced, so a
+    PackageReference bump propagates to the packed .xll automatically.
+
+    The exclude list keeps out:
+      * $(TargetFileName) — PyExcel.Addin.dll, which is the entry
+        point already listed in <ExternalLibrary> in the .dna.
+      * PyExcel.Ribbon.dll / PyExcel.Excel.dll — also <ExternalLibrary>
+        entries (they need to be SCANNED for [ExcelRibbon] /
+        [ExcelFunction]). ExcelDnaPack would refuse to add them twice.
+
+    Pattern copied from Excel-DNA discussion #595; runs after the main
+    build produces the bin folder but before ExcelDnaBuild assembles
+    the .dna for packing.
+  -->
+  <Target Name="PackedReferences"
+          AfterTargets="AfterBuild"
+          BeforeTargets="ExcelDnaBuild">
+    <ItemGroup>
+      <ExcelDnaPackedRef Include="$(OutDir)*.dll"
+                        Exclude="$(OutDir)$(TargetFileName);$(OutDir)PyExcel.Ribbon.dll;$(OutDir)PyExcel.Excel.dll" />
+    </ItemGroup>
+    <PropertyGroup>
+      <ExcelAddInInclude>@(ExcelDnaPackedRef)</ExcelAddInInclude>
+    </PropertyGroup>
+    <Message Importance="high"
+             Text="PackedReferences: bundling @(ExcelDnaPackedRef->Count()) extra DLL(s) into the .xll" />
+  </Target>
+
 </Project>
