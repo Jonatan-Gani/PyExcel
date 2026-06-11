@@ -2,6 +2,7 @@ using System;
 using System.Threading;
 using PyExcel.Bridge;
 using PyExcel.Kernel.Client;
+using PyExcel.State;
 
 namespace PyExcel.Excel;
 
@@ -69,8 +70,16 @@ public sealed class KernelHost : IDisposable
 
     private static Booted Boot()
     {
-        var python = PythonResolver.ResolvePython();
-        var pythonPath = PythonResolver.ResolveEmbeddedPath();
+        // Resolve the active workbook directory once so both resolvers
+        // give the per-project venv and the Setup-extracted
+        // .pyexcel-kernel precedence over the PATH interpreter and the
+        // bundled embedded/ copy. Null (unsaved/no workbook) falls back
+        // to those bundled defaults. The kernel is process-wide and boots
+        // lazily once, so this captures the workbook active at first use —
+        // acceptable for the Phase-4 stop-gap host (see the type remarks).
+        var workbookDir = PyExcelServices.WorkbookContext.CurrentWorkbookDirectory;
+        var python = PythonResolver.ResolvePython(workbookDir);
+        var pythonPath = PythonResolver.ResolveEmbeddedPath(workbookDir);
         var supervisor = KernelSupervisor.StartPython(python, pythonPath);
         var client = new KernelClient(supervisor);
         return new Booted(supervisor, client);
