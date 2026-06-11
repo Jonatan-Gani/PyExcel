@@ -99,3 +99,17 @@ jobs:
 
       - name: Test
         run: dotnet test tests/PyExcel.Bridge.Tests/PyExcel.Bridge.Tests.csproj --configuration Release --no-build
+
+      # Publish the packed .xll (and its sidecar .config) as a workflow
+      # artifact so a smoke-tester without a local .NET SDK can grab the
+      # binary straight from the Actions UI. ExcelDnaPack writes both
+      # 32-bit and 64-bit variants into the publish folder; we upload
+      # the whole folder so either is downloadable.
+      - name: Upload packed .xll
+        if: success() || failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: PyExcel-AddIn-packed
+          path: src/PyExcel.Addin/bin/x64/Release/net48/publish/
+          if-no-files-found: error
+          retention-days: 30
