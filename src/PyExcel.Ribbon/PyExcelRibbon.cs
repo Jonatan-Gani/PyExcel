@@ -522,6 +522,10 @@ public class PyExcelRibbon : ExcelRibbon
         try
         {
             dynamic app = ExcelDnaUtil.Application;
+            // Pre-fill the picker with the field's current value, or — when it's
+            // blank — the user's current sheet selection, so the common "I've
+            // already selected it" case needs no extra drag.
+            var seed = string.IsNullOrEmpty(initial) ? CurrentSelectionAddress() : initial;
             // Application.InputBox(Prompt, Title, Default, Left, Top, HelpFile,
             // HelpContextID, Type). Type 8 = a cell/range reference: Excel shows
             // its collapsible range selector. Cancel returns the Boolean False;
@@ -529,7 +533,7 @@ public class PyExcelRibbon : ExcelRibbon
             object box = app.InputBox(
                 "Select a range, then click OK.",
                 "PyExcel — pick a range",
-                initial ?? string.Empty,
+                seed ?? string.Empty,
                 Type.Missing, Type.Missing, Type.Missing, Type.Missing, 8);
 
             if (box is bool) return null; // user cancelled
@@ -542,6 +546,26 @@ public class PyExcelRibbon : ExcelRibbon
         catch (Exception ex)
         {
             _log.Error("PickRangeNative failed", ex);
+            return null;
+        }
+    }
+
+    /// <summary>The active selection's address as <c>Sheet!A1:B2</c>, used to
+    /// pre-seed the native picker. Returns null when the selection isn't a range
+    /// (a chart, a shape) or COM is unhappy — the picker then just opens with the
+    /// field's existing text (or empty).</summary>
+    private static string? CurrentSelectionAddress()
+    {
+        try
+        {
+            dynamic app = ExcelDnaUtil.Application;
+            dynamic selection = app.Selection;
+            string address = (string)selection.Address[false, false];
+            string sheet = (string)selection.Worksheet.Name;
+            return $"{sheet}!{address}";
+        }
+        catch
+        {
             return null;
         }
     }
