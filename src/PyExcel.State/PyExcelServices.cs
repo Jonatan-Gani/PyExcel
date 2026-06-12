@@ -54,6 +54,18 @@ public static class PyExcelServices
     public static Action? RequestRibbonInvalidate { get; set; }
 
     /// <summary>
+    /// Hook the COM event sink registers so the ribbon can ask it to (re)point
+    /// the live <see cref="ScriptDirectoryWatcher"/> at the active workbook's
+    /// <c>userScripts</c> folder. The motivating caller is <c>OnEnablePyExcel</c>:
+    /// Enable provisions that folder but fires no <c>WorkbookActivate</c>, so the
+    /// watcher would otherwise not start until the next activation.
+    ///
+    /// <para><see langword="null"/> until the sink registers it (and after the
+    /// add-in unloads), so callers invoke it null-conditionally.</para>
+    /// </summary>
+    public static Action? RequestScriptRefresh { get; set; }
+
+    /// <summary>
     /// Build the default <see cref="RunArchive"/> rooted under the per-user
     /// local app-data folder (<c>%LOCALAPPDATA%\PyExcel\runs</c> on Windows;
     /// the XDG-derived equivalent on Linux). Falls back to the system temp

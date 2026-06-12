@@ -57,6 +57,7 @@ internal sealed class AppEventSink : IDisposable
     private readonly StateService _state;
     private readonly IWorkbookContext _context;
     private Excel.Application? _app;
+    private ScriptDirectoryWatcher? _scriptWatcher;
     private bool _disposed;
 
     /// <summary>Subscribe to the Application events. Must be called on
@@ -77,6 +78,10 @@ internal sealed class AppEventSink : IDisposable
         _app.WorkbookBeforeSave += OnWorkbookBeforeSave;
         _app.WorkbookBeforeClose += OnWorkbookBeforeClose;
         _app.SheetActivate += OnSheetActivate;
+
+        // Let the ribbon kick a watcher re-sync after Enable provisions the
+        // userScripts folder (that flow fires no WorkbookActivate).
+        PyExcelServices.RequestScriptRefresh = SyncScriptWatcherForActive;
     }
 
     // -------------------------------------------------------------------------
@@ -113,16 +118,17 @@ internal sealed class AppEventSink : IDisposable
                 _state.Update(key, _ => migrated);
             }
         }
-        RefreshScripts(wb);
+        SyncScriptWatcher(wb);
         InvalidateRibbon();
     });
 
     private void OnWorkbookActivate(Excel.Workbook wb) =>
         Guard(nameof(OnWorkbookActivate), () =>
         {
-            // The active workbook changed: repopulate its Script dropdown from
-            // disk (nothing else feeds AvailableScripts) and repaint.
-            RefreshScripts(wb);
+            // The active workbook changed: re-point the live script watcher at
+            // its userScripts folder (which also repopulates AvailableScripts —
+            // nothing else feeds it) and repaint.
+            SyncScriptWatcher(wb);
             InvalidateRibbon();
         });
 
@@ -165,23 +171,80 @@ internal sealed class AppEventSink : IDisposable
     private static string KeyOf(Excel.Workbook wb) =>
         WorkbookKeys.Resolve(wb.Name, wb.Path, wb.FullName);
 
-    /// <summary>Re-scan the workbook's <c>userScripts</c> folder and publish the
-    /// script names into state, so the ribbon's Script dropdown is populated on
-    /// open/activate. The project root is the dedicated folder chosen on Enable
-    /// (saved in state) if set, else the workbook-derived default — the same rule
-    /// the ribbon and KernelHost use, so all three agree on where scripts live.</summary>
-    private void RefreshScripts(Excel.Workbook wb)
+    /// <summary>The workbook's <c>userScripts</c> folder — the dedicated project
+    /// folder chosen on Enable (saved in state) if set, else the workbook-derived
+    /// default — the same rule the ribbon and KernelHost use, so all three agree
+    /// on where scripts live. Null when there's no local folder (unsaved /
+    /// cloud-URL workbook).</summary>
+    private string? ResolveScriptsDir(Excel.Workbook wb)
     {
-        string key = KeyOf(wb);
-        var stored = _state.Get(key).ProjectDir;
+        var stored = _state.Get(KeyOf(wb)).ProjectDir;
         var workbookDir = string.IsNullOrEmpty(wb.Path) ? null : wb.Path;
         var projectDir = string.IsNullOrEmpty(stored)
             ? PyExcel.Common.ProjectDirectory.Resolve(workbookDir)
             : stored;
-        var scriptsDir = string.IsNullOrEmpty(projectDir)
+        return string.IsNullOrEmpty(projectDir)
             ? null
             : System.IO.Path.Combine(projectDir!, "userScripts");
-        _state.SetAvailableScripts(key, ScriptDirectoryWatcher.Snapshot(scriptsDir));
+    }
+
+    /// <summary>(Re)point the live script watcher at the active workbook's
+    /// userScripts folder so the ribbon's Script dropdown tracks files appearing
+    /// / disappearing without a re-activate. The watcher pushes an initial
+    /// snapshot from its constructor, so this also populates the list now. When
+    /// the folder doesn't exist yet (workbook not Enabled) we drop the watcher
+    /// and publish a one-shot snapshot instead — the list stays correct, and the
+    /// watcher starts as soon as Enable creates the folder (via
+    /// <see cref="PyExcelServices.RequestScriptRefresh"/>).</summary>
+    private void SyncScriptWatcher(Excel.Workbook wb)
+    {
+        string key = KeyOf(wb);
+        var scriptsDir = ResolveScriptsDir(wb);
+
+        DisposeScriptWatcher();
+
+        if (string.IsNullOrEmpty(scriptsDir) || !System.IO.Directory.Exists(scriptsDir))
+        {
+            _state.SetAvailableScripts(key, ScriptDirectoryWatcher.Snapshot(scriptsDir));
+            return;
+        }
+
+        try
+        {
+            // The callback fires on the watcher's worker thread, but the
+            // resulting StateChanged drives the ribbon's OnStateChanged, which
+            // touches COM (CurrentWorkbookKey) — so marshal the state update onto
+            // Excel's macro thread, per the watcher's documented contract.
+            _scriptWatcher = new ScriptDirectoryWatcher(
+                scriptsDir!,
+                snapshot => ExcelAsyncUtil.QueueAsMacro(
+                    () => _state.SetAvailableScripts(key, snapshot)));
+        }
+        catch (Exception ex)
+        {
+            // A watcher failure must never break activation — fall back to a scan.
+            Trace.WriteLine($"AppEventSink.SyncScriptWatcher failed: {ex}");
+            _state.SetAvailableScripts(key, ScriptDirectoryWatcher.Snapshot(scriptsDir));
+        }
+    }
+
+    /// <summary>Re-sync the watcher for whatever workbook is active now. Wired to
+    /// <see cref="PyExcelServices.RequestScriptRefresh"/> so the ribbon can start
+    /// live watching the moment Enable provisions the userScripts folder.</summary>
+    private void SyncScriptWatcherForActive() => Guard(nameof(SyncScriptWatcherForActive), () =>
+    {
+        var wb = _app?.ActiveWorkbook;
+        if (wb is not null) SyncScriptWatcher(wb);
+    });
+
+    private void DisposeScriptWatcher()
+    {
+        var w = _scriptWatcher;
+        _scriptWatcher = null;
+        if (w is not null)
+        {
+            try { w.Dispose(); } catch { /* swallow */ }
+        }
     }
 
     private static void InvalidateRibbon()
@@ -209,6 +272,12 @@ internal sealed class AppEventSink : IDisposable
     {
         if (_disposed) return;
         _disposed = true;
+
+        // Drop the hook and stop watching regardless of _app state. One sink
+        // instance lives per add-in load (AutoOpen/AutoClose), so this is ours.
+        PyExcelServices.RequestScriptRefresh = null;
+        DisposeScriptWatcher();
+
         if (_app is null) return;
         try
         {

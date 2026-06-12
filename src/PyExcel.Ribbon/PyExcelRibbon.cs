@@ -252,8 +252,11 @@ public class PyExcelRibbon : ExcelRibbon
             if (success == true)
             {
                 PyExcelServices.State.SetEnabled(key, true);
-                // Surface the scaffolded example.py (and any others) right away.
+                // Surface the scaffolded example.py now, and start the live
+                // watcher on the just-created userScripts folder (Enable fires
+                // no WorkbookActivate, so the sink wouldn't otherwise start it).
                 RefreshAvailableScripts(key);
+                PyExcelServices.RequestScriptRefresh?.Invoke();
                 _log.Info($"OnEnablePyExcel: workbook '{key}' set up at '{projectDir}' and enabled");
             }
             else
