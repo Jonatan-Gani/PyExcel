@@ -77,12 +77,18 @@ public sealed class KernelHost : IDisposable
         // to those bundled defaults. The kernel is process-wide and boots
         // lazily once, so this captures the workbook active at first use —
         // acceptable for the Phase-4 stop-gap host (see the type remarks).
+        var key = PyExcelServices.WorkbookContext.CurrentWorkbookKey;
         var workbookDir = PyExcelServices.WorkbookContext.CurrentWorkbookDirectory;
-        // A SharePoint/OneDrive-online workbook reports a URL, not a local
-        // folder; ProjectDirectory maps that (and any other non-local path) to
-        // the same local environment directory the Setup wizard provisions
-        // into, so the runtime looks where Setup installed.
-        var projectDir = PyExcel.Common.ProjectDirectory.Resolve(workbookDir);
+        // Prefer the dedicated project directory the user chose on Enable (saved
+        // in workbook state); otherwise fall back to the workbook-derived
+        // default. A SharePoint/OneDrive-online workbook reports a URL, not a
+        // local folder; ProjectDirectory maps that (and any other non-local
+        // path) to the same local environment directory Setup provisions into,
+        // so the runtime looks where Setup installed.
+        var stored = key is null ? null : PyExcelServices.State.Get(key).ProjectDir;
+        var projectDir = string.IsNullOrEmpty(stored)
+            ? PyExcel.Common.ProjectDirectory.Resolve(workbookDir)
+            : stored;
         var python = PythonResolver.ResolvePython(projectDir);
         var pythonPath = PythonResolver.ResolveEmbeddedPath(projectDir);
         var supervisor = KernelSupervisor.StartPython(python, pythonPath);

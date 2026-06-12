@@ -30,7 +30,8 @@ public sealed record WorkbookState(
     string? ImportOutput = null,
     string? ExportInput = null,
     string? ExportOutput = null,
-    string? PasteOutput = null)
+    string? PasteOutput = null,
+    string? ProjectDir = null)
 {
     /// <summary>The all-defaults state used when a workbook is seen for
     /// the first time, before any user action.</summary>
@@ -48,7 +49,8 @@ public sealed record WorkbookState(
         ImportOutput: null,
         ExportInput: null,
         ExportOutput: null,
-        PasteOutput: null);
+        PasteOutput: null,
+        ProjectDir: null);
 
     /// <summary>The currently-selected <see cref="RibbonAction"/>, or
     /// <see langword="null"/> if no action is selected (or the selection

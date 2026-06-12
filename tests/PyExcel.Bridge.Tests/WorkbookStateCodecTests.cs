@@ -295,6 +295,24 @@ public class WorkbookStateCodecTests
     }
 
     [Fact]
+    public void Roundtrip_ProjectDir_Preserved()
+    {
+        var original = WorkbookState.Empty("wb.xlsx") with { ProjectDir = @"C:\Projects\MyModel" };
+        var doc = WorkbookStateCodec.Serialize(original);
+        var restored = WorkbookStateCodec.Deserialize(doc, "wb.xlsx");
+        Assert.Equal(@"C:\Projects\MyModel", restored.ProjectDir);
+    }
+
+    [Fact]
+    public void Serialize_NullProjectDir_StaysNullAndNotEmitted()
+    {
+        var doc = WorkbookStateCodec.Serialize(WorkbookState.Empty("wb.xlsx"));
+        var ns = (XNamespace)WorkbookStateCodec.XmlNamespace;
+        Assert.Null(doc.Root!.Element(ns + "project-dir"));
+        Assert.Null(WorkbookStateCodec.Deserialize(doc, "wb.xlsx").ProjectDir);
+    }
+
+    [Fact]
     public void Serialize_NullImportExportPasteFields_NotEmittedAsElements()
     {
         // Null fields stay off-disk so a never-touched workbook produces

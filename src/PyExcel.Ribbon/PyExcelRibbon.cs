@@ -210,26 +210,31 @@ public class PyExcelRibbon : ExcelRibbon
             var key = PyExcelServices.WorkbookContext.CurrentWorkbookKey;
             if (key is null) { _log.Info("OnEnablePyExcel: no active workbook"); return; }
 
-            // An unsaved workbook has no location to anchor the environment to.
-            var dir = PyExcelServices.WorkbookContext.CurrentWorkbookDirectory;
-            if (string.IsNullOrEmpty(dir))
+            // An unsaved workbook has no location to anchor the project to.
+            var workbookDir = PyExcelServices.WorkbookContext.CurrentWorkbookDirectory;
+            if (string.IsNullOrEmpty(workbookDir))
             {
                 LogDisplay.WriteLine(
-                    "Enable: save the workbook first — the Python environment is " +
-                    "anchored to the workbook's location.");
+                    "Enable: save the workbook first — PyExcel anchors the project " +
+                    "folder near the workbook.");
                 return;
             }
 
-            // For a local workbook this is the workbook folder; for a
-            // SharePoint/OneDrive-online workbook (whose folder is a URL) it
-            // maps to a local %LOCALAPPDATA%\PyExcel folder. KernelHost resolves
-            // the same directory at run time, so the kernel finds this venv.
-            var projectDir = PyExcel.Common.ProjectDirectory.Resolve(dir!);
-            var success = SetupForm.Run(ExcelWindowOwner(), projectDir!, _log);
+            // Let the user pick (or confirm) a DEDICATED folder for this
+            // workbook's project. Default to a folder chosen previously, else the
+            // workbook-derived default (the workbook folder, or a local
+            // %LOCALAPPDATA%\PyExcel folder for a cloud/URL workbook).
+            var projectDir = PickProjectDirectory(ResolveProjectDir());
+            if (projectDir is null) { _log.Info("OnEnablePyExcel: directory pick cancelled"); return; }
+
+            // Remember the choice so Setup and the runtime kernel both use it.
+            PyExcelServices.State.SetProjectDir(key, projectDir);
+
+            var success = SetupForm.Run(ExcelWindowOwner(), projectDir, _log);
             if (success == true)
             {
                 PyExcelServices.State.SetEnabled(key, true);
-                _log.Info($"OnEnablePyExcel: workbook '{key}' set up and enabled");
+                _log.Info($"OnEnablePyExcel: workbook '{key}' set up at '{projectDir}' and enabled");
             }
             else
             {
@@ -260,7 +265,10 @@ public class PyExcelRibbon : ExcelRibbon
         _log.Info("OnOpenExplorer clicked");
         try
         {
-            var dir = PyExcelServices.WorkbookContext.CurrentWorkbookDirectory;
+            // Open the project directory (where the venv, kernel, and
+            // userScripts live) — the dedicated folder chosen on Enable, else
+            // the workbook's own folder.
+            var dir = ResolveProjectDir();
             if (string.IsNullOrEmpty(dir))
             {
                 LogDisplay.WriteLine(
@@ -354,7 +362,7 @@ public class PyExcelRibbon : ExcelRibbon
                     "Pick one from the ribbon's Script dropdown first.");
                 return;
             }
-            var dir = PyExcelServices.WorkbookContext.CurrentWorkbookDirectory;
+            var dir = ResolveProjectDir();
             if (string.IsNullOrEmpty(dir))
             {
                 LogDisplay.WriteLine(
@@ -363,8 +371,9 @@ public class PyExcelRibbon : ExcelRibbon
                     "located on disk.");
                 return;
             }
-            // Convention: scripts live under <workbookDir>/userScripts/<name>.
-            // ScriptDirectoryWatcher uses the same root.
+            // Convention: scripts live under <projectDir>/userScripts/<name> —
+            // the dedicated folder chosen on Enable, else the workbook folder.
+            // Setup and the "New…" button scaffold into the same root.
             var path = Path.Combine(dir!, "userScripts", script!);
             if (!File.Exists(path))
             {
@@ -500,14 +509,62 @@ public class PyExcelRibbon : ExcelRibbon
         public IntPtr Handle { get; }
     }
 
-    /// <summary>The active workbook's <c>userScripts</c> folder, or null if the
-    /// workbook hasn't been saved (no on-disk location yet). Passed to the
-    /// EditAction dialog so its "New…" button can scaffold a script there
-    /// (Note 2). The convention matches OnEditPython / ScriptDirectoryWatcher.</summary>
+    /// <summary>The active workbook's <c>userScripts</c> folder under its
+    /// resolved project directory, or null if the workbook hasn't been saved.
+    /// Passed to the EditAction dialog so its "New…" button scaffolds a script
+    /// where Setup and the runtime look (Note 2).</summary>
     private static string? UserScriptsDir()
     {
-        var dir = PyExcelServices.WorkbookContext.CurrentWorkbookDirectory;
-        return string.IsNullOrEmpty(dir) ? null : Path.Combine(dir!, "userScripts");
+        var projectDir = ResolveProjectDir();
+        return string.IsNullOrEmpty(projectDir) ? null : Path.Combine(projectDir!, "userScripts");
+    }
+
+    /// <summary>The active workbook's effective project directory: the dedicated
+    /// folder the user chose on Enable (saved in state) if set, else the
+    /// workbook-derived default from <see cref="PyExcel.Common.ProjectDirectory"/>.
+    /// Null when no workbook is active or it's unsaved. Mirrors the rule
+    /// KernelHost uses so the ribbon and runtime agree on the directory.</summary>
+    private static string? ResolveProjectDir()
+    {
+        var key = PyExcelServices.WorkbookContext.CurrentWorkbookKey;
+        var workbookDir = PyExcelServices.WorkbookContext.CurrentWorkbookDirectory;
+        var stored = key is null ? null : PyExcelServices.State.Get(key).ProjectDir;
+        return string.IsNullOrEmpty(stored)
+            ? PyExcel.Common.ProjectDirectory.Resolve(workbookDir)
+            : stored;
+    }
+
+    /// <summary>Prompt for a dedicated project folder via the native folder
+    /// browser, defaulting to <paramref name="defaultDir"/>. Returns the chosen
+    /// absolute path, or null if the user cancelled. Raises Excel first so the
+    /// browser isn't lost behind the Excel window.</summary>
+    private string? PickProjectDirectory(string? defaultDir)
+    {
+        try
+        {
+            try { SetForegroundWindow(ExcelDnaUtil.WindowHandle); } catch { /* best-effort */ }
+            using var dlg = new System.Windows.Forms.FolderBrowserDialog
+            {
+                Description =
+                    "Choose a dedicated folder for this workbook's PyExcel project. " +
+                    "Its Python environment (.pyexcel-venv), kernel, and userScripts " +
+                    "folder are created here.",
+                ShowNewFolderButton = true,
+            };
+            if (!string.IsNullOrEmpty(defaultDir) && Directory.Exists(defaultDir))
+                dlg.SelectedPath = defaultDir!;
+
+            var result = dlg.ShowDialog(ExcelWindowOwner());
+            return result == System.Windows.Forms.DialogResult.OK &&
+                   !string.IsNullOrWhiteSpace(dlg.SelectedPath)
+                ? dlg.SelectedPath
+                : null;
+        }
+        catch (Exception ex)
+        {
+            _log.Error("PickProjectDirectory failed", ex);
+            return null;
+        }
     }
 
     /// <summary>Bring a window to the foreground. Used to raise Excel's main

@@ -168,6 +168,13 @@ public sealed class StateService
 
     public void SetPasteOutput(string key, string? value)
         => Update(key, s => s with { PasteOutput = value });
+
+    /// <summary>The dedicated project directory the user chose for this
+    /// workbook on Enable (where Setup provisions the venv/kernel/userScripts).
+    /// Persisted by the codec; the runtime kernel and the ribbon's
+    /// userScripts lookup prefer it over the workbook-derived default.</summary>
+    public void SetProjectDir(string key, string? dir)
+        => Update(key, s => s with { ProjectDir = dir });
 }
 
 /// <summary>Carries the affected workbook key. Subscribers can skip
