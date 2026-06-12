@@ -40,9 +40,9 @@
     <!--
       The ribbon logo. LogicalName pins the manifest resource name to
       "customLogo.png" so PyExcelRibbon.LoadImage("customLogo") can fetch
-      it by a stable name. The source PNG lives with the v1 ribbon assets.
+      it by a stable name.
     -->
-    <EmbeddedResource Include="..\Ribbon\customLogo.png" LogicalName="customLogo.png" />
+    <EmbeddedResource Include="Resources\customLogo.png" LogicalName="customLogo.png" />
   </ItemGroup>
 
   <!--

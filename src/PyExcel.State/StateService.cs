@@ -147,6 +147,24 @@ public sealed class StateService
     public void SetSelectedAction(string key, string? name)
         => Update(key, s => s with { SelectedActionName = name });
 
+    /// <summary>Load a saved action into the run boxes — its script, input, and
+    /// output become <see cref="WorkbookState.SelectedScript"/>,
+    /// <see cref="WorkbookState.PyInput"/>, and <see cref="WorkbookState.PyOutput"/>
+    /// — and select it, in one atomic update (so the ribbon invalidates once).
+    /// The Run button reads those boxes, so this is what makes picking or saving
+    /// an action actually runnable.</summary>
+    public void LoadAction(string key, RibbonAction action)
+    {
+        if (action is null) throw new ArgumentNullException(nameof(action));
+        Update(key, s => s with
+        {
+            SelectedScript = action.Script,
+            PyInput = action.Input,
+            PyOutput = action.Output,
+            SelectedActionName = action.Name,
+        });
+    }
+
     // -------------------------------------------------------------------------
     // Import / Export / Paste — text fields owned by Phase 5's data
     // services. The COM-bound services (ImportService / ExportService /
@@ -168,6 +186,13 @@ public sealed class StateService
 
     public void SetPasteOutput(string key, string? value)
         => Update(key, s => s with { PasteOutput = value });
+
+    /// <summary>The dedicated project directory the user chose for this
+    /// workbook on Enable (where Setup provisions the venv/kernel/userScripts).
+    /// Persisted by the codec; the runtime kernel and the ribbon's
+    /// userScripts lookup prefer it over the workbook-derived default.</summary>
+    public void SetProjectDir(string key, string? dir)
+        => Update(key, s => s with { ProjectDir = dir });
 }
 
 /// <summary>Carries the affected workbook key. Subscribers can skip

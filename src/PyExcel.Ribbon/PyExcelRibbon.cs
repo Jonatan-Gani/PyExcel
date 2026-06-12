@@ -136,6 +136,15 @@ public class PyExcelRibbon : ExcelRibbon
         }
     }
 
+    /// <summary>Discard a user edit to a display-only ribbon control by
+    /// re-reading the getters, so Excel replaces the typed text with the
+    /// behind-the-scenes value. The Script / Input / Output fields are driven by
+    /// the selected action, not typed in — only the Actions dropdown is
+    /// interactive — so their onChange callbacks route here instead of storing.
+    /// Uses the full <see cref="QueueInvalidate"/> (the path already proven to
+    /// refresh these <c>getText</c> boxes) so the revert is reliable.</summary>
+    private void RevertControl(IRibbonControl control) => QueueInvalidate();
+
     /// <summary>Read the state for the currently-active workbook,
     /// returning <see cref="WorkbookState.Empty"/> if no workbook is
     /// active so every getter has a well-defined value to read.</summary>
@@ -180,61 +189,107 @@ public class PyExcelRibbon : ExcelRibbon
 
     public bool RibbonEnabled(IRibbonControl control) => ActiveState().Enabled;
 
+    /// <summary>getEnabled for the "Enable" button — true only while the active
+    /// workbook is NOT yet enabled, so the button greys out once a workbook has
+    /// been set up/enabled (Note 3).</summary>
+    public bool RibbonNotEnabled(IRibbonControl control) => !ActiveState().Enabled;
+
+    /// <summary>getEnabled for the "Update" button. PLACEHOLDER (Note 3):
+    /// always false until the update mechanism and a launch-time update check
+    /// land — see OnUpdate and ROADMAP.md (Phase 9).</summary>
+    public bool RibbonUpdateAvailable(IRibbonControl control) => false;
+
     // -------------------------------------------------------------------------
     // Main group
     // -------------------------------------------------------------------------
 
     public void OnEnablePyExcel(IRibbonControl control)
     {
-        // v1 (modRibbon.bas:461) ran a full setup wizard that provisioned
-        // the workbook and then marked it enabled; that wizard is Phase 7.
-        // For now this button is the enable/disable toggle for the active
-        // workbook. Flipping Enabled fires StateChanged, which the
-        // RibbonOnLoad handler turns into an IRibbonUI.Invalidate — so every
-        // getEnabled-gated control lights up (or greys out) on the next
-        // repaint without any extra wiring here.
+        // "Enable" turns a plain workbook into a PyExcel workbook: it runs the
+        // full setup (create the project folders, provision the venv, extract
+        // the kernel, install dependencies) and, on success, marks the workbook
+        // enabled. Install and enable are deliberately one action (Note 3). The
+        // ribbon greys this button once the workbook is enabled (getEnabled =
+        // RibbonNotEnabled), so it can't be re-run by accident; flipping Enabled
+        // fires StateChanged, which RibbonOnLoad turns into an
+        // IRibbonUI.Invalidate so every getEnabled-gated control repaints.
+        _log.Info("OnEnablePyExcel clicked");
         try
         {
             var key = PyExcelServices.WorkbookContext.CurrentWorkbookKey;
             if (key is null) { _log.Info("OnEnablePyExcel: no active workbook"); return; }
-            var now = !PyExcelServices.State.Get(key).Enabled;
-            PyExcelServices.State.SetEnabled(key, now);
-            _log.Info($"OnEnablePyExcel: workbook '{key}' enabled={now}");
+
+            // A brand-new workbook has never been saved (Workbook.Path is empty),
+            // so it has no folder to anchor the project to. Rather than refuse,
+            // ask for a name and save it into the folder the user picks next.
+            var workbookDir = PyExcelServices.WorkbookContext.CurrentWorkbookDirectory;
+            string? newWorkbookName = null;
+            if (string.IsNullOrEmpty(workbookDir))
+            {
+                newWorkbookName = PromptForWorkbookName();
+                if (newWorkbookName is null) { _log.Info("OnEnablePyExcel: name prompt cancelled"); return; }
+            }
+
+            // Open the folder browser at the workbook's own folder so the user
+            // starts where the workbook lives; fall back to Documents for a
+            // new/unsaved (or cloud-URL) workbook that has no local folder.
+            var browseStart = !string.IsNullOrEmpty(workbookDir) && Directory.Exists(workbookDir!)
+                ? workbookDir!
+                : Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);
+            var projectDir = PickProjectDirectory(browseStart);
+            if (projectDir is null) { _log.Info("OnEnablePyExcel: directory pick cancelled"); return; }
+
+            // For a new workbook, save it into the chosen folder first so its
+            // persisted state has a file to live in, then re-key off the saved
+            // path (Save As promotes the workbook to a path-based key).
+            if (newWorkbookName is not null)
+            {
+                var savePath = Path.Combine(projectDir, EnsureXlsxExtension(newWorkbookName));
+                if (!SaveActiveWorkbookAs(savePath))
+                {
+                    LogDisplay.WriteLine($"Enable: couldn't save the workbook to '{savePath}'.");
+                    return;
+                }
+                key = PyExcelServices.WorkbookContext.CurrentWorkbookKey;
+                if (key is null) { _log.Info("OnEnablePyExcel: workbook key lost after save"); return; }
+            }
+
+            // Remember the choice so Setup and the runtime kernel both use it.
+            PyExcelServices.State.SetProjectDir(key, projectDir);
+
+            var success = SetupForm.Run(ExcelWindowOwner(), projectDir, _log);
+            if (success == true)
+            {
+                PyExcelServices.State.SetEnabled(key, true);
+                // Surface the scaffolded example.py now, and start the live
+                // watcher on the just-created userScripts folder (Enable fires
+                // no WorkbookActivate, so the sink wouldn't otherwise start it).
+                RefreshAvailableScripts(key);
+                PyExcelServices.RequestScriptRefresh?.Invoke();
+                _log.Info($"OnEnablePyExcel: workbook '{key}' set up at '{projectDir}' and enabled");
+            }
+            else
+            {
+                _log.Info($"OnEnablePyExcel: setup did not complete; '{key}' left disabled");
+            }
         }
         catch (Exception ex)
         {
             _log.Error("OnEnablePyExcel failed", ex);
+            LogDisplay.WriteLine($"Enable: {ex.Message}");
         }
     }
 
-    public void OnSetup(IRibbonControl control)
+    public void OnUpdate(IRibbonControl control)
     {
-        _log.Info("OnSetup clicked");
-        try
-        {
-            // An unsaved workbook has no location to anchor the environment to.
-            var dir = PyExcelServices.WorkbookContext.CurrentWorkbookDirectory;
-            if (string.IsNullOrEmpty(dir))
-            {
-                LogDisplay.WriteLine(
-                    "Setup: save the workbook first — the Python environment is " +
-                    "anchored to the workbook's location.");
-                return;
-            }
-            // For a local workbook this is the workbook folder; for a
-            // SharePoint/OneDrive-online workbook (whose folder is a URL) it
-            // maps to a local %LOCALAPPDATA%\PyExcel folder. KernelHost resolves
-            // the same directory at run time, so the kernel finds this venv.
-            var projectDir = PyExcel.Common.ProjectDirectory.Resolve(dir);
-            var success = SetupForm.Run(ExcelWindowOwner(), projectDir!, _log);
-            if (success is not null)
-                _log.Info($"OnSetup: finished, success={success}");
-        }
-        catch (Exception ex)
-        {
-            _log.Error("OnSetup failed", ex);
-            LogDisplay.WriteLine($"Setup: {ex.Message}");
-        }
+        // PLACEHOLDER (Note 3). The update path — refresh the extracted kernel
+        // and re-sync dependencies, plus a launch-time "is a newer build
+        // available?" check that would drive RibbonUpdateAvailable — isn't built
+        // yet. The button is greyed (RibbonUpdateAvailable returns false), so
+        // this is normally unreachable; it logs if invoked. Tracked as an open
+        // item in ROADMAP.md (Phase 9).
+        _log.Info("OnUpdate clicked (placeholder — update not yet implemented)");
+        LogDisplay.WriteLine("[PyExcel] Update isn't available yet.");
     }
 
     public void OnOpenExplorer(IRibbonControl control)
@@ -242,7 +297,10 @@ public class PyExcelRibbon : ExcelRibbon
         _log.Info("OnOpenExplorer clicked");
         try
         {
-            var dir = PyExcelServices.WorkbookContext.CurrentWorkbookDirectory;
+            // Open the project directory (where the venv, kernel, and
+            // userScripts live) — the dedicated folder chosen on Enable, else
+            // the workbook's own folder.
+            var dir = ResolveProjectDir();
             if (string.IsNullOrEmpty(dir))
             {
                 LogDisplay.WriteLine(
@@ -336,7 +394,7 @@ public class PyExcelRibbon : ExcelRibbon
                     "Pick one from the ribbon's Script dropdown first.");
                 return;
             }
-            var dir = PyExcelServices.WorkbookContext.CurrentWorkbookDirectory;
+            var dir = ResolveProjectDir();
             if (string.IsNullOrEmpty(dir))
             {
                 LogDisplay.WriteLine(
@@ -345,8 +403,9 @@ public class PyExcelRibbon : ExcelRibbon
                     "located on disk.");
                 return;
             }
-            // Convention: scripts live under <workbookDir>/userScripts/<name>.
-            // ScriptDirectoryWatcher uses the same root.
+            // Convention: scripts live under <projectDir>/userScripts/<name> —
+            // the dedicated folder chosen on Enable, else the workbook folder.
+            // Setup and the "New…" button scaffold into the same root.
             var path = Path.Combine(dir!, "userScripts", script!);
             if (!File.Exists(path))
             {
@@ -372,30 +431,18 @@ public class PyExcelRibbon : ExcelRibbon
 
     public string GetScriptText(IRibbonControl control) => ActiveState().SelectedScript ?? string.Empty;
 
-    public void OnScriptChange(IRibbonControl control, string text)
-    {
-        var key = PyExcelServices.WorkbookContext.CurrentWorkbookKey;
-        if (key is null) return;
-        PyExcelServices.State.SetSelectedScript(key, string.IsNullOrEmpty(text) ? null : text);
-    }
+    // Display-only: the Script box mirrors the selected action; reject hand-edits.
+    public void OnScriptChange(IRibbonControl control, string text) => RevertControl(control);
 
     public string GetPyInput(IRibbonControl control) => ActiveState().PyInput ?? string.Empty;
 
-    public void OnPyInputChange(IRibbonControl control, string text)
-    {
-        var key = PyExcelServices.WorkbookContext.CurrentWorkbookKey;
-        if (key is null) return;
-        PyExcelServices.State.SetPyInput(key, text);
-    }
+    // Display-only: the Input box mirrors the selected action; reject hand-edits.
+    public void OnPyInputChange(IRibbonControl control, string text) => RevertControl(control);
 
     public string GetPyOutput(IRibbonControl control) => ActiveState().PyOutput ?? string.Empty;
 
-    public void OnPyOutputChange(IRibbonControl control, string text)
-    {
-        var key = PyExcelServices.WorkbookContext.CurrentWorkbookKey;
-        if (key is null) return;
-        PyExcelServices.State.SetPyOutput(key, text);
-    }
+    // Display-only: the Output box mirrors the selected action; reject hand-edits.
+    public void OnPyOutputChange(IRibbonControl control, string text) => RevertControl(control);
 
     public int GetActionCount(IRibbonControl control) => ActiveState().Actions.Count;
 
@@ -412,7 +459,23 @@ public class PyExcelRibbon : ExcelRibbon
     {
         var key = PyExcelServices.WorkbookContext.CurrentWorkbookKey;
         if (key is null) return;
-        PyExcelServices.State.SetSelectedAction(key, string.IsNullOrEmpty(text) ? null : text);
+        if (string.IsNullOrEmpty(text))
+        {
+            PyExcelServices.State.SetSelectedAction(key, null);
+            return;
+        }
+        // Selecting a saved action loads it into the Script / Input / Output
+        // boxes (which the Run button reads), so picking an action makes it
+        // runnable — not just a name in the combo.
+        foreach (var a in PyExcelServices.State.Get(key).Actions)
+        {
+            if (string.Equals(a.Name, text, StringComparison.Ordinal))
+            {
+                PyExcelServices.State.LoadAction(key, a);
+                return;
+            }
+        }
+        PyExcelServices.State.SetSelectedAction(key, text);
     }
 
     public void OnAddAction(IRibbonControl control)
@@ -420,16 +483,21 @@ public class PyExcelRibbon : ExcelRibbon
         var key = PyExcelServices.WorkbookContext.CurrentWorkbookKey;
         if (key is null) { _log.Info("OnAddAction: no active workbook"); return; }
 
+        // Re-scan userScripts so the form's Script list reflects what's on disk.
+        RefreshAvailableScripts(key);
         var state = PyExcelServices.State.Get(key);
         var result = EditActionForm.Prompt(
             ExcelWindowOwner(),
             state.AvailableScripts,
             ActionNames(state),
             existing: null,
-            selectionProvider: CurrentSelectionAddress);
+            rangePicker: PickRangeNative,
+            userScriptsDirectory: UserScriptsDir());
         if (result is null) { _log.Info("OnAddAction: cancelled"); return; }
 
         PyExcelServices.State.AddAction(key, result);
+        // Load it into the run boxes so the just-saved action is ready to Run.
+        PyExcelServices.State.LoadAction(key, result);
         _log.Info($"OnAddAction: saved '{result.Name}' to workbook '{key}'");
     }
 
@@ -438,6 +506,8 @@ public class PyExcelRibbon : ExcelRibbon
         var key = PyExcelServices.WorkbookContext.CurrentWorkbookKey;
         if (key is null) { _log.Info("OnEditAction: no active workbook"); return; }
 
+        // Re-scan userScripts so the form's Script list reflects what's on disk.
+        RefreshAvailableScripts(key);
         var state = PyExcelServices.State.Get(key);
         var existing = state.SelectedAction;
         if (existing is null) { _log.Info("OnEditAction: no action selected"); return; }
@@ -447,7 +517,8 @@ public class PyExcelRibbon : ExcelRibbon
             state.AvailableScripts,
             ActionNames(state),
             existing,
-            selectionProvider: CurrentSelectionAddress);
+            rangePicker: PickRangeNative,
+            userScriptsDirectory: UserScriptsDir());
         if (result is null) { _log.Info("OnEditAction: cancelled"); return; }
 
         // AddAction upserts by name, so a rename would leave the original
@@ -457,6 +528,8 @@ public class PyExcelRibbon : ExcelRibbon
         if (!string.Equals(existing.Name, result.Name, StringComparison.Ordinal))
             PyExcelServices.State.DeleteAction(key, existing.Name);
         PyExcelServices.State.AddAction(key, result);
+        // Reflect the edited action in the run boxes (Script / Input / Output).
+        PyExcelServices.State.LoadAction(key, result);
         _log.Info($"OnEditAction: saved '{result.Name}' to workbook '{key}'");
     }
 
@@ -480,10 +553,197 @@ public class PyExcelRibbon : ExcelRibbon
         public IntPtr Handle { get; }
     }
 
-    /// <summary>The active selection's address as <c>Sheet!A1:B2</c>, for
-    /// the range picker's "Use current selection" button. Returns null when
-    /// the selection isn't a range (a chart, a shape) or COM is unhappy —
-    /// the picker then just hides the button / keeps the typed text.</summary>
+    /// <summary>The active workbook's <c>userScripts</c> folder under its
+    /// resolved project directory, or null if the workbook hasn't been saved.
+    /// Passed to the EditAction dialog so its "New…" button scaffolds a script
+    /// where Setup and the runtime look (Note 2).</summary>
+    private static string? UserScriptsDir()
+    {
+        var projectDir = ResolveProjectDir();
+        return string.IsNullOrEmpty(projectDir) ? null : Path.Combine(projectDir!, "userScripts");
+    }
+
+    /// <summary>Re-scan the active workbook's userScripts folder and push the
+    /// result into <see cref="WorkbookState.AvailableScripts"/>, so the ribbon's
+    /// Script dropdown and the Add/Edit form's script list both reflect what's
+    /// actually on disk. Nothing else populates that list in-process, so this is
+    /// called on Enable and whenever the action form is opened.</summary>
+    private static void RefreshAvailableScripts(string key)
+        => PyExcelServices.State.SetAvailableScripts(
+            key, ScriptDirectoryWatcher.Snapshot(UserScriptsDir()));
+
+    /// <summary>The active workbook's effective project directory: the dedicated
+    /// folder the user chose on Enable (saved in state) if set, else the
+    /// workbook-derived default from <see cref="PyExcel.Common.ProjectDirectory"/>.
+    /// Null when no workbook is active or it's unsaved. Mirrors the rule
+    /// KernelHost uses so the ribbon and runtime agree on the directory.</summary>
+    private static string? ResolveProjectDir()
+    {
+        var key = PyExcelServices.WorkbookContext.CurrentWorkbookKey;
+        var workbookDir = PyExcelServices.WorkbookContext.CurrentWorkbookDirectory;
+        var stored = key is null ? null : PyExcelServices.State.Get(key).ProjectDir;
+        return string.IsNullOrEmpty(stored)
+            ? PyExcel.Common.ProjectDirectory.Resolve(workbookDir)
+            : stored;
+    }
+
+    /// <summary>Prompt for a dedicated project folder via the native folder
+    /// browser, defaulting to <paramref name="defaultDir"/>. Returns the chosen
+    /// absolute path, or null if the user cancelled. Raises Excel first so the
+    /// browser isn't lost behind the Excel window.</summary>
+    private string? PickProjectDirectory(string? defaultDir)
+    {
+        try
+        {
+            try { SetForegroundWindow(ExcelDnaUtil.WindowHandle); } catch { /* best-effort */ }
+            using var dlg = new System.Windows.Forms.FolderBrowserDialog
+            {
+                Description =
+                    "Choose a dedicated folder for this workbook's PyExcel project. " +
+                    "Its Python environment (.pyexcel-venv), kernel, and userScripts " +
+                    "folder are created here.",
+                ShowNewFolderButton = true,
+            };
+            if (!string.IsNullOrEmpty(defaultDir) && Directory.Exists(defaultDir))
+                dlg.SelectedPath = defaultDir!;
+
+            var result = dlg.ShowDialog(ExcelWindowOwner());
+            return result == System.Windows.Forms.DialogResult.OK &&
+                   !string.IsNullOrWhiteSpace(dlg.SelectedPath)
+                ? dlg.SelectedPath
+                : null;
+        }
+        catch (Exception ex)
+        {
+            _log.Error("PickProjectDirectory failed", ex);
+            return null;
+        }
+    }
+
+    /// <summary>Prompt (via Excel's own InputBox) for a name for a brand-new,
+    /// never-saved workbook. Returns the sanitised name (no extension), or null
+    /// if the user cancelled or left it blank. Defaults to the workbook's current
+    /// caption (e.g. "Book1").</summary>
+    private string? PromptForWorkbookName()
+    {
+        try
+        {
+            dynamic app = ExcelDnaUtil.Application;
+            string current = string.Empty;
+            try { current = (string)app.ActiveWorkbook.Name; } catch { /* best-effort default */ }
+
+            try { SetForegroundWindow(ExcelDnaUtil.WindowHandle); } catch { /* best-effort */ }
+
+            // InputBox Type 2 = text. Cancel returns the Boolean False; OK returns
+            // the typed string (empty if the user cleared it).
+            object result = app.InputBox(
+                "This workbook isn't saved yet. Enter a name — PyExcel will save " +
+                "it into the folder you choose next.",
+                "PyExcel — name this workbook",
+                current,
+                Type.Missing, Type.Missing, Type.Missing, Type.Missing, 2);
+
+            if (result is bool) return null; // cancelled
+            var name = (result as string)?.Trim();
+            if (string.IsNullOrEmpty(name)) return null;
+
+            // Strip anything that can't live in a filename so the later SaveAs
+            // can't throw on the path.
+            foreach (var c in Path.GetInvalidFileNameChars())
+                name = name!.Replace(c.ToString(), string.Empty);
+            name = name!.Trim();
+            return string.IsNullOrEmpty(name) ? null : name;
+        }
+        catch (Exception ex)
+        {
+            _log.Error("PromptForWorkbookName failed", ex);
+            return null;
+        }
+    }
+
+    /// <summary>Append a <c>.xlsx</c> extension to <paramref name="name"/> unless
+    /// it already has one (case-insensitive).</summary>
+    private static string EnsureXlsxExtension(string name)
+        => name.EndsWith(".xlsx", StringComparison.OrdinalIgnoreCase) ? name : name + ".xlsx";
+
+    /// <summary>Save the active (new, unsaved) workbook to <paramref name="path"/>
+    /// as a macro-free <c>.xlsx</c> via COM. Returns false (logged) on failure.
+    /// SaveAs updates the workbook's FullName, so the WorkbookContext reports the
+    /// new path — and a path-based key — immediately afterwards.</summary>
+    private bool SaveActiveWorkbookAs(string path)
+    {
+        try
+        {
+            dynamic app = ExcelDnaUtil.Application;
+            // FileFormat 51 = xlOpenXMLWorkbook (.xlsx).
+            app.ActiveWorkbook.SaveAs(path, 51);
+            _log.Info($"SaveActiveWorkbookAs: saved new workbook to '{path}'");
+            return true;
+        }
+        catch (Exception ex)
+        {
+            _log.Error($"SaveActiveWorkbookAs failed for '{path}'", ex);
+            return false;
+        }
+    }
+
+    /// <summary>Bring a window to the foreground. Used to raise Excel's main
+    /// window before the native range picker so the picker isn't drawn behind
+    /// Excel. Best-effort: the OS can refuse the foreground change.</summary>
+    [DllImport("user32.dll")]
+    private static extern bool SetForegroundWindow(IntPtr hWnd);
+
+    /// <summary>
+    /// Excel's NATIVE range picker (Application.InputBox with Type:=8): shows
+    /// the collapsible "select a range" box so the user can click/drag on the
+    /// sheet, and returns the chosen range's address as <c>Sheet!A1:B2</c>.
+    /// Returns null if the user cancels or the call fails. Injected into the
+    /// dialogs as the range-pick delegate so PyExcel.Forms stays COM-free.
+    /// </summary>
+    private string? PickRangeNative(string? initial)
+    {
+        try
+        {
+            dynamic app = ExcelDnaUtil.Application;
+            // Pre-fill the picker with the field's current value, or — when it's
+            // blank — the user's current sheet selection, so the common "I've
+            // already selected it" case needs no extra drag.
+            var seed = string.IsNullOrEmpty(initial) ? CurrentSelectionAddress() : initial;
+
+            // Raise Excel to the foreground so the native picker shows on top of
+            // the Excel window, not behind it — the dialog that launched the pick
+            // is already hidden by RangePick.OnSheet. Best-effort (the OS can
+            // refuse the foreground change), so failures are swallowed.
+            try { SetForegroundWindow(ExcelDnaUtil.WindowHandle); } catch { /* best-effort */ }
+
+            // Application.InputBox(Prompt, Title, Default, Left, Top, HelpFile,
+            // HelpContextID, Type). Type 8 = a cell/range reference: Excel shows
+            // its collapsible range selector. Cancel returns the Boolean False;
+            // a pick returns a Range object.
+            object box = app.InputBox(
+                "Select a range, then click OK.",
+                "PyExcel — pick a range",
+                seed ?? string.Empty,
+                Type.Missing, Type.Missing, Type.Missing, Type.Missing, 8);
+
+            if (box is bool) return null; // user cancelled
+
+            dynamic range = box;
+            string address = (string)range.Address[false, false];
+            string sheet = (string)range.Worksheet.Name;
+            return $"{sheet}!{address}";
+        }
+        catch (Exception ex)
+        {
+            _log.Error("PickRangeNative failed", ex);
+            return null;
+        }
+    }
+
+    /// <summary>The active selection's address as <c>Sheet!A1:B2</c>, used to
+    /// pre-seed the native picker. Returns null when the selection isn't a range
+    /// (a chart, a shape) or COM is unhappy — the picker then just opens with the
+    /// field's existing text (or empty).</summary>
     private static string? CurrentSelectionAddress()
     {
         try
@@ -564,7 +824,7 @@ public class PyExcelRibbon : ExcelRibbon
                 state.ImportInput,
                 state.ImportOutput,
                 PyExcelServices.WorkbookContext.CurrentWorkbookDirectory,
-                CurrentSelectionAddress);
+                PickRangeNative);
             if (result is null) { _log.Info("OnEditImport: cancelled"); return; }
             PyExcelServices.State.SetImportInput(key, result.Input);
             PyExcelServices.State.SetImportOutput(key, result.Output);
@@ -623,7 +883,7 @@ public class PyExcelRibbon : ExcelRibbon
                 state.ExportInput,
                 state.ExportOutput,
                 PyExcelServices.WorkbookContext.CurrentWorkbookDirectory,
-                CurrentSelectionAddress);
+                PickRangeNative);
             if (result is null) { _log.Info("OnEditExport: cancelled"); return; }
             PyExcelServices.State.SetExportInput(key, result.Input);
             PyExcelServices.State.SetExportOutput(key, result.Output);
@@ -707,7 +967,7 @@ public class PyExcelRibbon : ExcelRibbon
             if (key is null) { _log.Info("OnEditPaste: no active workbook"); return; }
             var state = PyExcelServices.State.Get(key);
             var result = EditIoForm.PromptPaste(
-                ExcelWindowOwner(), state.PasteOutput, CurrentSelectionAddress);
+                ExcelWindowOwner(), state.PasteOutput, PickRangeNative);
             if (result is null) { _log.Info("OnEditPaste: cancelled"); return; }
             PyExcelServices.State.SetPasteOutput(key, result.Output);
             _log.Info($"OnEditPaste: saved for workbook '{key}'");

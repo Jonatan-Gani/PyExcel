@@ -105,6 +105,21 @@ public static class RangeRunner
             return;
         }
 
+        // Resolve the selected script (a bare userScripts filename like "foo.py")
+        // to its real path under the project's userScripts folder, so the kernel
+        // loads the right file. The project root is the dedicated folder chosen on
+        // Enable (state.ProjectDir) if set, else the workbook-derived default —
+        // the same rule the ribbon's Edit-script and KernelHost use. An
+        // already-rooted path (legacy / power user) is passed through untouched.
+        if (!System.IO.Path.IsPathRooted(script))
+        {
+            var projectDir = !string.IsNullOrEmpty(state.ProjectDir)
+                ? state.ProjectDir
+                : PyExcel.Common.ProjectDirectory.Resolve(workbookDir);
+            if (!string.IsNullOrEmpty(projectDir))
+                script = System.IO.Path.Combine(projectDir!, "userScripts", script);
+        }
+
         var archiveContext = BuildArchiveContext();
 
         // Optional progress UI: created on the main thread (shows a modeless

@@ -1,8 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  PyExcel v2 ribbon definition. Ported verbatim from
-  src/Ribbon/RibbonUI.xml in the v1 codebase. Callback names are unchanged
-  so a side-by-side diff against v1 is trivial; every callback resolves to
+  PyExcel ribbon definition. Ported verbatim from the original v1 VBA
+  ribbon (since removed from the repository); every callback resolves to
   a method on PyExcel.Ribbon.PyExcelRibbon.
 
   Note that customLogo is now embedded via PyExcelRibbon.LoadImage(),
@@ -15,8 +14,19 @@
         <tabs>
             <tab id="tabPython" label="Python">
                 <group id="grpMain" label="Main">
-                    <button id="btnEnablePyExcel" label="Enable PyExcel" imageMso="FileSaveAs" onAction="OnEnablePyExcel"/>
-                    <button id="btnSetup" label="Setup" imageMso="ServerConnection" onAction="OnSetup"/>
+                    <!--
+                      "Enable" installs + enables in one action (Note 3): it
+                      provisions the workbook (folders, venv, kernel, deps) and
+                      marks it enabled. getEnabled=RibbonNotEnabled greys it once
+                      the workbook is enabled so it can't be re-run by accident.
+                    -->
+                    <button id="btnEnablePyExcel" label="Enable" imageMso="ServerConnection" onAction="OnEnablePyExcel" getEnabled="RibbonNotEnabled"/>
+                    <!--
+                      Update is a placeholder for now: RibbonUpdateAvailable
+                      always returns false (disabled) until the update mechanism
+                      and a launch-time update check are built. See ROADMAP.md.
+                    -->
+                    <button id="btnUpdate" label="Update" imageMso="RefreshAll" onAction="OnUpdate" getEnabled="RibbonUpdateAvailable"/>
                     <button id="btnOpenExplorer" label="Open In Explorer" imageMso="FolderOpen" onAction="OnOpenExplorer" getEnabled="RibbonEnabled"/>
                     <button id="btnReadMe" label="Read Me" imageMso="Help" onAction="OnReadMe" getEnabled="RibbonEnabled"/>
                 </group>

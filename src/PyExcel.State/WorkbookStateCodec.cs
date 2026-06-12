@@ -80,6 +80,10 @@ public static class WorkbookStateCodec
             root.Add(new XElement(Ns + "export-output", state.ExportOutput));
         if (state.PasteOutput is not null)
             root.Add(new XElement(Ns + "paste-output", state.PasteOutput));
+        // The user-chosen dedicated project directory (Enable). Optional, so a
+        // document written before this change parses with ProjectDir == null.
+        if (state.ProjectDir is not null)
+            root.Add(new XElement(Ns + "project-dir", state.ProjectDir));
 
         var actions = new XElement(Ns + "actions");
         foreach (var a in state.Actions)
@@ -160,6 +164,7 @@ public static class WorkbookStateCodec
         var exportInput = (string?)root.Element(Ns + "export-input");
         var exportOutput = (string?)root.Element(Ns + "export-output");
         var pasteOutput = (string?)root.Element(Ns + "paste-output");
+        var projectDir = (string?)root.Element(Ns + "project-dir");
 
         var actions = new List<RibbonAction>();
         var actionsEl = root.Element(Ns + "actions");
@@ -182,6 +187,7 @@ public static class WorkbookStateCodec
             ExportInput = exportInput,
             ExportOutput = exportOutput,
             PasteOutput = pasteOutput,
+            ProjectDir = projectDir,
         };
     }
 

@@ -46,6 +46,7 @@ public class SetupServiceTests
             {
                 "resolve-path",
                 "ensure-project-dir",
+                "scaffold-project",
                 "probe-python",
                 "provision-venv",
                 "extract-kernel",
@@ -69,6 +70,8 @@ public class SetupServiceTests
             // where PyExcel.Excel.PythonResolver looks for it.
             Assert.True(Directory.Exists(Path.Combine(target, ".pyexcel-venv")));
             Assert.True(File.Exists(Path.Combine(target, ".pyexcel-kernel", "pyexcel", "kernel", "__main__.py")));
+            // The scaffold stage prepared the user-facing folders too.
+            Assert.True(File.Exists(Path.Combine(target, "userScripts", "example.py")));
         }
         finally
         {

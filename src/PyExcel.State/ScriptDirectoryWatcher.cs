@@ -69,6 +69,28 @@ public sealed class ScriptDirectoryWatcher : IDisposable
     /// activation) the watcher itself doesn't see.</summary>
     public void Refresh() => PushSnapshot();
 
+    /// <summary>One-shot scan of <paramref name="directory"/> for the file names
+    /// (with the <c>.py</c> extension) of its <c>.py</c> files, sorted
+    /// case-insensitively — the same shape the live watcher pushes. Returns an
+    /// empty list for a null/missing/unreadable directory, so callers can refresh
+    /// the script list without owning a watcher instance.</summary>
+    public static IReadOnlyList<string> Snapshot(string? directory)
+    {
+        if (string.IsNullOrEmpty(directory) || !Directory.Exists(directory))
+            return Array.Empty<string>();
+        try
+        {
+            return Directory.EnumerateFiles(directory!, "*.py")
+                .Select(Path.GetFileName)
+                .Where(n => !string.IsNullOrEmpty(n))
+                .Select(n => n!)
+                .OrderBy(n => n, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+        }
+        catch (IOException) { return Array.Empty<string>(); }
+        catch (UnauthorizedAccessException) { return Array.Empty<string>(); }
+    }
+
     private void OnFsEvent(object sender, FileSystemEventArgs e) => PushSnapshot();
     private void OnFsRenamed(object sender, RenamedEventArgs e) => PushSnapshot();
 
@@ -80,7 +102,7 @@ public sealed class ScriptDirectoryWatcher : IDisposable
         try
         {
             snapshot = Directory.EnumerateFiles(_directory, "*.py")
-                .Select(Path.GetFileNameWithoutExtension)
+                .Select(Path.GetFileName)
                 .Where(n => !string.IsNullOrEmpty(n))
                 .Select(n => n!)
                 .OrderBy(n => n, StringComparer.OrdinalIgnoreCase)

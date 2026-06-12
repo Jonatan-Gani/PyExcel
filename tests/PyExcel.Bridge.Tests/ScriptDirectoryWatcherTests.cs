@@ -69,7 +69,7 @@ public class ScriptDirectoryWatcherTests : IDisposable
         // Initial snapshot lands inside the constructor — already in the
         // queue by the time StartWatcher returns.
         var first = WaitForSnapshot();
-        Assert.Equal(new[] { "alpha", "beta" }, first);
+        Assert.Equal(new[] { "alpha.py", "beta.py" }, first);
     }
 
     [Fact]
@@ -80,15 +80,15 @@ public class ScriptDirectoryWatcherTests : IDisposable
 
         File.WriteAllText(Path.Combine(_dir, "new.py"), "");
 
-        // Take snapshots until we see "new" in the list (the watcher may
+        // Take snapshots until we see "new.py" in the list (the watcher may
         // fire multiple events for a single create on some platforms).
         var deadline = DateTime.UtcNow.AddSeconds(3);
         while (DateTime.UtcNow < deadline)
         {
             var s = WaitForSnapshot();
-            if (s.Count == 1 && s[0] == "new") return;
+            if (s.Count == 1 && s[0] == "new.py") return;
         }
-        Assert.Fail("snapshot containing 'new' never arrived");
+        Assert.Fail("snapshot containing 'new.py' never arrived");
     }
 
     [Fact]
@@ -98,7 +98,7 @@ public class ScriptDirectoryWatcherTests : IDisposable
         File.WriteAllText(path, "");
 
         using var w = StartWatcher();
-        _ = WaitForSnapshot();  // initial = {"doomed"}
+        _ = WaitForSnapshot();  // initial = {"doomed.py"}
 
         File.Delete(path);
 
@@ -116,12 +116,12 @@ public class ScriptDirectoryWatcherTests : IDisposable
     {
         File.WriteAllText(Path.Combine(_dir, "x.py"), "");
         using var w = StartWatcher();
-        _ = WaitForSnapshot();  // initial = {"x"}
+        _ = WaitForSnapshot();  // initial = {"x.py"}
 
         // No file change — Refresh should still produce a snapshot.
         w.Refresh();
         var snap = WaitForSnapshot();
-        Assert.Equal(new[] { "x" }, snap);
+        Assert.Equal(new[] { "x.py" }, snap);
     }
 
     [Fact]
@@ -152,5 +152,23 @@ public class ScriptDirectoryWatcherTests : IDisposable
         var w = StartWatcher();
         w.Dispose();
         w.Dispose();  // second call must not throw
+    }
+
+    [Fact]
+    public void Snapshot_ListsPyFilesSortedWithExtensionIgnoringOthers()
+    {
+        File.WriteAllText(Path.Combine(_dir, "beta.py"), "");
+        File.WriteAllText(Path.Combine(_dir, "alpha.py"), "");
+        File.WriteAllText(Path.Combine(_dir, "notes.txt"), "");
+
+        Assert.Equal(new[] { "alpha.py", "beta.py" }, ScriptDirectoryWatcher.Snapshot(_dir));
+    }
+
+    [Fact]
+    public void Snapshot_NullOrMissingDirectory_ReturnsEmpty()
+    {
+        Assert.Empty(ScriptDirectoryWatcher.Snapshot(null));
+        Assert.Empty(ScriptDirectoryWatcher.Snapshot(string.Empty));
+        Assert.Empty(ScriptDirectoryWatcher.Snapshot(Path.Combine(_dir, "does-not-exist")));
     }
 }
