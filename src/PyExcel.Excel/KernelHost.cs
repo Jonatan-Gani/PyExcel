@@ -93,8 +93,43 @@ public sealed class KernelHost : IDisposable
         var pythonPath = PythonResolver.ResolveEmbeddedPath(projectDir);
         var supervisor = KernelSupervisor.StartPython(python, pythonPath);
         var client = new KernelClient(supervisor);
+#if NETFRAMEWORK
+        ForwardKernelOutputToLog(supervisor, client);
+#endif
         return new Booted(supervisor, client);
     }
+
+#if NETFRAMEWORK
+    /// <summary>
+    /// Surface the kernel's runtime chatter in Excel-DNA's LogDisplay window
+    /// so the user can actually see it: the subprocess's stdout/stderr (where
+    /// user <c>print()</c> lands) and any structured LOG frames. Without this
+    /// the output is captured but shown nowhere — the "Run Python didn't show
+    /// the prints anywhere" report. Best-effort: a logging failure must never
+    /// disturb a run, and these handlers live for the process lifetime
+    /// alongside the singleton host.
+    /// </summary>
+    private static void ForwardKernelOutputToLog(KernelSupervisor supervisor, KernelClient client)
+    {
+        supervisor.OutputReceived += (_, e) =>
+        {
+            try
+            {
+                // Pass the line as the sole argument: LogDisplay.WriteLine only
+                // runs string.Format when extra args follow, so brace-bearing
+                // output (dict reprs, f-strings) can't throw FormatException.
+                ExcelDna.Logging.LogDisplay.WriteLine(
+                    (e.IsError ? "[python:stderr] " : "[python] ") + e.Text);
+            }
+            catch { /* never let logging disturb a run */ }
+        };
+        client.LogReceived += (_, e) =>
+        {
+            try { ExcelDna.Logging.LogDisplay.WriteLine($"[python:{e.Level}] {e.Text}"); }
+            catch { /* never let logging disturb a run */ }
+        };
+    }
+#endif
 
     private readonly struct Booted
     {

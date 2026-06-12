@@ -1001,23 +1001,22 @@ public class PyExcelRibbon : ExcelRibbon
         }
     }
 
-    /// <summary>Show the last error in Excel-DNA's <see cref="LogDisplay"/>.
-    /// Brings the window to front so the user sees it even if it was
-    /// previously dismissed.</summary>
+    /// <summary>Show the last error in a modal, Excel-owned dialog that is
+    /// always brought to the front. We deliberately do <em>not</em> route
+    /// this through Excel-DNA's <see cref="LogDisplay"/>:
+    /// <c>LogDisplay.Show()</c> is a no-op once the log window is already
+    /// open behind Excel (and never raises it), so the button used to appear
+    /// to do nothing. The formatted block is still written to LogDisplay for
+    /// history, but the owned dialog is what guarantees the user sees it.</summary>
     public void OnShowLastError(IRibbonControl control)
     {
         try
         {
             var record = PyExcelServices.Errors.GetLast(ActiveKey());
-            if (record is null)
-            {
-                LogDisplay.WriteLine("[PyExcel] No errors recorded.");
-            }
-            else
-            {
-                LogDisplay.WriteLine(record.FormatForClipboard());
-            }
-            LogDisplay.Show();
+            var body = record is null
+                ? "No errors recorded."
+                : record.FormatForClipboard();
+            ErrorDisplayForm.Open(ExcelWindowOwner(), "PyExcel — Last Error", body);
         }
         catch (Exception ex)
         {
