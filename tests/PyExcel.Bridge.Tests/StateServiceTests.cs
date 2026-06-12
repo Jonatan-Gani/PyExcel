@@ -130,6 +130,21 @@ public class StateServiceTests
     }
 
     [Fact]
+    public void LoadAction_CopiesScriptInputOutputIntoRunBoxesAndSelects()
+    {
+        var svc = new StateService();
+        var action = new RibbonAction("calc", "calc.py", "Sheet1!A1:B2", "Sheet1!D1");
+
+        svc.LoadAction("wb.xlsx", action);
+
+        var s = svc.Get("wb.xlsx");
+        Assert.Equal("calc.py", s.SelectedScript);
+        Assert.Equal("Sheet1!A1:B2", s.PyInput);
+        Assert.Equal("Sheet1!D1", s.PyOutput);
+        Assert.Equal("calc", s.SelectedActionName);
+    }
+
+    [Fact]
     public void AddAction_SameName_Upserts()
     {
         var svc = new StateService();

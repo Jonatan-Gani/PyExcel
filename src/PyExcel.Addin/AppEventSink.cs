@@ -113,11 +113,18 @@ internal sealed class AppEventSink : IDisposable
                 _state.Update(key, _ => migrated);
             }
         }
+        RefreshScripts(wb);
         InvalidateRibbon();
     });
 
     private void OnWorkbookActivate(Excel.Workbook wb) =>
-        Guard(nameof(OnWorkbookActivate), InvalidateRibbon);
+        Guard(nameof(OnWorkbookActivate), () =>
+        {
+            // The active workbook changed: repopulate its Script dropdown from
+            // disk (nothing else feeds AvailableScripts) and repaint.
+            RefreshScripts(wb);
+            InvalidateRibbon();
+        });
 
     private void OnWorkbookBeforeSave(Excel.Workbook wb, bool saveAsUI, ref bool cancel) =>
         Guard(nameof(OnWorkbookBeforeSave), () =>
@@ -157,6 +164,25 @@ internal sealed class AppEventSink : IDisposable
 
     private static string KeyOf(Excel.Workbook wb) =>
         WorkbookKeys.Resolve(wb.Name, wb.Path, wb.FullName);
+
+    /// <summary>Re-scan the workbook's <c>userScripts</c> folder and publish the
+    /// script names into state, so the ribbon's Script dropdown is populated on
+    /// open/activate. The project root is the dedicated folder chosen on Enable
+    /// (saved in state) if set, else the workbook-derived default — the same rule
+    /// the ribbon and KernelHost use, so all three agree on where scripts live.</summary>
+    private void RefreshScripts(Excel.Workbook wb)
+    {
+        string key = KeyOf(wb);
+        var stored = _state.Get(key).ProjectDir;
+        var workbookDir = string.IsNullOrEmpty(wb.Path) ? null : wb.Path;
+        var projectDir = string.IsNullOrEmpty(stored)
+            ? PyExcel.Common.ProjectDirectory.Resolve(workbookDir)
+            : stored;
+        var scriptsDir = string.IsNullOrEmpty(projectDir)
+            ? null
+            : System.IO.Path.Combine(projectDir!, "userScripts");
+        _state.SetAvailableScripts(key, ScriptDirectoryWatcher.Snapshot(scriptsDir));
+    }
 
     private static void InvalidateRibbon()
     {

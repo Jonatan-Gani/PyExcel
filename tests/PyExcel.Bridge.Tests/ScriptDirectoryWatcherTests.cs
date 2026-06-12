@@ -153,4 +153,22 @@ public class ScriptDirectoryWatcherTests : IDisposable
         w.Dispose();
         w.Dispose();  // second call must not throw
     }
+
+    [Fact]
+    public void Snapshot_ListsPyFilesSortedWithoutExtensionIgnoringOthers()
+    {
+        File.WriteAllText(Path.Combine(_dir, "beta.py"), "");
+        File.WriteAllText(Path.Combine(_dir, "alpha.py"), "");
+        File.WriteAllText(Path.Combine(_dir, "notes.txt"), "");
+
+        Assert.Equal(new[] { "alpha", "beta" }, ScriptDirectoryWatcher.Snapshot(_dir));
+    }
+
+    [Fact]
+    public void Snapshot_NullOrMissingDirectory_ReturnsEmpty()
+    {
+        Assert.Empty(ScriptDirectoryWatcher.Snapshot(null));
+        Assert.Empty(ScriptDirectoryWatcher.Snapshot(string.Empty));
+        Assert.Empty(ScriptDirectoryWatcher.Snapshot(Path.Combine(_dir, "does-not-exist")));
+    }
 }

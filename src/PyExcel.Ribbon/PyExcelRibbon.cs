@@ -252,6 +252,8 @@ public class PyExcelRibbon : ExcelRibbon
             if (success == true)
             {
                 PyExcelServices.State.SetEnabled(key, true);
+                // Surface the scaffolded example.py (and any others) right away.
+                RefreshAvailableScripts(key);
                 _log.Info($"OnEnablePyExcel: workbook '{key}' set up at '{projectDir}' and enabled");
             }
             else
@@ -457,7 +459,23 @@ public class PyExcelRibbon : ExcelRibbon
     {
         var key = PyExcelServices.WorkbookContext.CurrentWorkbookKey;
         if (key is null) return;
-        PyExcelServices.State.SetSelectedAction(key, string.IsNullOrEmpty(text) ? null : text);
+        if (string.IsNullOrEmpty(text))
+        {
+            PyExcelServices.State.SetSelectedAction(key, null);
+            return;
+        }
+        // Selecting a saved action loads it into the Script / Input / Output
+        // boxes (which the Run button reads), so picking an action makes it
+        // runnable — not just a name in the combo.
+        foreach (var a in PyExcelServices.State.Get(key).Actions)
+        {
+            if (string.Equals(a.Name, text, StringComparison.Ordinal))
+            {
+                PyExcelServices.State.LoadAction(key, a);
+                return;
+            }
+        }
+        PyExcelServices.State.SetSelectedAction(key, text);
     }
 
     public void OnAddAction(IRibbonControl control)
@@ -465,6 +483,8 @@ public class PyExcelRibbon : ExcelRibbon
         var key = PyExcelServices.WorkbookContext.CurrentWorkbookKey;
         if (key is null) { _log.Info("OnAddAction: no active workbook"); return; }
 
+        // Re-scan userScripts so the form's Script list reflects what's on disk.
+        RefreshAvailableScripts(key);
         var state = PyExcelServices.State.Get(key);
         var result = EditActionForm.Prompt(
             ExcelWindowOwner(),
@@ -476,6 +496,8 @@ public class PyExcelRibbon : ExcelRibbon
         if (result is null) { _log.Info("OnAddAction: cancelled"); return; }
 
         PyExcelServices.State.AddAction(key, result);
+        // Load it into the run boxes so the just-saved action is ready to Run.
+        PyExcelServices.State.LoadAction(key, result);
         _log.Info($"OnAddAction: saved '{result.Name}' to workbook '{key}'");
     }
 
@@ -484,6 +506,8 @@ public class PyExcelRibbon : ExcelRibbon
         var key = PyExcelServices.WorkbookContext.CurrentWorkbookKey;
         if (key is null) { _log.Info("OnEditAction: no active workbook"); return; }
 
+        // Re-scan userScripts so the form's Script list reflects what's on disk.
+        RefreshAvailableScripts(key);
         var state = PyExcelServices.State.Get(key);
         var existing = state.SelectedAction;
         if (existing is null) { _log.Info("OnEditAction: no action selected"); return; }
@@ -504,6 +528,8 @@ public class PyExcelRibbon : ExcelRibbon
         if (!string.Equals(existing.Name, result.Name, StringComparison.Ordinal))
             PyExcelServices.State.DeleteAction(key, existing.Name);
         PyExcelServices.State.AddAction(key, result);
+        // Reflect the edited action in the run boxes (Script / Input / Output).
+        PyExcelServices.State.LoadAction(key, result);
         _log.Info($"OnEditAction: saved '{result.Name}' to workbook '{key}'");
     }
 
@@ -536,6 +562,15 @@ public class PyExcelRibbon : ExcelRibbon
         var projectDir = ResolveProjectDir();
         return string.IsNullOrEmpty(projectDir) ? null : Path.Combine(projectDir!, "userScripts");
     }
+
+    /// <summary>Re-scan the active workbook's userScripts folder and push the
+    /// result into <see cref="WorkbookState.AvailableScripts"/>, so the ribbon's
+    /// Script dropdown and the Add/Edit form's script list both reflect what's
+    /// actually on disk. Nothing else populates that list in-process, so this is
+    /// called on Enable and whenever the action form is opened.</summary>
+    private static void RefreshAvailableScripts(string key)
+        => PyExcelServices.State.SetAvailableScripts(
+            key, ScriptDirectoryWatcher.Snapshot(UserScriptsDir()));
 
     /// <summary>The active workbook's effective project directory: the dedicated
     /// folder the user chose on Enable (saved in state) if set, else the
