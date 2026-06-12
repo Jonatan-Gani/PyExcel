@@ -44,6 +44,7 @@ public sealed class SetupService
     private readonly SystemPythonProbe _pythonProbe;
     private readonly VenvProvisioner _venv;
     private readonly KernelResourceExtractor _kernel;
+    private readonly ProjectScaffolder _scaffolder;
     private readonly PipRunner _pip;
     private readonly DependencyVerifier _verifier;
     private readonly ILog _log;
@@ -60,6 +61,7 @@ public sealed class SetupService
         _pythonProbe = new SystemPythonProbe(runner, _log);
         _venv = new VenvProvisioner(runner, _log);
         _kernel = new KernelResourceExtractor(log: _log);
+        _scaffolder = new ProjectScaffolder(_log);
         _pip = new PipRunner(runner, _log);
         _verifier = new DependencyVerifier(runner, _log);
     }
@@ -81,6 +83,13 @@ public sealed class SetupService
         var ensure = TryRun(steps, "ensure-project-dir",
             () => { Directory.CreateDirectory(pathInfo.NormalisedPath); return pathInfo.NormalisedPath; });
         if (ensure is null) return new SetupResult(steps, success: false);
+
+        // Prepare the user-facing folders early (userScripts + a starter
+        // script), so even if a later Python stage fails the project directory
+        // is laid out and the user can start writing scripts.
+        var scaffold = TryRun(steps, "scaffold-project",
+            () => _scaffolder.Scaffold(pathInfo.NormalisedPath));
+        if (scaffold is null) return new SetupResult(steps, success: false);
 
         var python = TryRun(steps, "probe-python",
             () =>

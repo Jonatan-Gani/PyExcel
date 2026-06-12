@@ -510,6 +510,12 @@ public class PyExcelRibbon : ExcelRibbon
         return string.IsNullOrEmpty(dir) ? null : Path.Combine(dir!, "userScripts");
     }
 
+    /// <summary>Bring a window to the foreground. Used to raise Excel's main
+    /// window before the native range picker so the picker isn't drawn behind
+    /// Excel. Best-effort: the OS can refuse the foreground change.</summary>
+    [DllImport("user32.dll")]
+    private static extern bool SetForegroundWindow(IntPtr hWnd);
+
     /// <summary>
     /// Excel's NATIVE range picker (Application.InputBox with Type:=8): shows
     /// the collapsible "select a range" box so the user can click/drag on the
@@ -526,6 +532,13 @@ public class PyExcelRibbon : ExcelRibbon
             // blank — the user's current sheet selection, so the common "I've
             // already selected it" case needs no extra drag.
             var seed = string.IsNullOrEmpty(initial) ? CurrentSelectionAddress() : initial;
+
+            // Raise Excel to the foreground so the native picker shows on top of
+            // the Excel window, not behind it — the dialog that launched the pick
+            // is already hidden by RangePick.OnSheet. Best-effort (the OS can
+            // refuse the foreground change), so failures are swallowed.
+            try { SetForegroundWindow(ExcelDnaUtil.WindowHandle); } catch { /* best-effort */ }
+
             // Application.InputBox(Prompt, Title, Default, Left, Top, HelpFile,
             // HelpContextID, Type). Type 8 = a cell/range reference: Excel shows
             // its collapsible range selector. Cancel returns the Boolean False;
