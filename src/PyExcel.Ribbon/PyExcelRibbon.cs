@@ -136,6 +136,15 @@ public class PyExcelRibbon : ExcelRibbon
         }
     }
 
+    /// <summary>Discard a user edit to a display-only ribbon control by
+    /// re-reading the getters, so Excel replaces the typed text with the
+    /// behind-the-scenes value. The Script / Input / Output fields are driven by
+    /// the selected action, not typed in — only the Actions dropdown is
+    /// interactive — so their onChange callbacks route here instead of storing.
+    /// Uses the full <see cref="QueueInvalidate"/> (the path already proven to
+    /// refresh these <c>getText</c> boxes) so the revert is reliable.</summary>
+    private void RevertControl(IRibbonControl control) => QueueInvalidate();
+
     /// <summary>Read the state for the currently-active workbook,
     /// returning <see cref="WorkbookState.Empty"/> if no workbook is
     /// active so every getter has a well-defined value to read.</summary>
@@ -422,30 +431,18 @@ public class PyExcelRibbon : ExcelRibbon
 
     public string GetScriptText(IRibbonControl control) => ActiveState().SelectedScript ?? string.Empty;
 
-    public void OnScriptChange(IRibbonControl control, string text)
-    {
-        var key = PyExcelServices.WorkbookContext.CurrentWorkbookKey;
-        if (key is null) return;
-        PyExcelServices.State.SetSelectedScript(key, string.IsNullOrEmpty(text) ? null : text);
-    }
+    // Display-only: the Script box mirrors the selected action; reject hand-edits.
+    public void OnScriptChange(IRibbonControl control, string text) => RevertControl(control);
 
     public string GetPyInput(IRibbonControl control) => ActiveState().PyInput ?? string.Empty;
 
-    public void OnPyInputChange(IRibbonControl control, string text)
-    {
-        var key = PyExcelServices.WorkbookContext.CurrentWorkbookKey;
-        if (key is null) return;
-        PyExcelServices.State.SetPyInput(key, text);
-    }
+    // Display-only: the Input box mirrors the selected action; reject hand-edits.
+    public void OnPyInputChange(IRibbonControl control, string text) => RevertControl(control);
 
     public string GetPyOutput(IRibbonControl control) => ActiveState().PyOutput ?? string.Empty;
 
-    public void OnPyOutputChange(IRibbonControl control, string text)
-    {
-        var key = PyExcelServices.WorkbookContext.CurrentWorkbookKey;
-        if (key is null) return;
-        PyExcelServices.State.SetPyOutput(key, text);
-    }
+    // Display-only: the Output box mirrors the selected action; reject hand-edits.
+    public void OnPyOutputChange(IRibbonControl control, string text) => RevertControl(control);
 
     public int GetActionCount(IRibbonControl control) => ActiveState().Actions.Count;
 
