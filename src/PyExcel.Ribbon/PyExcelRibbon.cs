@@ -210,22 +210,40 @@ public class PyExcelRibbon : ExcelRibbon
             var key = PyExcelServices.WorkbookContext.CurrentWorkbookKey;
             if (key is null) { _log.Info("OnEnablePyExcel: no active workbook"); return; }
 
-            // An unsaved workbook has no location to anchor the project to.
+            // A brand-new workbook has never been saved (Workbook.Path is empty),
+            // so it has no folder to anchor the project to. Rather than refuse,
+            // ask for a name and save it into the folder the user picks next.
             var workbookDir = PyExcelServices.WorkbookContext.CurrentWorkbookDirectory;
+            string? newWorkbookName = null;
             if (string.IsNullOrEmpty(workbookDir))
             {
-                LogDisplay.WriteLine(
-                    "Enable: save the workbook first — PyExcel anchors the project " +
-                    "folder near the workbook.");
-                return;
+                newWorkbookName = PromptForWorkbookName();
+                if (newWorkbookName is null) { _log.Info("OnEnablePyExcel: name prompt cancelled"); return; }
             }
 
-            // Let the user pick (or confirm) a DEDICATED folder for this
-            // workbook's project. Default to a folder chosen previously, else the
-            // workbook-derived default (the workbook folder, or a local
-            // %LOCALAPPDATA%\PyExcel folder for a cloud/URL workbook).
-            var projectDir = PickProjectDirectory(ResolveProjectDir());
+            // Open the folder browser at the workbook's own folder so the user
+            // starts where the workbook lives; fall back to Documents for a
+            // new/unsaved (or cloud-URL) workbook that has no local folder.
+            var browseStart = !string.IsNullOrEmpty(workbookDir) && Directory.Exists(workbookDir!)
+                ? workbookDir!
+                : Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);
+            var projectDir = PickProjectDirectory(browseStart);
             if (projectDir is null) { _log.Info("OnEnablePyExcel: directory pick cancelled"); return; }
+
+            // For a new workbook, save it into the chosen folder first so its
+            // persisted state has a file to live in, then re-key off the saved
+            // path (Save As promotes the workbook to a path-based key).
+            if (newWorkbookName is not null)
+            {
+                var savePath = Path.Combine(projectDir, EnsureXlsxExtension(newWorkbookName));
+                if (!SaveActiveWorkbookAs(savePath))
+                {
+                    LogDisplay.WriteLine($"Enable: couldn't save the workbook to '{savePath}'.");
+                    return;
+                }
+                key = PyExcelServices.WorkbookContext.CurrentWorkbookKey;
+                if (key is null) { _log.Info("OnEnablePyExcel: workbook key lost after save"); return; }
+            }
 
             // Remember the choice so Setup and the runtime kernel both use it.
             PyExcelServices.State.SetProjectDir(key, projectDir);
@@ -564,6 +582,73 @@ public class PyExcelRibbon : ExcelRibbon
         {
             _log.Error("PickProjectDirectory failed", ex);
             return null;
+        }
+    }
+
+    /// <summary>Prompt (via Excel's own InputBox) for a name for a brand-new,
+    /// never-saved workbook. Returns the sanitised name (no extension), or null
+    /// if the user cancelled or left it blank. Defaults to the workbook's current
+    /// caption (e.g. "Book1").</summary>
+    private string? PromptForWorkbookName()
+    {
+        try
+        {
+            dynamic app = ExcelDnaUtil.Application;
+            string current = string.Empty;
+            try { current = (string)app.ActiveWorkbook.Name; } catch { /* best-effort default */ }
+
+            try { SetForegroundWindow(ExcelDnaUtil.WindowHandle); } catch { /* best-effort */ }
+
+            // InputBox Type 2 = text. Cancel returns the Boolean False; OK returns
+            // the typed string (empty if the user cleared it).
+            object result = app.InputBox(
+                "This workbook isn't saved yet. Enter a name — PyExcel will save " +
+                "it into the folder you choose next.",
+                "PyExcel — name this workbook",
+                current,
+                Type.Missing, Type.Missing, Type.Missing, Type.Missing, 2);
+
+            if (result is bool) return null; // cancelled
+            var name = (result as string)?.Trim();
+            if (string.IsNullOrEmpty(name)) return null;
+
+            // Strip anything that can't live in a filename so the later SaveAs
+            // can't throw on the path.
+            foreach (var c in Path.GetInvalidFileNameChars())
+                name = name!.Replace(c.ToString(), string.Empty);
+            name = name!.Trim();
+            return string.IsNullOrEmpty(name) ? null : name;
+        }
+        catch (Exception ex)
+        {
+            _log.Error("PromptForWorkbookName failed", ex);
+            return null;
+        }
+    }
+
+    /// <summary>Append a <c>.xlsx</c> extension to <paramref name="name"/> unless
+    /// it already has one (case-insensitive).</summary>
+    private static string EnsureXlsxExtension(string name)
+        => name.EndsWith(".xlsx", StringComparison.OrdinalIgnoreCase) ? name : name + ".xlsx";
+
+    /// <summary>Save the active (new, unsaved) workbook to <paramref name="path"/>
+    /// as a macro-free <c>.xlsx</c> via COM. Returns false (logged) on failure.
+    /// SaveAs updates the workbook's FullName, so the WorkbookContext reports the
+    /// new path — and a path-based key — immediately afterwards.</summary>
+    private bool SaveActiveWorkbookAs(string path)
+    {
+        try
+        {
+            dynamic app = ExcelDnaUtil.Application;
+            // FileFormat 51 = xlOpenXMLWorkbook (.xlsx).
+            app.ActiveWorkbook.SaveAs(path, 51);
+            _log.Info($"SaveActiveWorkbookAs: saved new workbook to '{path}'");
+            return true;
+        }
+        catch (Exception ex)
+        {
+            _log.Error($"SaveActiveWorkbookAs failed for '{path}'", ex);
+            return false;
         }
     }
 
