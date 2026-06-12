@@ -373,7 +373,12 @@ public class PyExcelRibbon : ExcelRibbon
             PyExcel.Excel.RangeRunner.RunActiveScript(
                 state,
                 progressFactory: () =>
-                    ProgressForm.StartModeless(ExcelWindowOwner(), "Running Python…"));
+                    ProgressForm.StartModeless(ExcelWindowOwner(), "Running Python…"),
+                // On failure, pop the error in a modal dialog that stays up until
+                // the user dismisses it — a Python traceback shouldn't just scroll
+                // by in the log window where it's easy to miss.
+                errorDisplay: message =>
+                    ErrorDisplayForm.Open(ExcelWindowOwner(), "PyExcel — Run failed", message));
         }
         catch (Exception ex)
         {

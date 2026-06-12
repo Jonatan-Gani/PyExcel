@@ -61,9 +61,16 @@ public static class RangeRunner
     /// run goes through the async, cancellable path and forwards the
     /// kernel's <c>PROGRESS</c> frames to the sink; when null the original
     /// synchronous path runs unchanged.</param>
+    /// <param name="errorDisplay">Optional sink that shows a run failure to
+    /// the user in a modal, dismiss-to-continue dialog. Invoked on Excel's
+    /// main thread with the formatted error block when a run fails (a Python
+    /// traceback, a read/write fault, …) so the failure stays on screen until
+    /// the user closes it instead of scrolling past in the log window. When
+    /// null, failures are only written to <see cref="LogDisplay"/> as before.</param>
     public static void RunActiveScript(
         WorkbookState state,
-        Func<IRunProgressSink>? progressFactory = null)
+        Func<IRunProgressSink>? progressFactory = null,
+        Action<string>? errorDisplay = null)
     {
         if (state is null) throw new ArgumentNullException(nameof(state));
 
@@ -169,7 +176,11 @@ public static class RangeRunner
                     try { WriteResult(outputAddress, result); }
                     catch (Exception ex)
                     {
-                        Fail($"Run Python: failed to write the output range — {ex.Message}", ex);
+                        var message = $"Run Python: failed to write the output range — {ex.Message}";
+                        Fail(message, ex);
+                        // Already on the main thread here (QueueAsMacro), so show
+                        // the modal inline rather than re-queuing it.
+                        try { errorDisplay?.Invoke(message); } catch { /* best-effort */ }
                     }
                 });
             }
@@ -184,7 +195,9 @@ public static class RangeRunner
                     PythonTraceback: kex.PythonTraceback,
                     ScriptPath: script);
                 RecordError(record);
-                Fail(record.FormatForClipboard(), kex);
+                var block = record.FormatForClipboard();
+                Fail(block, kex);
+                ShowError(errorDisplay, block);
             }
             catch (Exception ex)
             {
@@ -197,7 +210,9 @@ public static class RangeRunner
                     PythonTraceback: ex.ToString(),
                     ScriptPath: script);
                 RecordError(record);
-                Fail(record.FormatForClipboard(), ex);
+                var block = record.FormatForClipboard();
+                Fail(block, ex);
+                ShowError(errorDisplay, block);
             }
             finally
             {
@@ -206,6 +221,25 @@ public static class RangeRunner
                 progress?.Complete();
             }
         });
+    }
+
+    /// <summary>Show a run failure in the injected modal error sink, marshalled
+    /// onto Excel's main thread (the kernel catch blocks run on the background
+    /// task, but the dialog is COM/WinForms-affine and must be owned by Excel's
+    /// window). No-op when no sink was supplied. Best-effort: surfacing the
+    /// error must never throw on top of the failure that triggered it.</summary>
+    private static void ShowError(Action<string>? errorDisplay, string message)
+    {
+        if (errorDisplay is null) return;
+        try
+        {
+            ExcelAsyncUtil.QueueAsMacro(() =>
+            {
+                try { errorDisplay(message); }
+                catch { /* best-effort surface */ }
+            });
+        }
+        catch { /* queueing itself failed — the error is still in LogDisplay */ }
     }
 
     /// <summary>Best-effort push into the per-workbook last-error slot.
