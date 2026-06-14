@@ -107,13 +107,14 @@ internal sealed class AppEventSink : IDisposable
     /// </summary>
     public void RestoreOpenWorkbooks() => Guard(nameof(RestoreOpenWorkbooks), () =>
     {
-        if (_app is null) return;
-        foreach (Excel.Workbook wb in _app.Workbooks)
+        var app = _app;
+        if (app is null) return;
+        foreach (Excel.Workbook wb in app.Workbooks)
             RestoreWorkbookState(wb);
 
         // Point the script watcher at whatever's active now, then repaint so
         // the restored "enabled" state shows immediately.
-        var active = _app.ActiveWorkbook;
+        var active = app.ActiveWorkbook;
         if (active is not null) SyncScriptWatcher(active);
         InvalidateRibbon();
     });
