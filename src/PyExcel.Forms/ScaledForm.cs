@@ -1,5 +1,6 @@
 #if NETFRAMEWORK
 using System;
+using System.Collections.Generic;
 using System.Drawing;
 using System.Runtime.InteropServices;
 using System.Windows.Forms;
@@ -57,11 +58,41 @@ public abstract class ScaledForm : Form
         if (factor <= 1.01f) return; // 100% — or a DPI-unaware host, where the OS bitmap-scales for us.
 
         SuspendLayout();
+
+        // Detach non-default anchors before scaling. A Bottom/Right (or
+        // fill) anchored control scaled while the form is still at its small
+        // design size ends up outside the client area, so the layout engine
+        // flings it off-screen on the next pass — that's what hid the Setup
+        // Close button and distorted the log box. With everything pinned
+        // Top|Left, the manual scale is authoritative; we restore the anchors
+        // afterwards (against the scaled bounds) so resizing still works.
+        var anchors = new Dictionary<Control, AnchorStyles>();
+        NeutralizeAnchors(this, anchors);
+
         ScaleControlTree(this, factor);
         ClientSize = Scale(ClientSize, factor);
         if (MinimumSize != Size.Empty) MinimumSize = Scale(MinimumSize, factor);
         if (MaximumSize != Size.Empty) MaximumSize = Scale(MaximumSize, factor);
+
+        foreach (var kv in anchors) kv.Key.Anchor = kv.Value;
         ResumeLayout(true);
+    }
+
+    /// <summary>Temporarily pin every non-(Top|Left) anchored control to
+    /// Top|Left, recording the original anchor so it can be restored after the
+    /// scale. Docked controls are left alone (none of the dialogs dock).</summary>
+    private static void NeutralizeAnchors(Control parent, Dictionary<Control, AnchorStyles> saved)
+    {
+        foreach (Control c in parent.Controls)
+        {
+            const AnchorStyles topLeft = AnchorStyles.Top | AnchorStyles.Left;
+            if (c.Anchor != topLeft)
+            {
+                saved[c] = c.Anchor;
+                c.Anchor = topLeft;
+            }
+            NeutralizeAnchors(c, saved);
+        }
     }
 
     /// <summary>Scale a control (and its descendants) that a derived form added
@@ -95,15 +126,17 @@ public abstract class ScaledForm : Form
     }
 
     /// <summary>Keep the (now-scaled) window inside the screen's working area so
-    /// it never opens bigger than the laptop screen; turn on scrolling so any
-    /// overflow is still reachable.</summary>
+    /// it never opens bigger than the laptop screen. We cap the size and let the
+    /// anchored content (the big text boxes are anchored to all edges) reflow to
+    /// the smaller size, which keeps the bottom button bar visible — rather than
+    /// turning on AutoScroll, which fights bottom-anchored buttons and can hide
+    /// them below the fold.</summary>
     private void FitToScreen()
     {
         var area = Screen.FromControl(this).WorkingArea;
         var w = Math.Min(Width, area.Width);
         var h = Math.Min(Height, area.Height);
         if (w == Width && h == Height) return;
-        AutoScroll = true;
         Size = new Size(w, h);
     }
 
