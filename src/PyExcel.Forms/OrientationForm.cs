@@ -12,7 +12,7 @@ namespace PyExcel.Forms;
 /// orientation is ambiguous — the user picks Across (a row) or Down (a
 /// column). Returns null if they close without choosing.
 /// </summary>
-public sealed class OrientationForm : Form
+public sealed class OrientationForm : ScaledForm
 {
     public ListOrientation? Choice { get; private set; }
 

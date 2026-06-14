@@ -19,7 +19,7 @@ namespace PyExcel.Forms;
 /// <see cref="ExportBatchValidator"/> (which reuses <see cref="ExportPlanner"/>
 /// per row); OK closes only when every row is valid.</para>
 /// </summary>
-public sealed class ExportWizardForm : Form
+public sealed class ExportWizardForm : ScaledForm
 {
     private const string ExportFileFilter =
         "CSV (*.csv)|*.csv|TSV (*.tsv)|*.tsv|All files (*.*)|*.*";

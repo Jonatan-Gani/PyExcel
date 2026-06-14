@@ -18,7 +18,7 @@ namespace PyExcel.Forms;
 /// owner (no off-screen hide hack); OK closes only when a sheet is
 /// chosen.</para>
 /// </summary>
-public sealed class SheetPickerForm : Form
+public sealed class SheetPickerForm : ScaledForm
 {
     private readonly ComboBox _sheetBox;
     private readonly Label _errorLabel;

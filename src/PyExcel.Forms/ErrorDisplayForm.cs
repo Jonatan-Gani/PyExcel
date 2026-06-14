@@ -16,7 +16,7 @@ namespace PyExcel.Forms;
 /// window, so it always comes to the front and the user can read (and copy)
 /// the traceback.</para>
 /// </summary>
-public sealed class ErrorDisplayForm : Form
+public sealed class ErrorDisplayForm : ScaledForm
 {
     /// <summary>Show the error <paramref name="body"/> modally, owned by
     /// <paramref name="owner"/> (Excel's main window) so it is always

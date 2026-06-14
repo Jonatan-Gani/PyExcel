@@ -24,7 +24,7 @@ namespace PyExcel.Forms;
 /// validator already expects, so the decisions stay unit-tested on Linux CI.
 /// This class is only the WinForms shell, behind <c>#if NETFRAMEWORK</c>.</para>
 /// </summary>
-public sealed class EditActionForm : Form
+public sealed class EditActionForm : ScaledForm
 {
     private readonly TextBox _nameBox;
     private readonly ComboBox _scriptBox;

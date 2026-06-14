@@ -19,7 +19,7 @@ namespace PyExcel.Forms;
 /// (behind <c>#if NETFRAMEWORK</c>). Shown modally with an owner; OK closes
 /// only when the fields validate.</para>
 /// </summary>
-public sealed class EditIoForm : Form
+public sealed class EditIoForm : ScaledForm
 {
     /// <summary>How a field is edited: a plain range/text box, or a box
     /// with a Browse button opening a file dialog.</summary>
