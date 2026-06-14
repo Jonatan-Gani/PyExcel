@@ -162,6 +162,10 @@ public sealed class ExportWizardForm : ScaledForm
         panel.Controls.Add(browse);
         panel.Controls.Add(remove);
         _rows.Controls.Add(panel);
+        // Rows added after the form has loaded must be brought up to the same
+        // DPI scale as the rest of the layout (no-op during construction — the
+        // initial rows are scaled by the base form's load-time pass).
+        ScaleNewControl(panel);
     }
 
     private void OnOkClick(object? sender, EventArgs e)
