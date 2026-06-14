@@ -123,9 +123,9 @@ internal sealed class AppEventSink : IDisposable
     /// Ensure <paramref name="wb"/>'s saved PyExcel state is loaded into the
     /// in-memory registry — the add-in asking "is this workbook already a
     /// PyExcel project?" every time it sees one (open, activate, or load-time
-    /// scan). Load order: the reliable per-user <see cref="LocalStateStore"/>
-    /// first, then the workbook's portable <c>CustomXMLPart</c>, then a v1
-    /// legacy migration.
+    /// scan). Load order: the project-folder profile (<c>pyexcel.project.xml</c>
+    /// via <see cref="ProjectProfileStore"/>) first, then the workbook's portable
+    /// <c>CustomXMLPart</c>, then a v1 legacy migration.
     ///
     /// <para><b>Load-if-empty.</b> We only load when the in-memory state has
     /// nothing meaningful yet, so re-activating a workbook the user is actively
@@ -138,7 +138,11 @@ internal sealed class AppEventSink : IDisposable
         string key = KeyOf(wb);
         if (HasMeaningfulState(_state.Get(key))) return;
 
-        var restored = LocalStateStore.TryLoad(key) ?? WorkbookStatePersister.TryLoad(wb, key);
+        // Primary: the project-folder profile (next to the workbook, derived
+        // from its location). Fallback: the in-file CustomXMLPart (covers cloud
+        // workbooks that have no local folder, and files moved without their folder).
+        var restored = ProjectProfileStore.TryLoad(ResolveProjectDir(wb), key)
+                       ?? WorkbookStatePersister.TryLoad(wb, key);
         if (restored is not null)
         {
             // Update validates the key matches.
@@ -183,22 +187,22 @@ internal sealed class AppEventSink : IDisposable
         {
             string key = KeyOf(wb);
             var state = _state.Get(key);
-            // Reliable per-user copy + the portable in-file copy.
-            LocalStateStore.Save(key, state);
+            // Project-folder profile (source of truth) + the portable in-file copy.
+            ProjectProfileStore.Save(ResolveProjectDir(wb), state, wb.Name, NullIfEmpty(wb.FullName));
             WorkbookStatePersister.Save(wb, state);
         });
 
     private void OnWorkbookBeforeClose(Excel.Workbook wb, ref bool cancel) =>
         Guard(nameof(OnWorkbookBeforeClose), () =>
         {
-            // Persist before forgetting so a later reopen sees fresh state.
-            // The reliable LocalStateStore copy is what makes reopen robust
-            // even if the file isn't re-saved on close; the CustomXMLPart is
-            // the portable in-file copy. If the user cancels the close, the
-            // state is unchanged and re-activating re-reads from memory.
+            // Persist before forgetting so a later reopen sees fresh state. The
+            // project-folder profile is what makes reopen robust even if the
+            // file isn't re-saved on close; the CustomXMLPart is the portable
+            // in-file copy. If the user cancels the close, the state is
+            // unchanged and re-activating re-reads from memory.
             string key = KeyOf(wb);
             var state = _state.Get(key);
-            LocalStateStore.Save(key, state);
+            ProjectProfileStore.Save(ResolveProjectDir(wb), state, wb.Name, NullIfEmpty(wb.FullName));
             WorkbookStatePersister.Save(wb, state);
             _state.Forget(key);
         });
@@ -227,15 +231,28 @@ internal sealed class AppEventSink : IDisposable
     /// cloud-URL workbook).</summary>
     private string? ResolveScriptsDir(Excel.Workbook wb)
     {
-        var stored = _state.Get(KeyOf(wb)).ProjectDir;
-        var workbookDir = string.IsNullOrEmpty(wb.Path) ? null : wb.Path;
-        var projectDir = string.IsNullOrEmpty(stored)
-            ? PyExcel.Common.ProjectDirectory.Resolve(workbookDir)
-            : stored;
+        var projectDir = ResolveProjectDir(wb);
         return string.IsNullOrEmpty(projectDir)
             ? null
             : System.IO.Path.Combine(projectDir!, "userScripts");
     }
+
+    /// <summary>The workbook's project folder: the dedicated folder chosen on
+    /// Enable (saved in state) if set, else the workbook-derived default — the
+    /// same rule the ribbon and KernelHost use. This is where the project
+    /// profile (<c>pyexcel.project.xml</c>), the venv, the kernel and
+    /// userScripts all live. Null for an unsaved / cloud-without-local
+    /// workbook.</summary>
+    private string? ResolveProjectDir(Excel.Workbook wb)
+    {
+        var stored = _state.Get(KeyOf(wb)).ProjectDir;
+        var workbookDir = string.IsNullOrEmpty(wb.Path) ? null : wb.Path;
+        return string.IsNullOrEmpty(stored)
+            ? PyExcel.Common.ProjectDirectory.Resolve(workbookDir)
+            : stored;
+    }
+
+    private static string? NullIfEmpty(string? s) => string.IsNullOrEmpty(s) ? null : s;
 
     /// <summary>(Re)point the live script watcher at the active workbook's
     /// userScripts folder so the ribbon's Script dropdown tracks files appearing
