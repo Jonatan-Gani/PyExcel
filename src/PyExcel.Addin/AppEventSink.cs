@@ -90,7 +90,7 @@ internal sealed class AppEventSink : IDisposable
 
     private void OnWorkbookOpen(Excel.Workbook wb) => Guard(nameof(OnWorkbookOpen), () =>
     {
-        RestoreWorkbookState(wb);
+        EnsureRestored(wb);
         SyncScriptWatcher(wb);
         InvalidateRibbon();
     });
@@ -110,7 +110,7 @@ internal sealed class AppEventSink : IDisposable
         var app = _app;
         if (app is null) return;
         foreach (Excel.Workbook wb in app.Workbooks)
-            RestoreWorkbookState(wb);
+            EnsureRestored(wb);
 
         // Point the script watcher at whatever's active now, then repaint so
         // the restored "enabled" state shows immediately.
@@ -119,45 +119,61 @@ internal sealed class AppEventSink : IDisposable
         InvalidateRibbon();
     });
 
-    /// <summary>Load <paramref name="wb"/>'s persisted v2 state (or migrate a
-    /// v1 workbook's legacy Names) into the in-memory registry. Shared by
-    /// <see cref="OnWorkbookOpen"/> and <see cref="RestoreOpenWorkbooks"/>.</summary>
-    private void RestoreWorkbookState(Excel.Workbook wb)
+    /// <summary>
+    /// Ensure <paramref name="wb"/>'s saved PyExcel state is loaded into the
+    /// in-memory registry — the add-in asking "is this workbook already a
+    /// PyExcel project?" every time it sees one (open, activate, or load-time
+    /// scan). Load order: the reliable per-user <see cref="LocalStateStore"/>
+    /// first, then the workbook's portable <c>CustomXMLPart</c>, then a v1
+    /// legacy migration.
+    ///
+    /// <para><b>Load-if-empty.</b> We only load when the in-memory state has
+    /// nothing meaningful yet, so re-activating a workbook the user is actively
+    /// editing never clobbers unsaved in-memory changes — but a freshly opened
+    /// (or just-closed-and-reopened, hence Forgotten) workbook always gets its
+    /// project restored.</para>
+    /// </summary>
+    private void EnsureRestored(Excel.Workbook wb)
     {
         string key = KeyOf(wb);
-        var restored = WorkbookStatePersister.TryLoad(wb, key);
+        if (HasMeaningfulState(_state.Get(key))) return;
+
+        var restored = LocalStateStore.TryLoad(key) ?? WorkbookStatePersister.TryLoad(wb, key);
         if (restored is not null)
         {
-            // Replace whatever transient Empty state existed with the
-            // persisted one. Update validates the key matches.
+            // Update validates the key matches.
             _state.Update(key, _ => restored);
             return;
         }
 
-        // No v2 part — this may be a v1 workbook opened for the first time in
-        // v2. Read its legacy defined Names and migrate them into a v2
-        // CustomXMLPart so the user's saved actions/fields carry over.
-        // Best-effort: a null reader result means there's nothing to migrate
-        // (a brand-new or non-PyExcel workbook).
+        // No v2 state anywhere — this may be a v1 workbook opened for the first
+        // time in v2. Read its legacy defined Names and migrate them. Best-effort:
+        // a null reader result means there's nothing to migrate (a brand-new or
+        // non-PyExcel workbook). We don't write the CustomXMLPart here — that
+        // would dirty the workbook just by opening it; a later save flushes it.
         var legacy = LegacyStateReader.TryRead(wb);
         if (legacy is not null)
-        {
-            var migrated = LegacyStateConverter.Convert(legacy, key);
-            // Only populate the in-memory registry so the ribbon renders the
-            // migrated state immediately. We deliberately don't write the v2
-            // CustomXMLPart here — that would dirty the workbook just by
-            // opening it. WorkbookBeforeSave flushes this state into the part
-            // when the user actually saves, so the migration becomes durable then.
-            _state.Update(key, _ => migrated);
-        }
+            _state.Update(key, _ => LegacyStateConverter.Convert(legacy, key));
     }
+
+    /// <summary>True when a state carries something worth keeping — it's been
+    /// enabled, has saved actions, or has a chosen project directory. Used to
+    /// decide whether <see cref="EnsureRestored"/> should load from disk or
+    /// leave the live in-memory state alone.</summary>
+    private static bool HasMeaningfulState(WorkbookState s)
+        => s.Enabled
+           || s.Actions.Count > 0
+           || !string.IsNullOrEmpty(s.ProjectDir);
 
     private void OnWorkbookActivate(Excel.Workbook wb) =>
         Guard(nameof(OnWorkbookActivate), () =>
         {
-            // The active workbook changed: re-point the live script watcher at
-            // its userScripts folder (which also repopulates AvailableScripts —
-            // nothing else feeds it) and repaint.
+            // The active workbook changed. Ask "is this one already a PyExcel
+            // project?" and restore it if so (load-if-empty, so this never
+            // clobbers a workbook being edited). Then re-point the live script
+            // watcher at its userScripts folder (which also repopulates
+            // AvailableScripts — nothing else feeds it) and repaint.
+            EnsureRestored(wb);
             SyncScriptWatcher(wb);
             InvalidateRibbon();
         });
@@ -166,21 +182,24 @@ internal sealed class AppEventSink : IDisposable
         Guard(nameof(OnWorkbookBeforeSave), () =>
         {
             string key = KeyOf(wb);
-            WorkbookStatePersister.Save(wb, _state.Get(key));
+            var state = _state.Get(key);
+            // Reliable per-user copy + the portable in-file copy.
+            LocalStateStore.Save(key, state);
+            WorkbookStatePersister.Save(wb, state);
         });
 
     private void OnWorkbookBeforeClose(Excel.Workbook wb, ref bool cancel) =>
         Guard(nameof(OnWorkbookBeforeClose), () =>
         {
-            // Persist before forgetting so the part is current even if the
-            // user wasn't prompted to save (the close itself doesn't write
-            // the file, but a later reopen of an already-saved workbook
-            // should still see fresh state). If the user cancels the close,
-            // the part stays intact and re-activating re-reads from memory —
-            // which is why we don't touch the file here, only the part and
-            // the in-memory registry.
+            // Persist before forgetting so a later reopen sees fresh state.
+            // The reliable LocalStateStore copy is what makes reopen robust
+            // even if the file isn't re-saved on close; the CustomXMLPart is
+            // the portable in-file copy. If the user cancels the close, the
+            // state is unchanged and re-activating re-reads from memory.
             string key = KeyOf(wb);
-            WorkbookStatePersister.Save(wb, _state.Get(key));
+            var state = _state.Get(key);
+            LocalStateStore.Save(key, state);
+            WorkbookStatePersister.Save(wb, state);
             _state.Forget(key);
         });
 

@@ -145,15 +145,52 @@ public class PyExcelRibbon : ExcelRibbon
     /// refresh these <c>getText</c> boxes) so the revert is reliable.</summary>
     private void RevertControl(IRibbonControl control) => QueueInvalidate();
 
+    /// <summary>Keys we've already looked up in the local store and found no
+    /// saved project for — so the on-demand restore in <see cref="ActiveState"/>
+    /// hits the disk at most once per never-enabled workbook instead of on every
+    /// ribbon repaint.</summary>
+    private readonly System.Collections.Generic.HashSet<string> _localRestoreMisses =
+        new(StringComparer.Ordinal);
+
     /// <summary>Read the state for the currently-active workbook,
     /// returning <see cref="WorkbookState.Empty"/> if no workbook is
-    /// active so every getter has a well-defined value to read.</summary>
+    /// active so every getter has a well-defined value to read.
+    ///
+    /// <para>On every render this also answers "is this workbook already a saved
+    /// PyExcel project?" on demand: if nothing meaningful is in memory yet but
+    /// the reliable <see cref="PyExcel.State.LocalStateStore"/> has a saved
+    /// project for this workbook, restore it. This makes the ribbon self-heal —
+    /// an enabled workbook comes back enabled when reopened — without depending
+    /// on any COM event having fired. A workbook that's only enabled in memory
+    /// (HasMeaningfulState) is left alone, so live edits are never clobbered.</para></summary>
     private WorkbookState ActiveState()
     {
         var key = PyExcelServices.WorkbookContext.CurrentWorkbookKey;
         if (key is null) return WorkbookState.Empty("<no-workbook>");
-        return PyExcelServices.State.Get(key);
+
+        var state = PyExcelServices.State.Get(key);
+        if (!HasMeaningfulState(state) && !_localRestoreMisses.Contains(key))
+        {
+            WorkbookState? restored = null;
+            try { restored = PyExcel.State.LocalStateStore.TryLoad(key); }
+            catch (Exception ex) { _log.Error("ActiveState: local restore failed", ex); }
+
+            if (restored is not null)
+            {
+                WorkbookState loaded = restored;
+                PyExcelServices.State.Update(key, _ => loaded);
+                return loaded;
+            }
+            _localRestoreMisses.Add(key);
+        }
+        return state;
     }
+
+    /// <summary>True when a state is worth keeping (enabled, has actions, or has
+    /// a chosen project dir) — the signal that this workbook is a PyExcel
+    /// project, so the on-demand restore should leave the live state alone.</summary>
+    private static bool HasMeaningfulState(WorkbookState s)
+        => s.Enabled || s.Actions.Count > 0 || !string.IsNullOrEmpty(s.ProjectDir);
 
     public override object? LoadImage(string imageName)
     {
@@ -262,8 +299,11 @@ public class PyExcelRibbon : ExcelRibbon
             {
                 PyExcelServices.State.SetEnabled(key, true);
                 // PyExcel state lives outside the cell grid, so enabling doesn't
-                // dirty the workbook on its own — mark it so a save actually
-                // writes the state into the workbook's CustomXMLPart.
+                // dirty the workbook on its own. Persist it reliably now (so it
+                // survives reopen regardless of whether the file is re-saved),
+                // and mark the workbook dirty so a save also writes the portable
+                // in-file CustomXMLPart copy.
+                PersistLocal(key);
                 MarkWorkbookDirty();
                 // Surface the scaffolded example.py now, and start the live
                 // watcher on the just-created userScripts folder (Enable fires
@@ -547,6 +587,7 @@ public class PyExcelRibbon : ExcelRibbon
         PyExcelServices.State.AddAction(key, result);
         // Load it into the run boxes so the just-saved action is ready to Run.
         PyExcelServices.State.LoadAction(key, result);
+        PersistLocal(key);
         MarkWorkbookDirty();
         _log.Info($"OnAddAction: saved '{result.Name}' to workbook '{key}'");
     }
@@ -580,6 +621,7 @@ public class PyExcelRibbon : ExcelRibbon
         PyExcelServices.State.AddAction(key, result);
         // Reflect the edited action in the run boxes (Script / Input / Output).
         PyExcelServices.State.LoadAction(key, result);
+        PersistLocal(key);
         MarkWorkbookDirty();
         _log.Info($"OnEditAction: saved '{result.Name}' to workbook '{key}'");
     }
@@ -760,6 +802,24 @@ public class PyExcelRibbon : ExcelRibbon
         }
     }
 
+    /// <summary>Immediately write the workbook's PyExcel state to the reliable
+    /// per-user store, so enabling or editing an action survives a
+    /// close-and-reopen even if the workbook file is never re-saved (PyExcel
+    /// state lives outside the cell grid, so Excel doesn't always treat it as a
+    /// change worth saving). The portable in-file <c>CustomXMLPart</c> copy is
+    /// still written on save by the event sink.</summary>
+    private void PersistLocal(string key)
+    {
+        try
+        {
+            PyExcel.State.LocalStateStore.Save(key, PyExcelServices.State.Get(key));
+        }
+        catch (Exception ex)
+        {
+            _log.Error("PersistLocal failed", ex);
+        }
+    }
+
     /// <summary>Bring a window to the foreground. Used to raise Excel's main
     /// window before the native range picker so the picker isn't drawn behind
     /// Excel. Best-effort: the OS can refuse the foreground change.</summary>
@@ -841,6 +901,7 @@ public class PyExcelRibbon : ExcelRibbon
         var selected = PyExcelServices.State.Get(key).SelectedActionName;
         if (selected is null) { _log.Info("OnDeleteAction: no action selected"); return; }
         PyExcelServices.State.DeleteAction(key, selected);
+        PersistLocal(key);
         MarkWorkbookDirty();
         _log.Info($"OnDeleteAction: removed '{selected}' from workbook '{key}'");
     }
