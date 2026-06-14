@@ -261,6 +261,10 @@ public class PyExcelRibbon : ExcelRibbon
             if (success == true)
             {
                 PyExcelServices.State.SetEnabled(key, true);
+                // PyExcel state lives outside the cell grid, so enabling doesn't
+                // dirty the workbook on its own — mark it so a save actually
+                // writes the state into the workbook's CustomXMLPart.
+                MarkWorkbookDirty();
                 // Surface the scaffolded example.py now, and start the live
                 // watcher on the just-created userScripts folder (Enable fires
                 // no WorkbookActivate, so the sink wouldn't otherwise start it).
@@ -322,25 +326,41 @@ public class PyExcelRibbon : ExcelRibbon
         _log.Info("OnReadMe clicked");
         try
         {
-            // If the active workbook's directory has a README.md, open
-            // it with the user's default handler. Otherwise fall back to
-            // an in-Excel alert pointing at the migration docs.
-            var dir = PyExcelServices.WorkbookContext.CurrentWorkbookDirectory;
-            if (!string.IsNullOrEmpty(dir))
+            // Look for a README at the project folder (where Setup scaffolds it)
+            // first, then next to the workbook. Setup writes one on Enable, but
+            // workbooks enabled before that existed won't have it — so if we have
+            // a project folder and there's no README, write a default one now so
+            // the button always opens something useful instead of doing nothing.
+            var projectDir = ResolveProjectDir();
+            var workbookDir = PyExcelServices.WorkbookContext.CurrentWorkbookDirectory;
+
+            var readme = FirstExistingReadme(projectDir, workbookDir);
+            if (readme is null && !string.IsNullOrEmpty(projectDir))
             {
-                var readme = Path.Combine(dir!, "README.md");
-                if (File.Exists(readme))
+                var candidate = Path.Combine(projectDir!, "README.md");
+                try
                 {
-                    ShellLauncher.Open(readme);
-                    return;
+                    Directory.CreateDirectory(projectDir!);
+                    File.WriteAllText(candidate, DefaultReadme);
+                    readme = candidate;
+                }
+                catch (Exception ex)
+                {
+                    _log.Error("OnReadMe: couldn't create README", ex);
                 }
             }
 
+            if (readme is not null && File.Exists(readme))
+            {
+                ShellLauncher.Open(readme);
+                return;
+            }
+
             const string text =
-                "PyExcel v2.0 (alpha)\n\n" +
-                "No README.md was found next to this workbook. " +
-                "See the bundled docs/v2-build.md and ROADMAP.md for the " +
-                "migration plan.";
+                "PyExcel\n\n" +
+                "No project folder is set up for this workbook yet. " +
+                "Click Enable first — that creates the project folder " +
+                "(with a README and an example script) for this workbook.";
             XlCall.Excel(XlCall.xlcAlert, text, 2 /* xlAlertWarning */);
         }
         catch (Exception ex)
@@ -348,6 +368,30 @@ public class PyExcelRibbon : ExcelRibbon
             _log.Error("OnReadMe failed", ex);
         }
     }
+
+    /// <summary>The first <c>README.md</c> that exists at the project folder or
+    /// the workbook folder, or null if neither has one.</summary>
+    private static string? FirstExistingReadme(string? projectDir, string? workbookDir)
+    {
+        foreach (var dir in new[] { projectDir, workbookDir })
+        {
+            if (string.IsNullOrEmpty(dir)) continue;
+            var path = Path.Combine(dir!, "README.md");
+            if (File.Exists(path)) return path;
+        }
+        return null;
+    }
+
+    /// <summary>Minimal README written on demand when a project folder has none
+    /// (e.g. a workbook enabled before Setup started scaffolding one).</summary>
+    private const string DefaultReadme =
+        "# PyExcel project\n\n" +
+        "This folder holds the PyExcel environment for your workbook " +
+        "(`userScripts/`, `.pyexcel-venv/`, `.pyexcel-kernel/`).\n\n" +
+        "- Pick a script in the ribbon's Script box and click Edit to change it.\n" +
+        "- Click Add to bind a script to input/output ranges, then Run.\n" +
+        "- `print()` output and errors show in the log window.\n\n" +
+        "Your actions and settings are saved inside the workbook.\n";
 
     // -------------------------------------------------------------------------
     // Python group
@@ -503,6 +547,7 @@ public class PyExcelRibbon : ExcelRibbon
         PyExcelServices.State.AddAction(key, result);
         // Load it into the run boxes so the just-saved action is ready to Run.
         PyExcelServices.State.LoadAction(key, result);
+        MarkWorkbookDirty();
         _log.Info($"OnAddAction: saved '{result.Name}' to workbook '{key}'");
     }
 
@@ -535,6 +580,7 @@ public class PyExcelRibbon : ExcelRibbon
         PyExcelServices.State.AddAction(key, result);
         // Reflect the edited action in the run boxes (Script / Input / Output).
         PyExcelServices.State.LoadAction(key, result);
+        MarkWorkbookDirty();
         _log.Info($"OnEditAction: saved '{result.Name}' to workbook '{key}'");
     }
 
@@ -692,6 +738,28 @@ public class PyExcelRibbon : ExcelRibbon
         }
     }
 
+    /// <summary>Mark the active workbook as needing a save, so a subsequent
+    /// Ctrl+S (or the close prompt) actually re-writes the file and flushes
+    /// PyExcel's state into its CustomXMLPart. PyExcel state (enabled flag,
+    /// actions, field bindings) lives outside the cell grid, so mutating it
+    /// doesn't dirty the workbook on its own — without this, Excel can treat
+    /// the save as a no-op and the user's enable/actions are never persisted.
+    /// Best-effort and late-bound; a failure must never break the mutation that
+    /// just happened.</summary>
+    private void MarkWorkbookDirty()
+    {
+        try
+        {
+            dynamic app = ExcelDnaUtil.Application;
+            dynamic wb = app.ActiveWorkbook;
+            if (wb is not null) wb.Saved = false;
+        }
+        catch (Exception ex)
+        {
+            _log.Error("MarkWorkbookDirty failed", ex);
+        }
+    }
+
     /// <summary>Bring a window to the foreground. Used to raise Excel's main
     /// window before the native range picker so the picker isn't drawn behind
     /// Excel. Best-effort: the OS can refuse the foreground change.</summary>
@@ -773,6 +841,7 @@ public class PyExcelRibbon : ExcelRibbon
         var selected = PyExcelServices.State.Get(key).SelectedActionName;
         if (selected is null) { _log.Info("OnDeleteAction: no action selected"); return; }
         PyExcelServices.State.DeleteAction(key, selected);
+        MarkWorkbookDirty();
         _log.Info($"OnDeleteAction: removed '{selected}' from workbook '{key}'");
     }
 

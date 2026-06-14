@@ -90,6 +90,39 @@ internal sealed class AppEventSink : IDisposable
 
     private void OnWorkbookOpen(Excel.Workbook wb) => Guard(nameof(OnWorkbookOpen), () =>
     {
+        RestoreWorkbookState(wb);
+        SyncScriptWatcher(wb);
+        InvalidateRibbon();
+    });
+
+    /// <summary>
+    /// Restore the in-memory state for every workbook that is <em>already</em>
+    /// open when the add-in loads. On a double-click / command-line launch
+    /// Excel often opens the target workbook before the <c>.xll</c>'s
+    /// <see cref="AddIn.AutoOpen"/> has subscribed this sink, so the
+    /// <c>WorkbookOpen</c> event for that workbook is missed — and without this
+    /// its saved "enabled" state and actions never load, so the user is wrongly
+    /// asked to Enable again. Called once from <see cref="AddIn.AutoOpen"/>
+    /// right after the sink is wired.
+    /// </summary>
+    public void RestoreOpenWorkbooks() => Guard(nameof(RestoreOpenWorkbooks), () =>
+    {
+        if (_app is null) return;
+        foreach (Excel.Workbook wb in _app.Workbooks)
+            RestoreWorkbookState(wb);
+
+        // Point the script watcher at whatever's active now, then repaint so
+        // the restored "enabled" state shows immediately.
+        var active = _app.ActiveWorkbook;
+        if (active is not null) SyncScriptWatcher(active);
+        InvalidateRibbon();
+    });
+
+    /// <summary>Load <paramref name="wb"/>'s persisted v2 state (or migrate a
+    /// v1 workbook's legacy Names) into the in-memory registry. Shared by
+    /// <see cref="OnWorkbookOpen"/> and <see cref="RestoreOpenWorkbooks"/>.</summary>
+    private void RestoreWorkbookState(Excel.Workbook wb)
+    {
         string key = KeyOf(wb);
         var restored = WorkbookStatePersister.TryLoad(wb, key);
         if (restored is not null)
@@ -97,30 +130,26 @@ internal sealed class AppEventSink : IDisposable
             // Replace whatever transient Empty state existed with the
             // persisted one. Update validates the key matches.
             _state.Update(key, _ => restored);
+            return;
         }
-        else
+
+        // No v2 part — this may be a v1 workbook opened for the first time in
+        // v2. Read its legacy defined Names and migrate them into a v2
+        // CustomXMLPart so the user's saved actions/fields carry over.
+        // Best-effort: a null reader result means there's nothing to migrate
+        // (a brand-new or non-PyExcel workbook).
+        var legacy = LegacyStateReader.TryRead(wb);
+        if (legacy is not null)
         {
-            // No v2 part — this may be a v1 workbook opened for the first
-            // time in v2. Read its legacy defined Names and migrate them into
-            // a v2 CustomXMLPart so the user's saved actions/fields carry over.
-            // Best-effort: a null reader result means there's nothing to
-            // migrate (a brand-new or non-PyExcel workbook).
-            var legacy = LegacyStateReader.TryRead(wb);
-            if (legacy is not null)
-            {
-                var migrated = LegacyStateConverter.Convert(legacy, key);
-                // Only populate the in-memory registry so the ribbon renders
-                // the migrated state immediately. We deliberately don't write
-                // the v2 CustomXMLPart here — that would dirty the workbook
-                // just by opening it. The existing WorkbookBeforeSave handler
-                // flushes this state into the part when the user actually
-                // saves, so the migration becomes durable then.
-                _state.Update(key, _ => migrated);
-            }
+            var migrated = LegacyStateConverter.Convert(legacy, key);
+            // Only populate the in-memory registry so the ribbon renders the
+            // migrated state immediately. We deliberately don't write the v2
+            // CustomXMLPart here — that would dirty the workbook just by
+            // opening it. WorkbookBeforeSave flushes this state into the part
+            // when the user actually saves, so the migration becomes durable then.
+            _state.Update(key, _ => migrated);
         }
-        SyncScriptWatcher(wb);
-        InvalidateRibbon();
-    });
+    }
 
     private void OnWorkbookActivate(Excel.Workbook wb) =>
         Guard(nameof(OnWorkbookActivate), () =>
