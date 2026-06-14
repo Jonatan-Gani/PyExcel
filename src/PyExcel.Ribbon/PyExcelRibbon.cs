@@ -145,13 +145,6 @@ public class PyExcelRibbon : ExcelRibbon
     /// refresh these <c>getText</c> boxes) so the revert is reliable.</summary>
     private void RevertControl(IRibbonControl control) => QueueInvalidate();
 
-    /// <summary>Keys we've already looked up on disk and found no saved project
-    /// for — so the on-demand restore in <see cref="ActiveState"/> reads the
-    /// project profile at most once per never-enabled workbook instead of on
-    /// every ribbon repaint.</summary>
-    private readonly System.Collections.Generic.HashSet<string> _profileRestoreMisses =
-        new(StringComparer.Ordinal);
-
     /// <summary>Read the state for the currently-active workbook,
     /// returning <see cref="WorkbookState.Empty"/> if no workbook is
     /// active so every getter has a well-defined value to read.
@@ -162,26 +155,30 @@ public class PyExcelRibbon : ExcelRibbon
     /// restore it. This makes the ribbon self-heal — an enabled workbook comes
     /// back enabled when reopened — without depending on any COM event having
     /// fired. A workbook that's already meaningful in memory is left alone, so
-    /// live edits are never clobbered.</para></summary>
+    /// live edits are never clobbered. The probe is a cheap <c>File.Exists</c>
+    /// when the workbook isn't a project; once restored, the in-memory state is
+    /// meaningful so this path is skipped on subsequent renders. (We
+    /// deliberately do NOT negatively cache "no project here" — a workbook the
+    /// user enables later must be picked up on its very next render.)</para></summary>
     private WorkbookState ActiveState()
     {
         var key = PyExcelServices.WorkbookContext.CurrentWorkbookKey;
         if (key is null) return WorkbookState.Empty("<no-workbook>");
 
         var state = PyExcelServices.State.Get(key);
-        if (!HasMeaningfulState(state) && !_profileRestoreMisses.Contains(key))
-        {
-            WorkbookState? restored = null;
-            try { restored = PyExcel.State.ProjectProfileStore.TryLoad(ResolveProjectDir(), key); }
-            catch (Exception ex) { _log.Error("ActiveState: profile restore failed", ex); }
+        if (HasMeaningfulState(state)) return state;
 
-            if (restored is not null)
-            {
-                WorkbookState loaded = restored;
-                PyExcelServices.State.Update(key, _ => loaded);
-                return loaded;
-            }
-            _profileRestoreMisses.Add(key);
+        var projectDir = ResolveProjectDir();
+        WorkbookState? restored = null;
+        try { restored = PyExcel.State.ProjectProfileStore.TryLoad(projectDir, key); }
+        catch (Exception ex) { _log.Error("ActiveState: profile restore failed", ex); }
+
+        if (restored is not null)
+        {
+            _log.Info($"ActiveState: restored project from '{projectDir}' for '{key}' (enabled={restored.Enabled})");
+            WorkbookState loaded = restored;
+            PyExcelServices.State.Update(key, _ => loaded);
+            return loaded;
         }
         return state;
     }
@@ -813,8 +810,12 @@ public class PyExcelRibbon : ExcelRibbon
         try
         {
             var (name, path) = ActiveWorkbookIdentity();
+            var projectDir = ResolveProjectDir();
             PyExcel.State.ProjectProfileStore.Save(
-                ResolveProjectDir(), PyExcelServices.State.Get(key), name, path);
+                projectDir, PyExcelServices.State.Get(key), name, path);
+            var file = PyExcel.State.ProjectProfileStore.PathFor(projectDir);
+            _log.Info($"PersistProfile: key='{key}' dir='{projectDir}' " +
+                      $"file='{file}' written={(file is not null && File.Exists(file))}");
         }
         catch (Exception ex)
         {

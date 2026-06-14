@@ -2,6 +2,7 @@
 using System;
 using System.Diagnostics;
 using ExcelDna.Integration;
+using PyExcel.Common.Logging;
 using PyExcel.State;
 
 namespace PyExcel.Addin;
@@ -56,6 +57,7 @@ internal sealed class AppEventSink : IDisposable
 {
     private readonly StateService _state;
     private readonly IWorkbookContext _context;
+    private readonly ILog _log = new FileLog();
     private Excel.Application? _app;
     private ScriptDirectoryWatcher? _scriptWatcher;
     private bool _disposed;
@@ -82,6 +84,8 @@ internal sealed class AppEventSink : IDisposable
         // Let the ribbon kick a watcher re-sync after Enable provisions the
         // userScripts folder (that flow fires no WorkbookActivate).
         PyExcelServices.RequestScriptRefresh = SyncScriptWatcherForActive;
+
+        _log.Info("AppEventSink: constructed and subscribed to Application events");
     }
 
     // -------------------------------------------------------------------------
@@ -136,13 +140,20 @@ internal sealed class AppEventSink : IDisposable
     private void EnsureRestored(Excel.Workbook wb)
     {
         string key = KeyOf(wb);
-        if (HasMeaningfulState(_state.Get(key))) return;
+        if (HasMeaningfulState(_state.Get(key)))
+        {
+            _log.Info($"EnsureRestored: '{key}' already has state in memory; skip");
+            return;
+        }
 
         // Primary: the project-folder profile (next to the workbook, derived
         // from its location). Fallback: the in-file CustomXMLPart (covers cloud
         // workbooks that have no local folder, and files moved without their folder).
-        var restored = ProjectProfileStore.TryLoad(ResolveProjectDir(wb), key)
-                       ?? WorkbookStatePersister.TryLoad(wb, key);
+        var projectDir = ResolveProjectDir(wb);
+        var fromProfile = ProjectProfileStore.TryLoad(projectDir, key);
+        var restored = fromProfile ?? WorkbookStatePersister.TryLoad(wb, key);
+        _log.Info($"EnsureRestored: key='{key}' dir='{projectDir}' " +
+                  $"profile={(fromProfile is not null)} restored={(restored is not null)}");
         if (restored is not null)
         {
             // Update validates the key matches.
@@ -187,8 +198,10 @@ internal sealed class AppEventSink : IDisposable
         {
             string key = KeyOf(wb);
             var state = _state.Get(key);
+            var projectDir = ResolveProjectDir(wb);
+            _log.Info($"OnWorkbookBeforeSave: key='{key}' dir='{projectDir}' enabled={state.Enabled}");
             // Project-folder profile (source of truth) + the portable in-file copy.
-            ProjectProfileStore.Save(ResolveProjectDir(wb), state, wb.Name, NullIfEmpty(wb.FullName));
+            ProjectProfileStore.Save(projectDir, state, wb.Name, NullIfEmpty(wb.FullName));
             WorkbookStatePersister.Save(wb, state);
         });
 
@@ -202,7 +215,9 @@ internal sealed class AppEventSink : IDisposable
             // unchanged and re-activating re-reads from memory.
             string key = KeyOf(wb);
             var state = _state.Get(key);
-            ProjectProfileStore.Save(ResolveProjectDir(wb), state, wb.Name, NullIfEmpty(wb.FullName));
+            var projectDir = ResolveProjectDir(wb);
+            _log.Info($"OnWorkbookBeforeClose: key='{key}' dir='{projectDir}' enabled={state.Enabled}");
+            ProjectProfileStore.Save(projectDir, state, wb.Name, NullIfEmpty(wb.FullName));
             WorkbookStatePersister.Save(wb, state);
             _state.Forget(key);
         });
@@ -321,7 +336,7 @@ internal sealed class AppEventSink : IDisposable
         PyExcelServices.RequestRibbonInvalidate?.Invoke();
     }
 
-    private static void Guard(string handler, Action body)
+    private void Guard(string handler, Action body)
     {
         try
         {
@@ -329,8 +344,9 @@ internal sealed class AppEventSink : IDisposable
         }
         catch (Exception ex)
         {
-            // Never let an exception cross back into Excel's event pump.
-            Trace.WriteLine($"AppEventSink.{handler} failed: {ex}");
+            // Never let an exception cross back into Excel's event pump. Log to
+            // the file so a handler fault is diagnosable from %TEMP%\PyExcel_Debug.log.
+            _log.Error($"AppEventSink.{handler} failed", ex);
         }
     }
 
