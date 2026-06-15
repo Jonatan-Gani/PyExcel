@@ -145,49 +145,23 @@ public class PyExcelRibbon : ExcelRibbon
     /// refresh these <c>getText</c> boxes) so the revert is reliable.</summary>
     private void RevertControl(IRibbonControl control) => QueueInvalidate();
 
-    /// <summary>Read the state for the currently-active workbook,
-    /// returning <see cref="WorkbookState.Empty"/> if no workbook is
-    /// active so every getter has a well-defined value to read.
+    /// <summary>Read the state for the currently-active workbook from the
+    /// in-memory registry, returning <see cref="WorkbookState.Empty"/> if no
+    /// workbook is active so every getter has a well-defined value to read.
     ///
-    /// <para>On every render this also answers "is this workbook already a saved
-    /// PyExcel project?" on demand: if nothing meaningful is in memory yet but
-    /// the project folder has a <c>pyexcel.project.xml</c> for this workbook,
-    /// restore it. This makes the ribbon self-heal — an enabled workbook comes
-    /// back enabled when reopened — without depending on any COM event having
-    /// fired. A workbook that's already meaningful in memory is left alone, so
-    /// live edits are never clobbered. The probe is a cheap <c>File.Exists</c>
-    /// when the workbook isn't a project; once restored, the in-memory state is
-    /// meaningful so this path is skipped on subsequent renders. (We
-    /// deliberately do NOT negatively cache "no project here" — a workbook the
-    /// user enables later must be picked up on its very next render.)</para></summary>
+    /// <para>This does <b>no I/O</b>: restoring a workbook's saved profile from
+    /// its embedded part is event-driven — the COM event sink populates the
+    /// registry on open/activate (and for already-open workbooks at add-in load,
+    /// via <c>RestoreOpenWorkbooks</c>). Keeping the render path pure-memory means
+    /// a plain, non-PyExcel workbook costs nothing to draw (no per-repaint disk or
+    /// COM probe), which is what keeps the ribbon cheap when PyExcel isn't enabled
+    /// for the active workbook.</para></summary>
     private WorkbookState ActiveState()
     {
         var key = PyExcelServices.WorkbookContext.CurrentWorkbookKey;
         if (key is null) return WorkbookState.Empty("<no-workbook>");
-
-        var state = PyExcelServices.State.Get(key);
-        if (HasMeaningfulState(state)) return state;
-
-        var projectDir = ResolveProjectDir();
-        WorkbookState? restored = null;
-        try { restored = PyExcel.State.ProjectProfileStore.TryLoad(projectDir, key); }
-        catch (Exception ex) { _log.Error("ActiveState: profile restore failed", ex); }
-
-        if (restored is not null)
-        {
-            _log.Info($"ActiveState: restored project from '{projectDir}' for '{key}' (enabled={restored.Enabled})");
-            WorkbookState loaded = restored;
-            PyExcelServices.State.Update(key, _ => loaded);
-            return loaded;
-        }
-        return state;
+        return PyExcelServices.State.Get(key);
     }
-
-    /// <summary>True when a state is worth keeping (enabled, has actions, or has
-    /// a chosen project dir) — the signal that this workbook is a PyExcel
-    /// project, so the on-demand restore should leave the live state alone.</summary>
-    private static bool HasMeaningfulState(WorkbookState s)
-        => s.Enabled || s.Actions.Count > 0 || !string.IsNullOrEmpty(s.ProjectDir);
 
     public override object? LoadImage(string imageName)
     {
@@ -295,13 +269,15 @@ public class PyExcelRibbon : ExcelRibbon
             if (success == true)
             {
                 PyExcelServices.State.SetEnabled(key, true);
-                // PyExcel state lives outside the cell grid, so enabling doesn't
-                // dirty the workbook on its own. Persist it reliably now (so it
-                // survives reopen regardless of whether the file is re-saved),
-                // and mark the workbook dirty so a save also writes the portable
-                // in-file CustomXMLPart copy.
-                PersistProfile(key);
+                // The workbook is the single store, and its embedded profile part
+                // is written by the save hook. PyExcel state lives outside the
+                // cell grid, so enabling doesn't dirty the workbook on its own —
+                // mark it dirty and save now so the enabled state is flushed into
+                // the part and survives a close-without-save. (Enable is a heavy,
+                // one-time, explicitly-clicked action, so saving as part of it is
+                // expected; lighter edits below just mark dirty.)
                 MarkWorkbookDirty();
+                SaveActiveWorkbook();
                 // Surface the scaffolded example.py now, and start the live
                 // watcher on the just-created userScripts folder (Enable fires
                 // no WorkbookActivate, so the sink wouldn't otherwise start it).
@@ -584,7 +560,6 @@ public class PyExcelRibbon : ExcelRibbon
         PyExcelServices.State.AddAction(key, result);
         // Load it into the run boxes so the just-saved action is ready to Run.
         PyExcelServices.State.LoadAction(key, result);
-        PersistProfile(key);
         MarkWorkbookDirty();
         _log.Info($"OnAddAction: saved '{result.Name}' to workbook '{key}'");
     }
@@ -618,7 +593,6 @@ public class PyExcelRibbon : ExcelRibbon
         PyExcelServices.State.AddAction(key, result);
         // Reflect the edited action in the run boxes (Script / Input / Output).
         PyExcelServices.State.LoadAction(key, result);
-        PersistProfile(key);
         MarkWorkbookDirty();
         _log.Info($"OnEditAction: saved '{result.Name}' to workbook '{key}'");
     }
@@ -799,46 +773,24 @@ public class PyExcelRibbon : ExcelRibbon
         }
     }
 
-    /// <summary>Immediately write the workbook's PyExcel state to the project-
-    /// folder profile (<c>pyexcel.project.xml</c>), so enabling or editing an
-    /// action survives a close-and-reopen even if the workbook file is never
-    /// re-saved (PyExcel state lives outside the cell grid, so Excel doesn't
-    /// always treat it as a change worth saving). The portable in-file
-    /// <c>CustomXMLPart</c> copy is still written on save by the event sink.</summary>
-    private void PersistProfile(string key)
-    {
-        try
-        {
-            var (name, path) = ActiveWorkbookIdentity();
-            var projectDir = ResolveProjectDir();
-            PyExcel.State.ProjectProfileStore.Save(
-                projectDir, PyExcelServices.State.Get(key), name, path);
-            var file = PyExcel.State.ProjectProfileStore.PathFor(projectDir);
-            _log.Info($"PersistProfile: key='{key}' dir='{projectDir}' " +
-                      $"file='{file}' written={(file is not null && File.Exists(file))}");
-        }
-        catch (Exception ex)
-        {
-            _log.Error("PersistProfile failed", ex);
-        }
-    }
-
-    /// <summary>The active workbook's name and full path (late-bound), for the
-    /// project profile's metadata. Nulls on any COM hiccup.</summary>
-    private (string? name, string? path) ActiveWorkbookIdentity()
+    /// <summary>Save the active workbook now via COM, so a state change that
+    /// lives outside the cell grid (notably Enable) is flushed to the workbook's
+    /// embedded profile part and survives a close-without-save. The save fires the
+    /// event sink's <c>WorkbookBeforeSave</c>, which is what actually writes the
+    /// part. Late-bound and best-effort: on a save failure the change stays in
+    /// the in-memory registry (and the workbook stays marked dirty), so the
+    /// user's next manual save still persists it.</summary>
+    private void SaveActiveWorkbook()
     {
         try
         {
             dynamic app = ExcelDnaUtil.Application;
             dynamic wb = app.ActiveWorkbook;
-            if (wb is null) return (null, null);
-            string name = (string)wb.Name;
-            string full = (string)wb.FullName;
-            return (string.IsNullOrEmpty(name) ? null : name, string.IsNullOrEmpty(full) ? null : full);
+            if (wb is not null) wb.Save();
         }
-        catch
+        catch (Exception ex)
         {
-            return (null, null);
+            _log.Error("SaveActiveWorkbook failed", ex);
         }
     }
 
@@ -923,7 +875,6 @@ public class PyExcelRibbon : ExcelRibbon
         var selected = PyExcelServices.State.Get(key).SelectedActionName;
         if (selected is null) { _log.Info("OnDeleteAction: no action selected"); return; }
         PyExcelServices.State.DeleteAction(key, selected);
-        PersistProfile(key);
         MarkWorkbookDirty();
         _log.Info($"OnDeleteAction: removed '{selected}' from workbook '{key}'");
     }

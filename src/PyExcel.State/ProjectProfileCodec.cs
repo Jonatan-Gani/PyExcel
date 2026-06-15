@@ -6,11 +6,11 @@ using System.Xml.Linq;
 namespace PyExcel.State;
 
 /// <summary>
-/// XML round-trip for the <see cref="ProjectProfile"/> — the project-folder
-/// file (<c>pyexcel.project.xml</c>). The document is deliberately human-
-/// readable (indented, one element per field) so a user or support engineer can
-/// open it and see exactly what the project is: its metadata block plus the
-/// user state.
+/// XML round-trip for the <see cref="ProjectProfile"/> — the document embedded in
+/// the workbook's <c>CustomXMLPart</c> by <c>WorkbookStatePersister</c>. It is
+/// deliberately human-readable (indented, one element per field) so a user or
+/// support engineer who extracts the part can see exactly what the project is:
+/// its metadata block plus the user state.
 ///
 /// <para>The user-state portion reuses the already-tested
 /// <see cref="WorkbookStateCodec"/> verbatim — the profile simply nests that
