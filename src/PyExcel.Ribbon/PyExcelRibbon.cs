@@ -191,14 +191,21 @@ public class PyExcelRibbon : ExcelRibbon
     }
 
     // -------------------------------------------------------------------------
-    // getEnabled — every control's enabled-state derives from one readiness
-    // verdict (ActiveReadiness), so the data controls and the Enable/Repair
-    // button are exact complements and can never drift. Mirrors v1
-    // RibbonIsEnabled in modRibbon.bas.
+    // getEnabled — controls are gated in three tiers off the active workbook's
+    // readiness (ActiveReadiness), so each button is live exactly when its
+    // feature can actually work:
+    //   * Python section (Run / Edit / scripts / actions): RibbonEnabled → Ready
+    //     (enabled AND structure validated — it drives the kernel). The
+    //     Enable/Repair button is its exact complement (RibbonNotEnabled).
+    //   * Project tools (Open In Explorer, Read Me): RibbonProjectEnabled →
+    //     enabled (the project exists), even if the environment is broken.
+    //   * Kernel-independent data tools (Import, Export, Paste):
+    //     RibbonWorkbookOpen → any open workbook, enabled or not.
+    // Mirrors v1 RibbonIsEnabled in modRibbon.bas.
     // -------------------------------------------------------------------------
 
-    /// <summary>The active workbook's consolidated readiness — the single gate every
-    /// data control reads, so "is the project usable right now?" is decided in
+    /// <summary>The active workbook's consolidated readiness — the single gate the
+    /// Python section reads, so "is the project usable right now?" is decided in
     /// exactly one place. Combines the persisted <see cref="WorkbookState.Enabled"/>
     /// flag with the last on-disk structure check (recorded by the COM sink on
     /// open/activate, by Enable/Repair, and by the Run guard): a workbook is
@@ -212,9 +219,9 @@ public class PyExcelRibbon : ExcelRibbon
         return PyExcelServices.Health.ReadinessOf(key, enabled);
     }
 
-    /// <summary>getEnabled shared by every data control (Run, Edit, the Script /
-    /// Input / Output / Actions fields, Import / Export / Paste, Open Explorer, Read
-    /// Me), mirroring v1 <c>RibbonIsEnabled</c>. Live only when the active workbook is
+    /// <summary>getEnabled for the Python section (Run, Edit, the Script / Input /
+    /// Output / Actions fields, Add / Edit / Delete Action) — the controls that drive
+    /// the kernel. Live only when the active workbook is
     /// <see cref="ProjectReadiness.Ready"/> — enabled for PyExcel AND its on-disk
     /// structure validated — so the user can't drive a half-installed project into a
     /// cryptic kernel error.</summary>
@@ -229,6 +236,24 @@ public class PyExcelRibbon : ExcelRibbon
     /// enabled and its structure validated whole.</summary>
     public bool RibbonNotEnabled(IRibbonControl control)
         => ActiveReadiness() != ProjectReadiness.Ready;
+
+    /// <summary>getEnabled for the project-management buttons (Open In Explorer, Read
+    /// Me): available whenever the active workbook is a PyExcel project — i.e. enabled
+    /// — even if its environment is currently broken, so the user can still open the
+    /// project folder or read the docs while repairing. Greyed only on a plain
+    /// (never-enabled) workbook. <see cref="ProjectReadiness.Ready"/> and
+    /// <see cref="ProjectReadiness.NeedsRepair"/> both mean "enabled".</summary>
+    public bool RibbonProjectEnabled(IRibbonControl control)
+        => ActiveReadiness() != ProjectReadiness.NotEnabled;
+
+    /// <summary>getEnabled for the data tools that don't depend on the Python
+    /// environment at all (Import, Export, Paste): available on any open workbook,
+    /// enabled or not. Import/Export are pure Excel↔file (CSV / TSV / XLSX) range
+    /// operations; Paste writes back a previously archived run output — none of which
+    /// needs the venv or kernel, so there's nothing to gate on beyond a live
+    /// workbook to act on.</summary>
+    public bool RibbonWorkbookOpen(IRibbonControl control)
+        => PyExcelServices.WorkbookContext.CurrentWorkbookKey is not null;
 
     /// <summary>getEnabled for the "Update" button. PLACEHOLDER (Note 3):
     /// always false until the update mechanism and a launch-time update check
