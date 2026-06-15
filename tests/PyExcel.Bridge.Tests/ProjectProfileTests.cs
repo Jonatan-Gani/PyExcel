@@ -60,8 +60,14 @@ public class ProjectProfileTests
 
             ProjectProfileStore.Save(dir, state, "Book.xlsx", key);
 
-            // The profile file lands at the project-folder root.
-            Assert.True(File.Exists(Path.Combine(dir, ProjectProfileStore.FileName)));
+            // The profile lands inside the .pyexcel subfolder, not as a loose
+            // .xml next to the workbook (which Excel would try to open).
+            var file = ProjectProfileStore.PathFor(dir);
+            Assert.NotNull(file);
+            Assert.True(File.Exists(file!));
+            Assert.Equal(
+                Path.Combine(dir, ProjectProfileStore.SubDirName, ProjectProfileStore.FileName), file);
+            Assert.False(File.Exists(Path.Combine(dir, "pyexcel.project.xml")));
 
             var loaded = ProjectProfileStore.TryLoad(dir, key);
             Assert.NotNull(loaded);
@@ -91,6 +97,32 @@ public class ProjectProfileTests
             ProjectProfileStore.Save(dir, state, "Book.xlsx", key);
             var second = ProjectProfileStore.TryLoadProfile(dir, key);
             Assert.Equal(first.Metadata.CreatedUtc, second!.Metadata.CreatedUtc);
+        }
+        finally { Directory.Delete(dir, true); }
+    }
+
+    [Fact]
+    public void Store_Reads_Legacy_Root_File_And_Migrates_On_Save()
+    {
+        var dir = NewTempDir();
+        try
+        {
+            var key = Path.Combine(dir, "Book.xlsx");
+            var state = WorkbookState.Empty(key) with { Enabled = true, ProjectDir = dir };
+
+            // An earlier build's loose profile next to the workbook.
+            var legacy = Path.Combine(dir, "pyexcel.project.xml");
+            File.WriteAllText(legacy, ProjectProfileCodec.SerializeToString(state, new ProjectMetadata()));
+
+            // Readable via the fallback so existing projects keep working...
+            var loaded = ProjectProfileStore.TryLoad(dir, key);
+            Assert.NotNull(loaded);
+            Assert.True(loaded!.Enabled);
+
+            // ...and the next save migrates it into the subfolder and deletes the loose file.
+            ProjectProfileStore.Save(dir, state, "Book.xlsx", key);
+            Assert.False(File.Exists(legacy));
+            Assert.True(File.Exists(ProjectProfileStore.PathFor(dir)!));
         }
         finally { Directory.Delete(dir, true); }
     }

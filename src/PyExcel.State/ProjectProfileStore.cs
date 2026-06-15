@@ -26,8 +26,14 @@ namespace PyExcel.State;
 /// </summary>
 public static class ProjectProfileStore
 {
-    /// <summary>The profile filename, written at the project-folder root.</summary>
-    public const string FileName = "pyexcel.project.xml";
+    /// <summary>Subfolder under the project dir holding PyExcel's internal
+    /// files. Keeping the profile here (rather than a loose <c>.xml</c> next to
+    /// the workbook) stops Excel from opening it as a sibling workbook, and
+    /// groups it with the other dot-prefixed internals.</summary>
+    public const string SubDirName = ".pyexcel";
+
+    /// <summary>The profile filename, written inside <see cref="SubDirName"/>.</summary>
+    public const string FileName = "project.xml";
 
     // The venv directory Setup provisions (mirrors PyExcel.Setup.VenvProvisioner
     // / PyExcel.Excel.PythonResolver). Duplicated as a literal here to avoid a
@@ -37,7 +43,30 @@ public static class ProjectProfileStore
     /// <summary>Full path to the profile file for <paramref name="projectDir"/>,
     /// or null if no project dir was given.</summary>
     public static string? PathFor(string? projectDir)
-        => string.IsNullOrWhiteSpace(projectDir) ? null : Path.Combine(projectDir!, FileName);
+        => string.IsNullOrWhiteSpace(projectDir)
+            ? null
+            : Path.Combine(projectDir!, SubDirName, FileName);
+
+    /// <summary>The loose profile path an earlier build wrote (a bare
+    /// <c>pyexcel.project.xml</c> next to the workbook), kept only for read
+    /// fallback + cleanup.</summary>
+    private static string? LegacyPathFor(string? projectDir)
+        => string.IsNullOrWhiteSpace(projectDir)
+            ? null
+            : Path.Combine(projectDir!, "pyexcel.project.xml");
+
+    private static void TryDeleteLegacy(string projectDir)
+    {
+        try
+        {
+            var legacy = LegacyPathFor(projectDir);
+            if (legacy is not null && File.Exists(legacy)) File.Delete(legacy);
+        }
+        catch
+        {
+            // Best-effort cleanup.
+        }
+    }
 
     /// <summary>Write the profile for <paramref name="state"/> into
     /// <paramref name="projectDir"/>, capturing fresh environment metadata and
@@ -48,13 +77,16 @@ public static class ProjectProfileStore
         if (string.IsNullOrWhiteSpace(projectDir)) return;
         try
         {
-            Directory.CreateDirectory(projectDir!);
+            var file = PathFor(projectDir)!;
+            Directory.CreateDirectory(Path.GetDirectoryName(file)!);
             var prior = TryLoadProfile(projectDir, state.WorkbookKey)?.Metadata;
             var meta = BuildMetadata(projectDir!, workbookName, workbookPath, prior);
-            File.WriteAllText(
-                PathFor(projectDir)!,
-                ProjectProfileCodec.SerializeToString(state, meta),
-                new UTF8Encoding(false));
+            File.WriteAllText(file, ProjectProfileCodec.SerializeToString(state, meta), new UTF8Encoding(false));
+
+            // Remove the legacy loose profile next to the workbook (earlier builds
+            // wrote it there); Excel would otherwise keep offering to open it as a
+            // workbook. Best-effort.
+            TryDeleteLegacy(projectDir!);
         }
         catch
         {
@@ -68,10 +100,17 @@ public static class ProjectProfileStore
         => TryLoadProfile(projectDir, workbookKey)?.State;
 
     /// <summary>Load the full profile (state + metadata) from
-    /// <paramref name="projectDir"/>, or null if none is readable.</summary>
+    /// <paramref name="projectDir"/>, or null if none is readable. Falls back to
+    /// the legacy loose location an earlier build used, so already-enabled
+    /// projects keep working (and get migrated to the subfolder on next save).</summary>
     public static ProjectProfile? TryLoadProfile(string? projectDir, string workbookKey)
     {
-        var path = PathFor(projectDir);
+        return ReadFrom(PathFor(projectDir), workbookKey)
+               ?? ReadFrom(LegacyPathFor(projectDir), workbookKey);
+    }
+
+    private static ProjectProfile? ReadFrom(string? path, string workbookKey)
+    {
         if (path is null) return null;
         try
         {
