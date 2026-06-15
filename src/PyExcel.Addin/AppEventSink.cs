@@ -97,6 +97,7 @@ internal sealed class AppEventSink : IDisposable
     {
         EnsureRestored(wb);
         SetCurrentSheetToLive(wb);
+        ValidateStructureIfEnabled(wb);
         SyncScriptWatcher(wb);
         InvalidateRibbon();
     });
@@ -119,6 +120,7 @@ internal sealed class AppEventSink : IDisposable
         {
             EnsureRestored(wb);
             SetCurrentSheetToLive(wb);
+            ValidateStructureIfEnabled(wb);
         }
 
         // Point the script watcher at whatever's active now, then repaint so
@@ -241,6 +243,7 @@ internal sealed class AppEventSink : IDisposable
             if (dirty && profile.IsMeaningful)
                 WorkbookStatePersister.Save(wb, profile, projectDir, wb.Name, NullIfEmpty(wb.FullName));
             _state.Forget(key);
+            PyExcelServices.Health.Clear(key);
         });
 
     private void OnSheetActivate(object sh) => Guard(nameof(OnSheetActivate), () =>
@@ -330,6 +333,52 @@ internal sealed class AppEventSink : IDisposable
             }
         }
         return null;
+    }
+
+    /// <summary>For an <em>enabled</em> workbook, validate that its on-disk project
+    /// structure (venv, kernel, userScripts) is present, record the result for the
+    /// ribbon, and — if incomplete — surface a one-time alert so the user learns the
+    /// environment is missing on open rather than at Run time. Cheap (file-existence
+    /// only) and run once per open, not per activate. A non-enabled workbook clears
+    /// any stale result.</summary>
+    private void ValidateStructureIfEnabled(Excel.Workbook wb)
+    {
+        string key = KeyOf(wb);
+        if (!_state.GetProfile(key).Enabled)
+        {
+            PyExcelServices.Health.Clear(key);
+            return;
+        }
+        var projectDir = ResolveProjectDir(wb);
+        var check = ProjectStructureValidator.Validate(projectDir);
+        PyExcelServices.Health.Set(key, check);
+        _log.Info($"ValidateStructure: key='{key}' dir='{projectDir}' ok={check.Ok} " +
+                  $"missing='{string.Join(", ", check.Missing)}'");
+        if (!check.Ok) QueueStructureAlert(wb, check);
+    }
+
+    /// <summary>Show a modal alert (deferred onto the macro queue so it doesn't run
+    /// inside the open event pump) telling the user the workbook's PyExcel
+    /// environment is incomplete and how to repair it.</summary>
+    private void QueueStructureAlert(Excel.Workbook wb, ProjectStructureCheck check)
+    {
+        string name;
+        try { name = wb.Name; } catch { name = "this workbook"; }
+
+        var body = new System.Text.StringBuilder();
+        body.Append("PyExcel — environment incomplete\n\n");
+        body.Append('"').Append(name).Append("\" is set up for PyExcel, but its ");
+        body.Append("Python environment is missing or incomplete:\n");
+        foreach (var m in check.Missing) body.Append("  • ").Append(m).Append('\n');
+        body.Append("\nOpen the PyExcel tab and click Enable to reinstall it. ");
+        body.Append("Until then, Run won't work.");
+        var message = body.ToString();
+
+        ExcelAsyncUtil.QueueAsMacro(() =>
+        {
+            try { XlCall.Excel(XlCall.xlcAlert, message, 2 /* xlAlertWarning */); }
+            catch (Exception ex) { _log.Error("QueueStructureAlert failed", ex); }
+        });
     }
 
     /// <summary>Point the workbook's current-sheet pointer at its live active

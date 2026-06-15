@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Concurrent;
 using System.IO;
 
 namespace PyExcel.State;
@@ -36,6 +37,13 @@ public static class PyExcelServices
 
     /// <summary>Strategy for "what workbook is active right now".</summary>
     public static IWorkbookContext WorkbookContext { get; set; } = NullWorkbookContext.Instance;
+
+    /// <summary>Per-workbook result of the open-time project-structure check. The
+    /// COM event sink fills this on workbook open for enabled workbooks; the ribbon
+    /// reads it (cheap in-memory lookup, no per-render I/O) so the Enable button can
+    /// double as a Repair affordance when an enabled workbook's environment is
+    /// missing.</summary>
+    public static HealthRegistry Health { get; set; } = new HealthRegistry();
 
     /// <summary>
     /// Hook the ribbon registers (in <c>RibbonOnLoad</c>) so non-ribbon
@@ -79,5 +87,44 @@ public static class PyExcelServices
             ? Path.Combine(Path.GetTempPath(), "PyExcel", "runs")
             : Path.Combine(localAppData, "PyExcel", "runs");
         return new RunArchive(root);
+    }
+}
+
+/// <summary>
+/// Process-wide registry of each enabled workbook's last project-structure check
+/// (see <see cref="ProjectStructureValidator"/>). Thread-safe: the COM sink writes
+/// from workbook events while the ribbon reads from getEnabled callbacks.
+/// </summary>
+public sealed class HealthRegistry
+{
+    private readonly ConcurrentDictionary<string, ProjectStructureCheck> _checks =
+        new(StringComparer.Ordinal);
+
+    /// <summary>Record the latest structure check for a workbook.</summary>
+    public void Set(string workbookKey, ProjectStructureCheck check)
+    {
+        if (workbookKey is null) throw new ArgumentNullException(nameof(workbookKey));
+        if (check is null) throw new ArgumentNullException(nameof(check));
+        _checks[workbookKey] = check;
+    }
+
+    /// <summary>The last check for a workbook, or null if none was recorded.</summary>
+    public ProjectStructureCheck? Get(string? workbookKey)
+        => workbookKey is not null && _checks.TryGetValue(workbookKey, out var c) ? c : null;
+
+    /// <summary>True when a workbook was checked and its structure is incomplete —
+    /// the signal that the Enable button should offer a repair.</summary>
+    public bool NeedsRepair(string? workbookKey)
+    {
+        var c = Get(workbookKey);
+        return c is not null && !c.Ok;
+    }
+
+    /// <summary>Forget a workbook's check (on close, or when it's no longer a
+    /// project).</summary>
+    public void Clear(string workbookKey)
+    {
+        if (workbookKey is null) throw new ArgumentNullException(nameof(workbookKey));
+        _checks.TryRemove(workbookKey, out _);
     }
 }

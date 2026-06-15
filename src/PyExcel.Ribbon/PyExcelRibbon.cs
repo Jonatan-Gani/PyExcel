@@ -197,10 +197,13 @@ public class PyExcelRibbon : ExcelRibbon
 
     public bool RibbonEnabled(IRibbonControl control) => ActiveState().Enabled;
 
-    /// <summary>getEnabled for the "Enable" button — true only while the active
-    /// workbook is NOT yet enabled, so the button greys out once a workbook has
-    /// been set up/enabled (Note 3).</summary>
-    public bool RibbonNotEnabled(IRibbonControl control) => !ActiveState().Enabled;
+    /// <summary>getEnabled for the "Enable" button. Clickable while the active
+    /// workbook is NOT yet enabled, and again when an enabled workbook's project
+    /// structure failed the open-time check — so the same button doubles as a
+    /// "Repair" affordance (re-provision the missing venv/kernel). It greys out
+    /// only once the workbook is enabled and its environment is intact.</summary>
+    public bool RibbonNotEnabled(IRibbonControl control)
+        => !ActiveState().Enabled || PyExcelServices.Health.NeedsRepair(ActiveKey());
 
     /// <summary>getEnabled for the "Update" button. PLACEHOLDER (Note 3):
     /// always false until the update mechanism and a launch-time update check
@@ -226,6 +229,15 @@ public class PyExcelRibbon : ExcelRibbon
         {
             var key = PyExcelServices.WorkbookContext.CurrentWorkbookKey;
             if (key is null) { _log.Info("OnEnablePyExcel: no active workbook"); return; }
+
+            // Repair mode: an already-enabled workbook whose environment failed the
+            // open-time structure check. Re-provision into its existing project
+            // folder — no name/folder prompt, we already know where it lives.
+            if (PyExcelServices.State.Get(key).Enabled && PyExcelServices.Health.NeedsRepair(key))
+            {
+                RepairActiveWorkbook(key);
+                return;
+            }
 
             // A brand-new workbook has never been saved (Workbook.Path is empty),
             // so it has no folder to anchor the project to. Rather than refuse,
@@ -278,6 +290,9 @@ public class PyExcelRibbon : ExcelRibbon
                 // expected; lighter edits below just mark dirty.)
                 MarkWorkbookDirty();
                 SaveActiveWorkbook();
+                // Record the freshly-provisioned structure as healthy so the Enable
+                // button greys out (it doubles as Repair when the structure breaks).
+                PyExcelServices.Health.Set(key, PyExcel.State.ProjectStructureValidator.Validate(projectDir));
                 // Surface the scaffolded example.py now, and start the live
                 // watcher on the just-created userScripts folder (Enable fires
                 // no WorkbookActivate, so the sink wouldn't otherwise start it).
@@ -294,6 +309,42 @@ public class PyExcelRibbon : ExcelRibbon
         {
             _log.Error("OnEnablePyExcel failed", ex);
             LogDisplay.WriteLine($"Enable: {ex.Message}");
+        }
+    }
+
+    /// <summary>Re-provision an already-enabled workbook whose open-time structure
+    /// check failed: run Setup against the known project folder (no name/folder
+    /// prompt), then re-validate and repaint so the Enable/Repair button greys out
+    /// once the environment is whole again.</summary>
+    private void RepairActiveWorkbook(string key)
+    {
+        try
+        {
+            var projectDir = ResolveProjectDir();
+            if (string.IsNullOrEmpty(projectDir))
+            {
+                LogDisplay.WriteLine("Repair: no project folder is known for this workbook.");
+                return;
+            }
+            _log.Info($"OnEnablePyExcel: repairing '{key}' at '{projectDir}'");
+            var success = SetupForm.Run(ExcelWindowOwner(), projectDir!, _log);
+            if (success == true)
+            {
+                PyExcelServices.Health.Set(key, PyExcel.State.ProjectStructureValidator.Validate(projectDir));
+                RefreshAvailableScripts(key);
+                PyExcelServices.RequestScriptRefresh?.Invoke();
+                QueueInvalidate();
+                _log.Info($"OnEnablePyExcel: repair complete for '{key}'");
+            }
+            else
+            {
+                _log.Info($"OnEnablePyExcel: repair did not complete for '{key}'");
+            }
+        }
+        catch (Exception ex)
+        {
+            _log.Error("RepairActiveWorkbook failed", ex);
+            LogDisplay.WriteLine($"Repair: {ex.Message}");
         }
     }
 
