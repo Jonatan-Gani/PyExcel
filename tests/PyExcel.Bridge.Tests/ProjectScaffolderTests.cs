@@ -68,6 +68,34 @@ public class ProjectScaffolderTests
         finally { Directory.Delete(dir, true); }
     }
 
+    [Fact]
+    public void Scaffold_WritesReadme()
+    {
+        var dir = NewTempDir();
+        try
+        {
+            new ProjectScaffolder().Scaffold(dir);
+            var readme = Path.Combine(dir, "README.md");
+            Assert.True(File.Exists(readme), "Scaffold should write a README the Read Me button can open");
+            Assert.Contains("PyExcel", File.ReadAllText(readme));
+        }
+        finally { Directory.Delete(dir, true); }
+    }
+
+    [Fact]
+    public void Scaffold_DoesNotOverwriteExistingReadme()
+    {
+        var dir = NewTempDir();
+        try
+        {
+            var readme = Path.Combine(dir, "README.md");
+            File.WriteAllText(readme, "# mine");
+            new ProjectScaffolder().Scaffold(dir);
+            Assert.Equal("# mine", File.ReadAllText(readme));
+        }
+        finally { Directory.Delete(dir, true); }
+    }
+
     [Theory]
     [InlineData("")]
     [InlineData("   ")]

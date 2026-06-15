@@ -147,13 +147,47 @@ public class PyExcelRibbon : ExcelRibbon
 
     /// <summary>Read the state for the currently-active workbook,
     /// returning <see cref="WorkbookState.Empty"/> if no workbook is
-    /// active so every getter has a well-defined value to read.</summary>
+    /// active so every getter has a well-defined value to read.
+    ///
+    /// <para>On every render this also answers "is this workbook already a saved
+    /// PyExcel project?" on demand: if nothing meaningful is in memory yet but
+    /// the project folder has a <c>pyexcel.project.xml</c> for this workbook,
+    /// restore it. This makes the ribbon self-heal — an enabled workbook comes
+    /// back enabled when reopened — without depending on any COM event having
+    /// fired. A workbook that's already meaningful in memory is left alone, so
+    /// live edits are never clobbered. The probe is a cheap <c>File.Exists</c>
+    /// when the workbook isn't a project; once restored, the in-memory state is
+    /// meaningful so this path is skipped on subsequent renders. (We
+    /// deliberately do NOT negatively cache "no project here" — a workbook the
+    /// user enables later must be picked up on its very next render.)</para></summary>
     private WorkbookState ActiveState()
     {
         var key = PyExcelServices.WorkbookContext.CurrentWorkbookKey;
         if (key is null) return WorkbookState.Empty("<no-workbook>");
-        return PyExcelServices.State.Get(key);
+
+        var state = PyExcelServices.State.Get(key);
+        if (HasMeaningfulState(state)) return state;
+
+        var projectDir = ResolveProjectDir();
+        WorkbookState? restored = null;
+        try { restored = PyExcel.State.ProjectProfileStore.TryLoad(projectDir, key); }
+        catch (Exception ex) { _log.Error("ActiveState: profile restore failed", ex); }
+
+        if (restored is not null)
+        {
+            _log.Info($"ActiveState: restored project from '{projectDir}' for '{key}' (enabled={restored.Enabled})");
+            WorkbookState loaded = restored;
+            PyExcelServices.State.Update(key, _ => loaded);
+            return loaded;
+        }
+        return state;
     }
+
+    /// <summary>True when a state is worth keeping (enabled, has actions, or has
+    /// a chosen project dir) — the signal that this workbook is a PyExcel
+    /// project, so the on-demand restore should leave the live state alone.</summary>
+    private static bool HasMeaningfulState(WorkbookState s)
+        => s.Enabled || s.Actions.Count > 0 || !string.IsNullOrEmpty(s.ProjectDir);
 
     public override object? LoadImage(string imageName)
     {
@@ -261,6 +295,13 @@ public class PyExcelRibbon : ExcelRibbon
             if (success == true)
             {
                 PyExcelServices.State.SetEnabled(key, true);
+                // PyExcel state lives outside the cell grid, so enabling doesn't
+                // dirty the workbook on its own. Persist it reliably now (so it
+                // survives reopen regardless of whether the file is re-saved),
+                // and mark the workbook dirty so a save also writes the portable
+                // in-file CustomXMLPart copy.
+                PersistProfile(key);
+                MarkWorkbookDirty();
                 // Surface the scaffolded example.py now, and start the live
                 // watcher on the just-created userScripts folder (Enable fires
                 // no WorkbookActivate, so the sink wouldn't otherwise start it).
@@ -322,25 +363,41 @@ public class PyExcelRibbon : ExcelRibbon
         _log.Info("OnReadMe clicked");
         try
         {
-            // If the active workbook's directory has a README.md, open
-            // it with the user's default handler. Otherwise fall back to
-            // an in-Excel alert pointing at the migration docs.
-            var dir = PyExcelServices.WorkbookContext.CurrentWorkbookDirectory;
-            if (!string.IsNullOrEmpty(dir))
+            // Look for a README at the project folder (where Setup scaffolds it)
+            // first, then next to the workbook. Setup writes one on Enable, but
+            // workbooks enabled before that existed won't have it — so if we have
+            // a project folder and there's no README, write a default one now so
+            // the button always opens something useful instead of doing nothing.
+            var projectDir = ResolveProjectDir();
+            var workbookDir = PyExcelServices.WorkbookContext.CurrentWorkbookDirectory;
+
+            var readme = FirstExistingReadme(projectDir, workbookDir);
+            if (readme is null && !string.IsNullOrEmpty(projectDir))
             {
-                var readme = Path.Combine(dir!, "README.md");
-                if (File.Exists(readme))
+                var candidate = Path.Combine(projectDir!, "README.md");
+                try
                 {
-                    ShellLauncher.Open(readme);
-                    return;
+                    Directory.CreateDirectory(projectDir!);
+                    File.WriteAllText(candidate, DefaultReadme);
+                    readme = candidate;
+                }
+                catch (Exception ex)
+                {
+                    _log.Error("OnReadMe: couldn't create README", ex);
                 }
             }
 
+            if (readme is not null && File.Exists(readme))
+            {
+                ShellLauncher.Open(readme);
+                return;
+            }
+
             const string text =
-                "PyExcel v2.0 (alpha)\n\n" +
-                "No README.md was found next to this workbook. " +
-                "See the bundled docs/v2-build.md and ROADMAP.md for the " +
-                "migration plan.";
+                "PyExcel\n\n" +
+                "No project folder is set up for this workbook yet. " +
+                "Click Enable first — that creates the project folder " +
+                "(with a README and an example script) for this workbook.";
             XlCall.Excel(XlCall.xlcAlert, text, 2 /* xlAlertWarning */);
         }
         catch (Exception ex)
@@ -348,6 +405,30 @@ public class PyExcelRibbon : ExcelRibbon
             _log.Error("OnReadMe failed", ex);
         }
     }
+
+    /// <summary>The first <c>README.md</c> that exists at the project folder or
+    /// the workbook folder, or null if neither has one.</summary>
+    private static string? FirstExistingReadme(string? projectDir, string? workbookDir)
+    {
+        foreach (var dir in new[] { projectDir, workbookDir })
+        {
+            if (string.IsNullOrEmpty(dir)) continue;
+            var path = Path.Combine(dir!, "README.md");
+            if (File.Exists(path)) return path;
+        }
+        return null;
+    }
+
+    /// <summary>Minimal README written on demand when a project folder has none
+    /// (e.g. a workbook enabled before Setup started scaffolding one).</summary>
+    private const string DefaultReadme =
+        "# PyExcel project\n\n" +
+        "This folder holds the PyExcel environment for your workbook " +
+        "(`userScripts/`, `.pyexcel-venv/`, `.pyexcel-kernel/`).\n\n" +
+        "- Pick a script in the ribbon's Script box and click Edit to change it.\n" +
+        "- Click Add to bind a script to input/output ranges, then Run.\n" +
+        "- `print()` output and errors show in the log window.\n\n" +
+        "Your actions and settings are saved inside the workbook.\n";
 
     // -------------------------------------------------------------------------
     // Python group
@@ -373,7 +454,12 @@ public class PyExcelRibbon : ExcelRibbon
             PyExcel.Excel.RangeRunner.RunActiveScript(
                 state,
                 progressFactory: () =>
-                    ProgressForm.StartModeless(ExcelWindowOwner(), "Running Python…"));
+                    ProgressForm.StartModeless(ExcelWindowOwner(), "Running Python…"),
+                // On failure, pop the error in a modal dialog that stays up until
+                // the user dismisses it — a Python traceback shouldn't just scroll
+                // by in the log window where it's easy to miss.
+                errorDisplay: message =>
+                    ErrorDisplayForm.Open(ExcelWindowOwner(), "PyExcel — Run failed", message));
         }
         catch (Exception ex)
         {
@@ -498,6 +584,8 @@ public class PyExcelRibbon : ExcelRibbon
         PyExcelServices.State.AddAction(key, result);
         // Load it into the run boxes so the just-saved action is ready to Run.
         PyExcelServices.State.LoadAction(key, result);
+        PersistProfile(key);
+        MarkWorkbookDirty();
         _log.Info($"OnAddAction: saved '{result.Name}' to workbook '{key}'");
     }
 
@@ -530,6 +618,8 @@ public class PyExcelRibbon : ExcelRibbon
         PyExcelServices.State.AddAction(key, result);
         // Reflect the edited action in the run boxes (Script / Input / Output).
         PyExcelServices.State.LoadAction(key, result);
+        PersistProfile(key);
+        MarkWorkbookDirty();
         _log.Info($"OnEditAction: saved '{result.Name}' to workbook '{key}'");
     }
 
@@ -687,6 +777,71 @@ public class PyExcelRibbon : ExcelRibbon
         }
     }
 
+    /// <summary>Mark the active workbook as needing a save, so a subsequent
+    /// Ctrl+S (or the close prompt) actually re-writes the file and flushes
+    /// PyExcel's state into its CustomXMLPart. PyExcel state (enabled flag,
+    /// actions, field bindings) lives outside the cell grid, so mutating it
+    /// doesn't dirty the workbook on its own — without this, Excel can treat
+    /// the save as a no-op and the user's enable/actions are never persisted.
+    /// Best-effort and late-bound; a failure must never break the mutation that
+    /// just happened.</summary>
+    private void MarkWorkbookDirty()
+    {
+        try
+        {
+            dynamic app = ExcelDnaUtil.Application;
+            dynamic wb = app.ActiveWorkbook;
+            if (wb is not null) wb.Saved = false;
+        }
+        catch (Exception ex)
+        {
+            _log.Error("MarkWorkbookDirty failed", ex);
+        }
+    }
+
+    /// <summary>Immediately write the workbook's PyExcel state to the project-
+    /// folder profile (<c>pyexcel.project.xml</c>), so enabling or editing an
+    /// action survives a close-and-reopen even if the workbook file is never
+    /// re-saved (PyExcel state lives outside the cell grid, so Excel doesn't
+    /// always treat it as a change worth saving). The portable in-file
+    /// <c>CustomXMLPart</c> copy is still written on save by the event sink.</summary>
+    private void PersistProfile(string key)
+    {
+        try
+        {
+            var (name, path) = ActiveWorkbookIdentity();
+            var projectDir = ResolveProjectDir();
+            PyExcel.State.ProjectProfileStore.Save(
+                projectDir, PyExcelServices.State.Get(key), name, path);
+            var file = PyExcel.State.ProjectProfileStore.PathFor(projectDir);
+            _log.Info($"PersistProfile: key='{key}' dir='{projectDir}' " +
+                      $"file='{file}' written={(file is not null && File.Exists(file))}");
+        }
+        catch (Exception ex)
+        {
+            _log.Error("PersistProfile failed", ex);
+        }
+    }
+
+    /// <summary>The active workbook's name and full path (late-bound), for the
+    /// project profile's metadata. Nulls on any COM hiccup.</summary>
+    private (string? name, string? path) ActiveWorkbookIdentity()
+    {
+        try
+        {
+            dynamic app = ExcelDnaUtil.Application;
+            dynamic wb = app.ActiveWorkbook;
+            if (wb is null) return (null, null);
+            string name = (string)wb.Name;
+            string full = (string)wb.FullName;
+            return (string.IsNullOrEmpty(name) ? null : name, string.IsNullOrEmpty(full) ? null : full);
+        }
+        catch
+        {
+            return (null, null);
+        }
+    }
+
     /// <summary>Bring a window to the foreground. Used to raise Excel's main
     /// window before the native range picker so the picker isn't drawn behind
     /// Excel. Best-effort: the OS can refuse the foreground change.</summary>
@@ -768,6 +923,8 @@ public class PyExcelRibbon : ExcelRibbon
         var selected = PyExcelServices.State.Get(key).SelectedActionName;
         if (selected is null) { _log.Info("OnDeleteAction: no action selected"); return; }
         PyExcelServices.State.DeleteAction(key, selected);
+        PersistProfile(key);
+        MarkWorkbookDirty();
         _log.Info($"OnDeleteAction: removed '{selected}' from workbook '{key}'");
     }
 
@@ -1001,23 +1158,22 @@ public class PyExcelRibbon : ExcelRibbon
         }
     }
 
-    /// <summary>Show the last error in Excel-DNA's <see cref="LogDisplay"/>.
-    /// Brings the window to front so the user sees it even if it was
-    /// previously dismissed.</summary>
+    /// <summary>Show the last error in a modal, Excel-owned dialog that is
+    /// always brought to the front. We deliberately do <em>not</em> route
+    /// this through Excel-DNA's <see cref="LogDisplay"/>:
+    /// <c>LogDisplay.Show()</c> is a no-op once the log window is already
+    /// open behind Excel (and never raises it), so the button used to appear
+    /// to do nothing. The formatted block is still written to LogDisplay for
+    /// history, but the owned dialog is what guarantees the user sees it.</summary>
     public void OnShowLastError(IRibbonControl control)
     {
         try
         {
             var record = PyExcelServices.Errors.GetLast(ActiveKey());
-            if (record is null)
-            {
-                LogDisplay.WriteLine("[PyExcel] No errors recorded.");
-            }
-            else
-            {
-                LogDisplay.WriteLine(record.FormatForClipboard());
-            }
-            LogDisplay.Show();
+            var body = record is null
+                ? "No errors recorded."
+                : record.FormatForClipboard();
+            ErrorDisplayForm.Open(ExcelWindowOwner(), "PyExcel — Last Error", body);
         }
         catch (Exception ex)
         {

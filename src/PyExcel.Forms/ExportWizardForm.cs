@@ -19,7 +19,7 @@ namespace PyExcel.Forms;
 /// <see cref="ExportBatchValidator"/> (which reuses <see cref="ExportPlanner"/>
 /// per row); OK closes only when every row is valid.</para>
 /// </summary>
-public sealed class ExportWizardForm : Form
+public sealed class ExportWizardForm : ScaledForm
 {
     private const string ExportFileFilter =
         "CSV (*.csv)|*.csv|TSV (*.tsv)|*.tsv|All files (*.*)|*.*";
@@ -162,6 +162,10 @@ public sealed class ExportWizardForm : Form
         panel.Controls.Add(browse);
         panel.Controls.Add(remove);
         _rows.Controls.Add(panel);
+        // Rows added after the form has loaded must be brought up to the same
+        // DPI scale as the rest of the layout (no-op during construction — the
+        // initial rows are scaled by the base form's load-time pass).
+        ScaleNewControl(panel);
     }
 
     private void OnOkClick(object? sender, EventArgs e)

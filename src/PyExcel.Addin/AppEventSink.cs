@@ -2,6 +2,7 @@
 using System;
 using System.Diagnostics;
 using ExcelDna.Integration;
+using PyExcel.Common.Logging;
 using PyExcel.State;
 
 namespace PyExcel.Addin;
@@ -56,6 +57,7 @@ internal sealed class AppEventSink : IDisposable
 {
     private readonly StateService _state;
     private readonly IWorkbookContext _context;
+    private readonly ILog _log = new FileLog();
     private Excel.Application? _app;
     private ScriptDirectoryWatcher? _scriptWatcher;
     private bool _disposed;
@@ -82,6 +84,8 @@ internal sealed class AppEventSink : IDisposable
         // Let the ribbon kick a watcher re-sync after Enable provisions the
         // userScripts folder (that flow fires no WorkbookActivate).
         PyExcelServices.RequestScriptRefresh = SyncScriptWatcherForActive;
+
+        _log.Info("AppEventSink: constructed and subscribed to Application events");
     }
 
     // -------------------------------------------------------------------------
@@ -90,44 +94,101 @@ internal sealed class AppEventSink : IDisposable
 
     private void OnWorkbookOpen(Excel.Workbook wb) => Guard(nameof(OnWorkbookOpen), () =>
     {
-        string key = KeyOf(wb);
-        var restored = WorkbookStatePersister.TryLoad(wb, key);
-        if (restored is not null)
-        {
-            // Replace whatever transient Empty state existed with the
-            // persisted one. Update validates the key matches.
-            _state.Update(key, _ => restored);
-        }
-        else
-        {
-            // No v2 part — this may be a v1 workbook opened for the first
-            // time in v2. Read its legacy defined Names and migrate them into
-            // a v2 CustomXMLPart so the user's saved actions/fields carry over.
-            // Best-effort: a null reader result means there's nothing to
-            // migrate (a brand-new or non-PyExcel workbook).
-            var legacy = LegacyStateReader.TryRead(wb);
-            if (legacy is not null)
-            {
-                var migrated = LegacyStateConverter.Convert(legacy, key);
-                // Only populate the in-memory registry so the ribbon renders
-                // the migrated state immediately. We deliberately don't write
-                // the v2 CustomXMLPart here — that would dirty the workbook
-                // just by opening it. The existing WorkbookBeforeSave handler
-                // flushes this state into the part when the user actually
-                // saves, so the migration becomes durable then.
-                _state.Update(key, _ => migrated);
-            }
-        }
+        EnsureRestored(wb);
         SyncScriptWatcher(wb);
         InvalidateRibbon();
     });
 
+    /// <summary>
+    /// Restore the in-memory state for every workbook that is <em>already</em>
+    /// open when the add-in loads. On a double-click / command-line launch
+    /// Excel often opens the target workbook before the <c>.xll</c>'s
+    /// <see cref="AddIn.AutoOpen"/> has subscribed this sink, so the
+    /// <c>WorkbookOpen</c> event for that workbook is missed — and without this
+    /// its saved "enabled" state and actions never load, so the user is wrongly
+    /// asked to Enable again. Called once from <see cref="AddIn.AutoOpen"/>
+    /// right after the sink is wired.
+    /// </summary>
+    public void RestoreOpenWorkbooks() => Guard(nameof(RestoreOpenWorkbooks), () =>
+    {
+        var app = _app;
+        if (app is null) return;
+        foreach (Excel.Workbook wb in app.Workbooks)
+            EnsureRestored(wb);
+
+        // Point the script watcher at whatever's active now, then repaint so
+        // the restored "enabled" state shows immediately.
+        var active = app.ActiveWorkbook;
+        if (active is not null) SyncScriptWatcher(active);
+        InvalidateRibbon();
+    });
+
+    /// <summary>
+    /// Ensure <paramref name="wb"/>'s saved PyExcel state is loaded into the
+    /// in-memory registry — the add-in asking "is this workbook already a
+    /// PyExcel project?" every time it sees one (open, activate, or load-time
+    /// scan). Load order: the project-folder profile (<c>pyexcel.project.xml</c>
+    /// via <see cref="ProjectProfileStore"/>) first, then the workbook's portable
+    /// <c>CustomXMLPart</c>, then a v1 legacy migration.
+    ///
+    /// <para><b>Load-if-empty.</b> We only load when the in-memory state has
+    /// nothing meaningful yet, so re-activating a workbook the user is actively
+    /// editing never clobbers unsaved in-memory changes — but a freshly opened
+    /// (or just-closed-and-reopened, hence Forgotten) workbook always gets its
+    /// project restored.</para>
+    /// </summary>
+    private void EnsureRestored(Excel.Workbook wb)
+    {
+        string key = KeyOf(wb);
+        if (HasMeaningfulState(_state.Get(key)))
+        {
+            _log.Info($"EnsureRestored: '{key}' already has state in memory; skip");
+            return;
+        }
+
+        // Primary: the project-folder profile (next to the workbook, derived
+        // from its location). Fallback: the in-file CustomXMLPart (covers cloud
+        // workbooks that have no local folder, and files moved without their folder).
+        var projectDir = ResolveProjectDir(wb);
+        var fromProfile = ProjectProfileStore.TryLoad(projectDir, key);
+        var restored = fromProfile ?? WorkbookStatePersister.TryLoad(wb, key);
+        _log.Info($"EnsureRestored: key='{key}' dir='{projectDir}' " +
+                  $"profile={(fromProfile is not null)} restored={(restored is not null)}");
+        if (restored is not null)
+        {
+            // Update validates the key matches.
+            _state.Update(key, _ => restored);
+            return;
+        }
+
+        // No v2 state anywhere — this may be a v1 workbook opened for the first
+        // time in v2. Read its legacy defined Names and migrate them. Best-effort:
+        // a null reader result means there's nothing to migrate (a brand-new or
+        // non-PyExcel workbook). We don't write the CustomXMLPart here — that
+        // would dirty the workbook just by opening it; a later save flushes it.
+        var legacy = LegacyStateReader.TryRead(wb);
+        if (legacy is not null)
+            _state.Update(key, _ => LegacyStateConverter.Convert(legacy, key));
+    }
+
+    /// <summary>True when a state carries something worth keeping — it's been
+    /// enabled, has saved actions, or has a chosen project directory. Used to
+    /// decide whether <see cref="EnsureRestored"/> should load from disk or
+    /// leave the live in-memory state alone.</summary>
+    private static bool HasMeaningfulState(WorkbookState s)
+        => s.Enabled
+           || s.Actions.Count > 0
+           || !string.IsNullOrEmpty(s.ProjectDir);
+
     private void OnWorkbookActivate(Excel.Workbook wb) =>
         Guard(nameof(OnWorkbookActivate), () =>
         {
-            // The active workbook changed: re-point the live script watcher at
-            // its userScripts folder (which also repopulates AvailableScripts —
-            // nothing else feeds it) and repaint.
+            // The active workbook changed. Ask "is this one already a PyExcel
+            // project?" and restore it if so (load-if-empty, so this never
+            // clobbers a workbook being edited). Then re-point the live script
+            // watcher at its userScripts folder (which also repopulates
+            // AvailableScripts — nothing else feeds it) and repaint.
+            EnsureRestored(wb);
             SyncScriptWatcher(wb);
             InvalidateRibbon();
         });
@@ -136,21 +197,28 @@ internal sealed class AppEventSink : IDisposable
         Guard(nameof(OnWorkbookBeforeSave), () =>
         {
             string key = KeyOf(wb);
-            WorkbookStatePersister.Save(wb, _state.Get(key));
+            var state = _state.Get(key);
+            var projectDir = ResolveProjectDir(wb);
+            _log.Info($"OnWorkbookBeforeSave: key='{key}' dir='{projectDir}' enabled={state.Enabled}");
+            // Project-folder profile (source of truth) + the portable in-file copy.
+            ProjectProfileStore.Save(projectDir, state, wb.Name, NullIfEmpty(wb.FullName));
+            WorkbookStatePersister.Save(wb, state);
         });
 
     private void OnWorkbookBeforeClose(Excel.Workbook wb, ref bool cancel) =>
         Guard(nameof(OnWorkbookBeforeClose), () =>
         {
-            // Persist before forgetting so the part is current even if the
-            // user wasn't prompted to save (the close itself doesn't write
-            // the file, but a later reopen of an already-saved workbook
-            // should still see fresh state). If the user cancels the close,
-            // the part stays intact and re-activating re-reads from memory —
-            // which is why we don't touch the file here, only the part and
-            // the in-memory registry.
+            // Persist before forgetting so a later reopen sees fresh state. The
+            // project-folder profile is what makes reopen robust even if the
+            // file isn't re-saved on close; the CustomXMLPart is the portable
+            // in-file copy. If the user cancels the close, the state is
+            // unchanged and re-activating re-reads from memory.
             string key = KeyOf(wb);
-            WorkbookStatePersister.Save(wb, _state.Get(key));
+            var state = _state.Get(key);
+            var projectDir = ResolveProjectDir(wb);
+            _log.Info($"OnWorkbookBeforeClose: key='{key}' dir='{projectDir}' enabled={state.Enabled}");
+            ProjectProfileStore.Save(projectDir, state, wb.Name, NullIfEmpty(wb.FullName));
+            WorkbookStatePersister.Save(wb, state);
             _state.Forget(key);
         });
 
@@ -178,15 +246,28 @@ internal sealed class AppEventSink : IDisposable
     /// cloud-URL workbook).</summary>
     private string? ResolveScriptsDir(Excel.Workbook wb)
     {
-        var stored = _state.Get(KeyOf(wb)).ProjectDir;
-        var workbookDir = string.IsNullOrEmpty(wb.Path) ? null : wb.Path;
-        var projectDir = string.IsNullOrEmpty(stored)
-            ? PyExcel.Common.ProjectDirectory.Resolve(workbookDir)
-            : stored;
+        var projectDir = ResolveProjectDir(wb);
         return string.IsNullOrEmpty(projectDir)
             ? null
             : System.IO.Path.Combine(projectDir!, "userScripts");
     }
+
+    /// <summary>The workbook's project folder: the dedicated folder chosen on
+    /// Enable (saved in state) if set, else the workbook-derived default — the
+    /// same rule the ribbon and KernelHost use. This is where the project
+    /// profile (<c>pyexcel.project.xml</c>), the venv, the kernel and
+    /// userScripts all live. Null for an unsaved / cloud-without-local
+    /// workbook.</summary>
+    private string? ResolveProjectDir(Excel.Workbook wb)
+    {
+        var stored = _state.Get(KeyOf(wb)).ProjectDir;
+        var workbookDir = string.IsNullOrEmpty(wb.Path) ? null : wb.Path;
+        return string.IsNullOrEmpty(stored)
+            ? PyExcel.Common.ProjectDirectory.Resolve(workbookDir)
+            : stored;
+    }
+
+    private static string? NullIfEmpty(string? s) => string.IsNullOrEmpty(s) ? null : s;
 
     /// <summary>(Re)point the live script watcher at the active workbook's
     /// userScripts folder so the ribbon's Script dropdown tracks files appearing
@@ -255,7 +336,7 @@ internal sealed class AppEventSink : IDisposable
         PyExcelServices.RequestRibbonInvalidate?.Invoke();
     }
 
-    private static void Guard(string handler, Action body)
+    private void Guard(string handler, Action body)
     {
         try
         {
@@ -263,8 +344,9 @@ internal sealed class AppEventSink : IDisposable
         }
         catch (Exception ex)
         {
-            // Never let an exception cross back into Excel's event pump.
-            Trace.WriteLine($"AppEventSink.{handler} failed: {ex}");
+            // Never let an exception cross back into Excel's event pump. Log to
+            // the file so a handler fault is diagnosable from %TEMP%\PyExcel_Debug.log.
+            _log.Error($"AppEventSink.{handler} failed", ex);
         }
     }
 

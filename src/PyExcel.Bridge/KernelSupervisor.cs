@@ -74,6 +74,18 @@ public sealed class KernelSupervisor : IDisposable
     public Process Process => _process;
     public int RemoteProtocolVersion { get; }
 
+    /// <summary>
+    /// Raised for each line the kernel subprocess writes to its standard
+    /// output or standard error during normal operation. This is where user
+    /// <c>print()</c> / <c>logging</c> output surfaces: the child's stdio is
+    /// redirected so it can't corrupt the framing channel (a separate pipe),
+    /// but nothing else drains it — so without a subscriber the output sits
+    /// invisibly in the OS pipe buffer and, once that buffer fills, blocks
+    /// the child mid-write. Handlers run on a background reader thread; keep
+    /// them cheap and thread-safe.
+    /// </summary>
+    public event EventHandler<KernelOutputEventArgs>? OutputReceived;
+
     private KernelSupervisor(
         Process process,
         NamedPipeServerStream pipe,
@@ -86,6 +98,13 @@ public sealed class KernelSupervisor : IDisposable
         _transport = transport;
         PipeName = pipeName;
         RemoteProtocolVersion = remoteProtocolVersion;
+
+        // Drain the child's redirected stdout/stderr so user output is
+        // observable (and the pipe buffer never fills and stalls the child).
+        // Started only once the handshake has succeeded and this instance
+        // exists; the early-exit failure path reads stderr synchronously and
+        // never reaches here, so the two readers never contend for the stream.
+        StartOutputReaders();
     }
 
     /// <summary>
@@ -317,6 +336,44 @@ public sealed class KernelSupervisor : IDisposable
             maxInstances,
             PipeTransmissionMode.Byte,
             options);
+    }
+
+    /// <summary>Spawn the two background threads that drain the child's
+    /// redirected stdout and stderr, forwarding each line to
+    /// <see cref="OutputReceived"/>.</summary>
+    private void StartOutputReaders()
+    {
+        SpawnReader(_process.StandardOutput, isError: false, name: "pyexcel-kernel-stdout");
+        SpawnReader(_process.StandardError, isError: true, name: "pyexcel-kernel-stderr");
+    }
+
+    private void SpawnReader(TextReader reader, bool isError, string name)
+    {
+        var thread = new Thread(() =>
+        {
+            try
+            {
+                string? line;
+                while ((line = reader.ReadLine()) != null)
+                {
+                    var handler = OutputReceived;
+                    if (handler is null) continue;
+                    try { handler(this, new KernelOutputEventArgs(isError, line)); }
+                    catch { /* a faulty subscriber must never kill the drain */ }
+                }
+            }
+            catch
+            {
+                // The stream closes when the child is torn down (Dispose /
+                // Shutdown / crash); ReadLine then throws or returns null.
+                // Either way the drain is done — exit the thread quietly.
+            }
+        })
+        {
+            IsBackground = true,
+            Name = name,
+        };
+        thread.Start();
     }
 
     private static Process StartChild(string pythonExecutable, string pythonPath, string pipeName)

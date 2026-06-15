@@ -10,7 +10,7 @@ namespace PyExcel.Forms;
 /// Used to ask for a new script's name (Note 2). Returns the trimmed value
 /// on OK, or null on Cancel.
 /// </summary>
-internal sealed class TextPromptForm : Form
+internal sealed class TextPromptForm : ScaledForm
 {
     private readonly TextBox _box;
 

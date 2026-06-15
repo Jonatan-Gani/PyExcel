@@ -22,7 +22,7 @@ namespace PyExcel.Forms;
 /// too. This form is the thin net48 WinForms shell that hosts them — the
 /// Windows smoke test, same split as every other dialog.</para>
 /// </summary>
-public sealed class SetupForm : Form
+public sealed class SetupForm : ScaledForm
 {
     private readonly string _projectPath;
     private readonly ILog? _innerLog;

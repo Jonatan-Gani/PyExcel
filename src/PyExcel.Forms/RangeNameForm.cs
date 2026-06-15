@@ -13,7 +13,7 @@ namespace PyExcel.Forms;
 /// button) and validated through <see cref="RangeAddressValidator"/>; the
 /// name is optional (blank means an anonymous, positional range).
 /// </summary>
-internal sealed class RangeNameForm : Form
+internal sealed class RangeNameForm : ScaledForm
 {
     private readonly TextBox _rangeBox;
     private readonly TextBox _nameBox;

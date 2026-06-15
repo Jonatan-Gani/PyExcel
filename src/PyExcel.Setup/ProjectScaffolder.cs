@@ -23,6 +23,32 @@ public sealed class ProjectScaffolder
     /// <summary>Name of the starter script dropped into an empty project.</summary>
     public const string ExampleScriptName = "example.py";
 
+    /// <summary>Name of the project README the ribbon's "Read Me" button opens.</summary>
+    public const string ReadmeName = "README.md";
+
+    /// <summary>Default README content written into a new project so the
+    /// "Read Me" ribbon button always has something to open.</summary>
+    public static readonly string ReadmeContent =
+        "# PyExcel project\n" +
+        "\n" +
+        "This folder holds the PyExcel environment for your workbook:\n" +
+        "\n" +
+        "- `userScripts/` — your Python transform scripts (start from `example.py`).\n" +
+        "- `.pyexcel-venv/` — the private Python environment PyExcel created.\n" +
+        "- `.pyexcel-kernel/` — the PyExcel kernel that runs your scripts.\n" +
+        "\n" +
+        "## Using PyExcel\n" +
+        "\n" +
+        "1. **Edit** a script: pick it in the ribbon's *Script* box and click *Edit*.\n" +
+        "2. **Add an action**: click *Add* to bind a script to input/output ranges.\n" +
+        "3. **Run**: select the action and click *Run*; output is written to the\n" +
+        "   range you configured, and `print()` output shows in the log window.\n" +
+        "4. **Errors**: a failed run shows the Python traceback; use *Show Last\n" +
+        "   Error* to see it again.\n" +
+        "\n" +
+        "Your actions and settings are saved inside the workbook, so they travel\n" +
+        "with the file.\n";
+
     private static readonly string ExampleScript =
         "# PyExcel example script.\n" +
         "#\n" +
@@ -64,6 +90,15 @@ public sealed class ProjectScaffolder
 
         var userScripts = Path.Combine(projectDir, UserScriptsDirName);
         Directory.CreateDirectory(userScripts);
+
+        // Drop a README at the project root the "Read Me" ribbon button opens.
+        // Never overwrite a user-edited one.
+        var readme = Path.Combine(projectDir, ReadmeName);
+        if (!File.Exists(readme))
+        {
+            File.WriteAllText(readme, ReadmeContent, new UTF8Encoding(false));
+            _log.Info($"scaffold: wrote {ReadmeName}");
+        }
 
         if (HasAnyScript(userScripts))
         {

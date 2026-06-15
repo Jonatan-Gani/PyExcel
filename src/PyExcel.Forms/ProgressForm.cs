@@ -20,7 +20,7 @@ namespace PyExcel.Forms;
 /// mutators marshal onto the UI thread — the kernel's progress events
 /// arrive on a background thread.</para>
 /// </summary>
-public sealed class ProgressForm : Form, IRunProgressSink
+public sealed class ProgressForm : ScaledForm, IRunProgressSink
 {
     private readonly ProgressBar _bar;
     private readonly Label _status;

@@ -65,6 +65,13 @@ public sealed class AddIn : IExcelAddIn
                 _appEventSink = new AppEventSink(
                     PyExcelServices.State, PyExcelServices.WorkbookContext);
                 _log.Info("AppEventSink subscribed to Application events");
+
+                // Restore state for any workbook already open at load time. On a
+                // double-click / command-line launch Excel often opens the target
+                // workbook before this add-in finishes loading, so its WorkbookOpen
+                // event is missed — without this, a saved-and-enabled workbook
+                // comes up looking un-enabled and the user is asked to Enable again.
+                _appEventSink.RestoreOpenWorkbooks();
             }
             catch (Exception ex)
             {

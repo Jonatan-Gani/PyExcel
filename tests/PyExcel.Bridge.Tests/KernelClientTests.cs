@@ -195,6 +195,58 @@ public class KernelClientTests
     }
 
     // -------------------------------------------------------------------------
+    // Subprocess output draining — user print() must surface (issue: "Run
+    // Python didn't show the prints anywhere"). The child's stdout/stderr are
+    // redirected; KernelSupervisor drains them and raises OutputReceived.
+    // -------------------------------------------------------------------------
+
+    [Fact]
+    public void OutputReceived_Surfaces_Script_Stdout()
+    {
+        using var fixture = new KernelFixture();
+        var script = fixture.WriteScript("printer.py",
+            "def transform():\n    print('hello-from-python')\n    return 1\n");
+
+        var seen = new ManualResetEventSlim(false);
+        fixture.Supervisor.OutputReceived += (_, e) =>
+        {
+            if (!e.IsError && e.Text.Contains("hello-from-python")) seen.Set();
+        };
+
+        var client = new KernelClient(fixture.Supervisor);
+        client.Run(new RunRequest { Script = script });
+
+        // The print is drained on a background reader thread, so it can arrive
+        // shortly after Run returns. PYTHONUNBUFFERED=1 (set by the supervisor)
+        // keeps it from being block-buffered, so a short wait is plenty.
+        Assert.True(seen.Wait(TimeSpan.FromSeconds(5)),
+            "expected the script's stdout to surface via OutputReceived");
+    }
+
+    [Fact]
+    public void OutputReceived_Flags_Stderr_Writes()
+    {
+        using var fixture = new KernelFixture();
+        var script = fixture.WriteScript("stderr.py",
+            "import sys\n" +
+            "def transform():\n" +
+            "    print('to-stderr', file=sys.stderr)\n" +
+            "    return 1\n");
+
+        var seen = new ManualResetEventSlim(false);
+        fixture.Supervisor.OutputReceived += (_, e) =>
+        {
+            if (e.IsError && e.Text.Contains("to-stderr")) seen.Set();
+        };
+
+        var client = new KernelClient(fixture.Supervisor);
+        client.Run(new RunRequest { Script = script });
+
+        Assert.True(seen.Wait(TimeSpan.FromSeconds(5)),
+            "expected the script's stderr to surface via OutputReceived with IsError=true");
+    }
+
+    // -------------------------------------------------------------------------
     // Error paths
     // -------------------------------------------------------------------------
 
