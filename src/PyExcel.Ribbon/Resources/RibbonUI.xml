@@ -27,8 +27,8 @@
                       and a launch-time update check are built. See ROADMAP.md.
                     -->
                     <button id="btnUpdate" label="Update" imageMso="RefreshAll" onAction="OnUpdate" getEnabled="RibbonUpdateAvailable"/>
-                    <button id="btnOpenExplorer" label="Open In Explorer" imageMso="FolderOpen" onAction="OnOpenExplorer" getEnabled="RibbonEnabled"/>
-                    <button id="btnReadMe" label="Read Me" imageMso="Help" onAction="OnReadMe" getEnabled="RibbonEnabled"/>
+                    <button id="btnOpenExplorer" label="Open In Explorer" imageMso="FolderOpen" onAction="OnOpenExplorer" getEnabled="RibbonProjectEnabled"/>
+                    <button id="btnReadMe" label="Read Me" imageMso="Help" onAction="OnReadMe" getEnabled="RibbonProjectEnabled"/>
                 </group>
                 <group id="grpErrors" label="Errors">
                     <!--
@@ -53,22 +53,22 @@
                     <button id="btnDelete" label="Delete Action" imageMso="CancelRequest" onAction="OnDeleteAction" getEnabled="RibbonEnabled"/>
                 </group>
                 <group id="grpImport" label="Import">
-                    <button id="btnImport" label="Import" size="large" imageMso="Export" onAction="OnImport" getEnabled="RibbonEnabled"/>
-                    <editBox id="txtImportInput" label="Source" getText="GetImportInput" sizeString="XXXXXXXXXXXXXXXXXXXX" onChange="OnImportInputChange" getEnabled="RibbonEnabled"/>
-                    <editBox id="txtImportOutput" label="Destination" getText="GetImportOutput" sizeString="XXXXXXXXXXXXXXXXXXXX" onChange="OnImportOutputChange" getEnabled="RibbonEnabled"/>
-                    <button id="btnEditImport" label="Edit" imageMso="EditQuery" size="large" onAction="OnEditImport" getEnabled="RibbonEnabled"/>
+                    <button id="btnImport" label="Import" size="large" imageMso="Export" onAction="OnImport" getEnabled="RibbonWorkbookOpen"/>
+                    <editBox id="txtImportInput" label="Source" getText="GetImportInput" sizeString="XXXXXXXXXXXXXXXXXXXX" onChange="OnImportInputChange" getEnabled="RibbonWorkbookOpen"/>
+                    <editBox id="txtImportOutput" label="Destination" getText="GetImportOutput" sizeString="XXXXXXXXXXXXXXXXXXXX" onChange="OnImportOutputChange" getEnabled="RibbonWorkbookOpen"/>
+                    <button id="btnEditImport" label="Edit" imageMso="EditQuery" size="large" onAction="OnEditImport" getEnabled="RibbonWorkbookOpen"/>
                 </group>
                 <group id="grpExport" label="Export">
-                    <button id="btnExport" label="Export" size="large" imageMso="Import" onAction="OnExport" getEnabled="RibbonEnabled"/>
-                    <editBox id="txtExportInput" label="Source" getText="GetExportInput" sizeString="XXXXXXXXXXXXXXXXXXXX" onChange="OnExportInputChange" getEnabled="RibbonEnabled"/>
-                    <editBox id="txtExportOutput" label="Destination" getText="GetExportOutput" sizeString="XXXXXXXXXXXXXXXXXXXX" onChange="OnExportOutputChange" getEnabled="RibbonEnabled"/>
-                    <button id="btnEditExport" label="Edit" imageMso="EditQuery" size="large" onAction="OnEditExport" getEnabled="RibbonEnabled"/>
-                    <button id="btnExportWizard" label="Wizard" imageMso="TableExcelSpreadsheetInsertGallery" size="large" onAction="OnExportWizard" getEnabled="RibbonEnabled"/>
+                    <button id="btnExport" label="Export" size="large" imageMso="Import" onAction="OnExport" getEnabled="RibbonWorkbookOpen"/>
+                    <editBox id="txtExportInput" label="Source" getText="GetExportInput" sizeString="XXXXXXXXXXXXXXXXXXXX" onChange="OnExportInputChange" getEnabled="RibbonWorkbookOpen"/>
+                    <editBox id="txtExportOutput" label="Destination" getText="GetExportOutput" sizeString="XXXXXXXXXXXXXXXXXXXX" onChange="OnExportOutputChange" getEnabled="RibbonWorkbookOpen"/>
+                    <button id="btnEditExport" label="Edit" imageMso="EditQuery" size="large" onAction="OnEditExport" getEnabled="RibbonWorkbookOpen"/>
+                    <button id="btnExportWizard" label="Wizard" imageMso="TableExcelSpreadsheetInsertGallery" size="large" onAction="OnExportWizard" getEnabled="RibbonWorkbookOpen"/>
                 </group>
                 <group id="grpPaste" label="Paste">
-                    <button id="btnPaste" label="Paste" size="large" imageMso="Paste" onAction="OnPaste" getEnabled="RibbonEnabled"/>
-                    <editBox id="txtPasteOutput" label="Destination" getText="GetPasteOutput" onChange="OnPasteOutputChange" sizeString="XXXXXXXXXXXXXXXXXXXX" getEnabled="RibbonEnabled"/>
-                    <button id="btnEditPaste" label="Edit" imageMso="EditQuery" size="large" onAction="OnEditPaste" getEnabled="RibbonEnabled"/>
+                    <button id="btnPaste" label="Paste" size="large" imageMso="Paste" onAction="OnPaste" getEnabled="RibbonWorkbookOpen"/>
+                    <editBox id="txtPasteOutput" label="Destination" getText="GetPasteOutput" onChange="OnPasteOutputChange" sizeString="XXXXXXXXXXXXXXXXXXXX" getEnabled="RibbonWorkbookOpen"/>
+                    <button id="btnEditPaste" label="Edit" imageMso="EditQuery" size="large" onAction="OnEditPaste" getEnabled="RibbonWorkbookOpen"/>
                 </group>
             </tab>
         </tabs>

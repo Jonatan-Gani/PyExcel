@@ -6,9 +6,16 @@ using PyExcel.State;
 namespace PyExcel.Excel;
 
 /// <summary>
-/// Pure-logic planner for the Phase 5 Paste button — validates the
-/// user-typed target range and picks the archived run whose
-/// <c>output.arrow</c> the paste will decode and write back.
+/// Pure-logic planner for picking which archived Python run to paste back —
+/// validates the user-typed target range and selects the run whose
+/// <c>output.arrow</c> would be decoded and written into that range.
+///
+/// <para><b>Currently unused by the ribbon.</b> The Paste button is now a plain
+/// OS-clipboard paste (<see cref="PasteService"/>), so nothing wires this planner
+/// in at present. It's kept — and still unit-tested by <c>PastePlannerTests</c> —
+/// because the "drop the most recent run's archived output into a range" capability
+/// it encodes may come back as its own affordance. Delete it (and its tests) if
+/// that's ruled out.</para>
 ///
 /// <para><b>Selection rule.</b> The newest archived run that
 /// <em>produced output</em> wins (<see cref="ArchivedRun.HasOutput"/>),

@@ -23,11 +23,13 @@ using Excel = Microsoft.Office.Interop.Excel;
 ///
 /// <list type="bullet">
 ///   <item><c>WorkbookOpen</c> → restore saved state from the workbook's
-///     CustomXMLPart (via <see cref="WorkbookStatePersister"/>) and repaint
-///     the ribbon.</item>
-///   <item><c>WorkbookActivate</c> → repaint the ribbon: the active
-///     workbook key changed, so every getter now renders a different
-///     state, but nothing in the registry mutated so no
+///     CustomXMLPart (via <see cref="WorkbookStatePersister"/>), validate the
+///     on-disk structure to set the readiness gate, load the live elements,
+///     and repaint the ribbon.</item>
+///   <item><c>WorkbookActivate</c> → bring the now-active workbook online
+///     (restore-if-empty, re-validate its structure, reload elements) and
+///     repaint: the active workbook key changed, so every getter now renders a
+///     different state, but nothing in the registry mutated so no
 ///     <see cref="StateService.StateChanged"/> fired on its own.</item>
 ///   <item><c>WorkbookBeforeSave</c> → flush the current state into the
 ///     workbook's CustomXMLPart so it travels with the file.</item>
@@ -95,9 +97,9 @@ internal sealed class AppEventSink : IDisposable
 
     private void OnWorkbookOpen(Excel.Workbook wb) => Guard(nameof(OnWorkbookOpen), () =>
     {
-        EnsureRestored(wb);
-        SetCurrentSheetToLive(wb);
-        ValidateStructureIfEnabled(wb);
+        // Restore + validate, then load the live elements and repaint. Alert on a
+        // broken environment so the user learns on open, not at Run.
+        BringOnline(wb, alertOnIncomplete: true);
         SyncScriptWatcher(wb);
         InvalidateRibbon();
     });
@@ -117,14 +119,10 @@ internal sealed class AppEventSink : IDisposable
         var app = _app;
         if (app is null) return;
         foreach (Excel.Workbook wb in app.Workbooks)
-        {
-            EnsureRestored(wb);
-            SetCurrentSheetToLive(wb);
-            ValidateStructureIfEnabled(wb);
-        }
+            BringOnline(wb, alertOnIncomplete: true);
 
-        // Point the script watcher at whatever's active now, then repaint so
-        // the restored "enabled" state shows immediately.
+        // Load the live elements for whatever's active now, then repaint so the
+        // restored, validated state shows immediately.
         var active = app.ActiveWorkbook;
         if (active is not null) SyncScriptWatcher(active);
         InvalidateRibbon();
@@ -181,14 +179,15 @@ internal sealed class AppEventSink : IDisposable
     private void OnWorkbookActivate(Excel.Workbook wb) =>
         Guard(nameof(OnWorkbookActivate), () =>
         {
-            // The active workbook changed. Ask "is this one already a PyExcel
-            // project?" and restore it if so (load-if-empty, so this never
-            // clobbers a workbook being edited), point the current-sheet pointer
-            // at its live active sheet, re-point the live script watcher at its
-            // userScripts folder (which also repopulates AvailableScripts) and
-            // repaint.
-            EnsureRestored(wb);
-            SetCurrentSheetToLive(wb);
+            // The active workbook changed. Bring it online (restore if-empty so we
+            // never clobber a workbook being edited; point the current-sheet pointer
+            // at its live active sheet; re-validate its structure), then re-point the
+            // live script watcher at its userScripts folder and repaint. Re-validating
+            // here — cheap, file-only — is what makes the gate smart: a structure that
+            // broke (or was repaired) while another workbook was foreground is picked
+            // up the moment the user switches back. No nag alert on activate, though;
+            // that fires once on open.
+            BringOnline(wb, alertOnIncomplete: false);
             SyncScriptWatcher(wb);
             InvalidateRibbon();
         });
@@ -335,13 +334,32 @@ internal sealed class AppEventSink : IDisposable
         return null;
     }
 
+    /// <summary>Bring a workbook "online" in the in-memory model — the consolidated
+    /// open / activate / load-time path. In one place it: restores the workbook's
+    /// saved PyExcel state (load-if-empty, so it never clobbers unsaved edits), points
+    /// the current-sheet pointer at its live active sheet, then refreshes the
+    /// readiness verdict the ribbon gates on. Loading the live <em>elements</em> (the
+    /// script watcher) is the caller's next step, done once for the foreground
+    /// workbook — and only when the project is Ready, so validation and loading move
+    /// together.</summary>
+    private void BringOnline(Excel.Workbook wb, bool alertOnIncomplete)
+    {
+        EnsureRestored(wb);
+        SetCurrentSheetToLive(wb);
+        RefreshReadiness(wb, alertOnIncomplete);
+    }
+
     /// <summary>For an <em>enabled</em> workbook, validate that its on-disk project
-    /// structure (venv, kernel, userScripts) is present, record the result for the
-    /// ribbon, and — if incomplete — surface a one-time alert so the user learns the
-    /// environment is missing on open rather than at Run time. Cheap (file-existence
-    /// only) and run once per open, not per activate. A non-enabled workbook clears
-    /// any stale result.</summary>
-    private void ValidateStructureIfEnabled(Excel.Workbook wb)
+    /// structure (venv, kernel, userScripts) is present and record the verdict in
+    /// <see cref="PyExcelServices.Health"/> — the single gate the ribbon turns into
+    /// the enabled-state of both the data controls and the Enable/Repair button, so
+    /// the controls go live (and the elements load) only once the environment is
+    /// confirmed whole. Cheap (file-existence only), so it's safe to run on every open
+    /// and activate. A non-enabled workbook clears any stale result. When the
+    /// structure is incomplete and <paramref name="alertOnIncomplete"/> is set,
+    /// surface a one-time modal so the user learns on open — not at Run — that the
+    /// environment needs repair.</summary>
+    private void RefreshReadiness(Excel.Workbook wb, bool alertOnIncomplete)
     {
         string key = KeyOf(wb);
         if (!_state.GetProfile(key).Enabled)
@@ -352,9 +370,9 @@ internal sealed class AppEventSink : IDisposable
         var projectDir = ResolveProjectDir(wb);
         var check = ProjectStructureValidator.Validate(projectDir);
         PyExcelServices.Health.Set(key, check);
-        _log.Info($"ValidateStructure: key='{key}' dir='{projectDir}' ok={check.Ok} " +
+        _log.Info($"RefreshReadiness: key='{key}' dir='{projectDir}' ok={check.Ok} " +
                   $"missing='{string.Join(", ", check.Missing)}'");
-        if (!check.Ok) QueueStructureAlert(wb, check);
+        if (!check.Ok && alertOnIncomplete) QueueStructureAlert(wb, check);
     }
 
     /// <summary>Show a modal alert (deferred onto the macro queue so it doesn't run
@@ -431,15 +449,21 @@ internal sealed class AppEventSink : IDisposable
     /// <summary>(Re)point the live script watcher at the active workbook's
     /// userScripts folder so the ribbon's Script dropdown tracks files appearing
     /// / disappearing without a re-activate. The watcher pushes an initial
-    /// snapshot from its constructor, so this also populates the list now. When
-    /// the folder doesn't exist yet (workbook not Enabled) we drop the watcher
-    /// and publish a one-shot snapshot instead — the list stays correct, and the
-    /// watcher starts as soon as Enable creates the folder (via
-    /// <see cref="PyExcelServices.RequestScriptRefresh"/>).</summary>
+    /// snapshot from its constructor, so this also populates the list now.
+    ///
+    /// <para>Elements load only when the project is <see cref="ProjectReadiness.Ready"/>
+    /// (enabled AND structure validated): a not-yet-enabled or broken project has
+    /// nothing trustworthy to surface, so we drop the watcher and publish an empty
+    /// list — keeping validation and element-loading in lockstep with the button
+    /// gate. The watcher (re)starts the moment the project becomes Ready, because
+    /// Enable/Repair refreshes the health verdict and then fires
+    /// <see cref="PyExcelServices.RequestScriptRefresh"/>.</para></summary>
     private void SyncScriptWatcher(Excel.Workbook wb)
     {
         string key = KeyOf(wb);
-        var scriptsDir = ResolveScriptsDir(wb);
+        var ready = PyExcelServices.Health.ReadinessOf(key, _state.GetProfile(key).Enabled)
+                    == ProjectReadiness.Ready;
+        var scriptsDir = ready ? ResolveScriptsDir(wb) : null;
 
         DisposeScriptWatcher();
 
