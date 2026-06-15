@@ -78,6 +78,7 @@ internal sealed class AppEventSink : IDisposable
         _app.WorkbookOpen += OnWorkbookOpen;
         _app.WorkbookActivate += OnWorkbookActivate;
         _app.WorkbookBeforeSave += OnWorkbookBeforeSave;
+        _app.WorkbookAfterSave += OnWorkbookAfterSave;
         _app.WorkbookBeforeClose += OnWorkbookBeforeClose;
         _app.SheetActivate += OnSheetActivate;
 
@@ -95,6 +96,8 @@ internal sealed class AppEventSink : IDisposable
     private void OnWorkbookOpen(Excel.Workbook wb) => Guard(nameof(OnWorkbookOpen), () =>
     {
         EnsureRestored(wb);
+        SetCurrentSheetToLive(wb);
+        ValidateStructureIfEnabled(wb);
         SyncScriptWatcher(wb);
         InvalidateRibbon();
     });
@@ -114,7 +117,11 @@ internal sealed class AppEventSink : IDisposable
         var app = _app;
         if (app is null) return;
         foreach (Excel.Workbook wb in app.Workbooks)
+        {
             EnsureRestored(wb);
+            SetCurrentSheetToLive(wb);
+            ValidateStructureIfEnabled(wb);
+        }
 
         // Point the script watcher at whatever's active now, then repaint so
         // the restored "enabled" state shows immediately.
@@ -127,9 +134,10 @@ internal sealed class AppEventSink : IDisposable
     /// Ensure <paramref name="wb"/>'s saved PyExcel state is loaded into the
     /// in-memory registry — the add-in asking "is this workbook already a
     /// PyExcel project?" every time it sees one (open, activate, or load-time
-    /// scan). Load order: the project-folder profile (<c>pyexcel.project.xml</c>
-    /// via <see cref="ProjectProfileStore"/>) first, then the workbook's portable
-    /// <c>CustomXMLPart</c>, then a v1 legacy migration.
+    /// scan). Load order: the profile embedded in the workbook
+    /// (<see cref="WorkbookStatePersister"/>, the single source of truth), then a
+    /// one-time migration from an external sidecar an earlier build wrote, then a
+    /// v1 (defined-Names) migration.
     ///
     /// <para><b>Load-if-empty.</b> We only load when the in-memory state has
     /// nothing meaningful yet, so re-activating a workbook the user is actively
@@ -140,55 +148,47 @@ internal sealed class AppEventSink : IDisposable
     private void EnsureRestored(Excel.Workbook wb)
     {
         string key = KeyOf(wb);
-        if (HasMeaningfulState(_state.Get(key)))
+        if (_state.GetProfile(key).IsMeaningful)
         {
             _log.Info($"EnsureRestored: '{key}' already has state in memory; skip");
             return;
         }
 
-        // Primary: the project-folder profile (next to the workbook, derived
-        // from its location). Fallback: the in-file CustomXMLPart (covers cloud
-        // workbooks that have no local folder, and files moved without their folder).
-        var projectDir = ResolveProjectDir(wb);
-        var fromProfile = ProjectProfileStore.TryLoad(projectDir, key);
-        var restored = fromProfile ?? WorkbookStatePersister.TryLoad(wb, key);
-        _log.Info($"EnsureRestored: key='{key}' dir='{projectDir}' " +
-                  $"profile={(fromProfile is not null)} restored={(restored is not null)}");
+        // Single source of truth: the per-sheet profile embedded in the workbook.
+        // Fallback: a one-time, read-only migration from the external sidecar an
+        // earlier build wrote — once read it persists into the in-workbook part on
+        // the next save (and the save hook then retires the sidecar).
+        var restored = WorkbookStatePersister.TryLoad(wb, key)
+                       ?? MigrateLegacySidecar(wb, key);
         if (restored is not null)
         {
-            // Update validates the key matches.
-            _state.Update(key, _ => restored);
+            _state.LoadProfile(key, restored);
+            _log.Info($"EnsureRestored: key='{key}' restored (sheets={restored.Sheets.Count})");
             return;
         }
 
         // No v2 state anywhere — this may be a v1 workbook opened for the first
-        // time in v2. Read its legacy defined Names and migrate them. Best-effort:
-        // a null reader result means there's nothing to migrate (a brand-new or
-        // non-PyExcel workbook). We don't write the CustomXMLPart here — that
-        // would dirty the workbook just by opening it; a later save flushes it.
+        // time in v2. Read its legacy defined Names and migrate the one carried
+        // sheet into the per-sheet model's default bucket. Best-effort: a null
+        // reader result means there's nothing to migrate. We don't write the
+        // CustomXMLPart here — that would dirty the workbook just by opening it; a
+        // later save flushes it.
         var legacy = LegacyStateReader.TryRead(wb);
         if (legacy is not null)
-            _state.Update(key, _ => LegacyStateConverter.Convert(legacy, key));
+            _state.LoadProfile(key, WorkbookProfileData.FromState(LegacyStateConverter.Convert(legacy, key)));
     }
-
-    /// <summary>True when a state carries something worth keeping — it's been
-    /// enabled, has saved actions, or has a chosen project directory. Used to
-    /// decide whether <see cref="EnsureRestored"/> should load from disk or
-    /// leave the live in-memory state alone.</summary>
-    private static bool HasMeaningfulState(WorkbookState s)
-        => s.Enabled
-           || s.Actions.Count > 0
-           || !string.IsNullOrEmpty(s.ProjectDir);
 
     private void OnWorkbookActivate(Excel.Workbook wb) =>
         Guard(nameof(OnWorkbookActivate), () =>
         {
             // The active workbook changed. Ask "is this one already a PyExcel
             // project?" and restore it if so (load-if-empty, so this never
-            // clobbers a workbook being edited). Then re-point the live script
-            // watcher at its userScripts folder (which also repopulates
-            // AvailableScripts — nothing else feeds it) and repaint.
+            // clobbers a workbook being edited), point the current-sheet pointer
+            // at its live active sheet, re-point the live script watcher at its
+            // userScripts folder (which also repopulates AvailableScripts) and
+            // repaint.
             EnsureRestored(wb);
+            SetCurrentSheetToLive(wb);
             SyncScriptWatcher(wb);
             InvalidateRibbon();
         });
@@ -197,29 +197,53 @@ internal sealed class AppEventSink : IDisposable
         Guard(nameof(OnWorkbookBeforeSave), () =>
         {
             string key = KeyOf(wb);
-            var state = _state.Get(key);
+            var profile = _state.GetProfile(key);
+            // Only a PyExcel project gets a profile part. Never tattoo a plain
+            // workbook with an empty part just because the user saved it — a
+            // workbook becomes a project via Enable, which triggers its own save.
+            if (!profile.IsMeaningful)
+            {
+                _log.Info($"OnWorkbookBeforeSave: key='{key}' not a PyExcel project; skip");
+                return;
+            }
             var projectDir = ResolveProjectDir(wb);
-            _log.Info($"OnWorkbookBeforeSave: key='{key}' dir='{projectDir}' enabled={state.Enabled}");
-            // Project-folder profile (source of truth) + the portable in-file copy.
-            ProjectProfileStore.Save(projectDir, state, wb.Name, NullIfEmpty(wb.FullName));
-            WorkbookStatePersister.Save(wb, state);
+            _log.Info($"OnWorkbookBeforeSave: key='{key}' dir='{projectDir}' " +
+                      $"enabled={profile.Enabled} sheets={profile.Sheets.Count}");
+            // The workbook is the single store: flush the profile into its
+            // embedded CustomXMLPart so it lands in the file as part of this save.
+            WorkbookStatePersister.Save(wb, profile, projectDir, wb.Name, NullIfEmpty(wb.FullName));
+        });
+
+    private void OnWorkbookAfterSave(Excel.Workbook wb, bool success) =>
+        Guard(nameof(OnWorkbookAfterSave), () =>
+        {
+            // The embedded profile part is now on disk (written in BeforeSave).
+            // Only now is it safe to retire any external profile sidecar a
+            // previous build left — never before the replacement is persisted, so
+            // a failed save can't lose state.
+            if (success) DeleteLegacySidecars(wb);
         });
 
     private void OnWorkbookBeforeClose(Excel.Workbook wb, ref bool cancel) =>
         Guard(nameof(OnWorkbookBeforeClose), () =>
         {
-            // Persist before forgetting so a later reopen sees fresh state. The
-            // project-folder profile is what makes reopen robust even if the
-            // file isn't re-saved on close; the CustomXMLPart is the portable
-            // in-file copy. If the user cancels the close, the state is
-            // unchanged and re-activating re-reads from memory.
             string key = KeyOf(wb);
-            var state = _state.Get(key);
+            var profile = _state.GetProfile(key);
+            // Flush the profile only when there's something to flush AND the
+            // workbook is already dirty. Writing a CustomXMLPart marks the
+            // workbook changed, so flushing a clean workbook would pop a spurious
+            // "save changes?" prompt on close — and a clean workbook's last save
+            // already wrote the current state, so there's nothing to flush. When
+            // it IS dirty, writing now means a Save from the close prompt (or a
+            // cancelled close) keeps the latest in-memory state.
+            bool dirty = IsDirty(wb);
             var projectDir = ResolveProjectDir(wb);
-            _log.Info($"OnWorkbookBeforeClose: key='{key}' dir='{projectDir}' enabled={state.Enabled}");
-            ProjectProfileStore.Save(projectDir, state, wb.Name, NullIfEmpty(wb.FullName));
-            WorkbookStatePersister.Save(wb, state);
+            _log.Info($"OnWorkbookBeforeClose: key='{key}' dir='{projectDir}' " +
+                      $"enabled={profile.Enabled} dirty={dirty}");
+            if (dirty && profile.IsMeaningful)
+                WorkbookStatePersister.Save(wb, profile, projectDir, wb.Name, NullIfEmpty(wb.FullName));
             _state.Forget(key);
+            PyExcelServices.Health.Clear(key);
         });
 
     private void OnSheetActivate(object sh) => Guard(nameof(OnSheetActivate), () =>
@@ -268,6 +292,141 @@ internal sealed class AppEventSink : IDisposable
     }
 
     private static string? NullIfEmpty(string? s) => string.IsNullOrEmpty(s) ? null : s;
+
+    /// <summary>Whether the workbook has unsaved changes (<c>Workbook.Saved</c> is
+    /// false). On a COM hiccup, assume clean so we never force a spurious save
+    /// prompt by flushing the profile part into an otherwise-untouched workbook.</summary>
+    private static bool IsDirty(Excel.Workbook wb)
+    {
+        try { return !wb.Saved; }
+        catch { return false; }
+    }
+
+    /// <summary>One-time, read-only migration from the external profile sidecar an
+    /// earlier build wrote (<c>&lt;projectDir&gt;/.pyexcel/project.xml</c>, or the
+    /// even older loose <c>&lt;projectDir&gt;/pyexcel.project.xml</c>) into the
+    /// in-workbook part. The add-in no longer writes a sidecar — the workbook
+    /// itself is the single store — so this only carries forward state from a
+    /// workbook enabled by a prior build. Returns the migrated state, or
+    /// <see langword="null"/> if there's no readable sidecar. The file is left in
+    /// place until a save flushes the in-workbook part, after which
+    /// <see cref="OnWorkbookAfterSave"/> removes it — so state is never deleted
+    /// before its replacement is on disk.</summary>
+    private WorkbookProfileData? MigrateLegacySidecar(Excel.Workbook wb, string key)
+    {
+        foreach (var path in LegacySidecarPaths(wb))
+        {
+            try
+            {
+                if (!System.IO.File.Exists(path)) continue;
+                if (ProjectProfileCodec.TryDeserialize(
+                        System.IO.File.ReadAllText(path), key, out var data, out _)
+                    && data is not null)
+                {
+                    _log.Info($"MigrateLegacySidecar: migrated '{path}' for '{key}'");
+                    return data;
+                }
+            }
+            catch (Exception ex)
+            {
+                _log.Error($"MigrateLegacySidecar: failed reading '{path}'", ex);
+            }
+        }
+        return null;
+    }
+
+    /// <summary>For an <em>enabled</em> workbook, validate that its on-disk project
+    /// structure (venv, kernel, userScripts) is present, record the result for the
+    /// ribbon, and — if incomplete — surface a one-time alert so the user learns the
+    /// environment is missing on open rather than at Run time. Cheap (file-existence
+    /// only) and run once per open, not per activate. A non-enabled workbook clears
+    /// any stale result.</summary>
+    private void ValidateStructureIfEnabled(Excel.Workbook wb)
+    {
+        string key = KeyOf(wb);
+        if (!_state.GetProfile(key).Enabled)
+        {
+            PyExcelServices.Health.Clear(key);
+            return;
+        }
+        var projectDir = ResolveProjectDir(wb);
+        var check = ProjectStructureValidator.Validate(projectDir);
+        PyExcelServices.Health.Set(key, check);
+        _log.Info($"ValidateStructure: key='{key}' dir='{projectDir}' ok={check.Ok} " +
+                  $"missing='{string.Join(", ", check.Missing)}'");
+        if (!check.Ok) QueueStructureAlert(wb, check);
+    }
+
+    /// <summary>Show a modal alert (deferred onto the macro queue so it doesn't run
+    /// inside the open event pump) telling the user the workbook's PyExcel
+    /// environment is incomplete and how to repair it.</summary>
+    private void QueueStructureAlert(Excel.Workbook wb, ProjectStructureCheck check)
+    {
+        string name;
+        try { name = wb.Name; } catch { name = "this workbook"; }
+
+        var body = new System.Text.StringBuilder();
+        body.Append("PyExcel — environment incomplete\n\n");
+        body.Append('"').Append(name).Append("\" is set up for PyExcel, but its ");
+        body.Append("Python environment is missing or incomplete:\n");
+        foreach (var m in check.Missing) body.Append("  • ").Append(m).Append('\n');
+        body.Append("\nOpen the PyExcel tab and click Enable to reinstall it. ");
+        body.Append("Until then, Run won't work.");
+        var message = body.ToString();
+
+        ExcelAsyncUtil.QueueAsMacro(() =>
+        {
+            try { XlCall.Excel(XlCall.xlcAlert, message, 2 /* xlAlertWarning */); }
+            catch (Exception ex) { _log.Error("QueueStructureAlert failed", ex); }
+        });
+    }
+
+    /// <summary>Point the workbook's current-sheet pointer at its live active
+    /// sheet so <see cref="StateService.Get"/> projects the right sheet's profile.
+    /// Cheap and idempotent — <see cref="StateService.SetCurrentSheet"/> only
+    /// repaints when the active sheet actually changed.</summary>
+    private void SetCurrentSheetToLive(Excel.Workbook wb)
+        => _state.SetCurrentSheet(KeyOf(wb), ActiveSheetName(wb));
+
+    /// <summary>The workbook's active sheet name, or null on a COM hiccup (the
+    /// pointer then falls back to the workbook's default bucket). Read late-bound
+    /// so it works for a worksheet or a chart sheet alike.</summary>
+    private static string? ActiveSheetName(Excel.Workbook wb)
+    {
+        try
+        {
+            dynamic sheet = wb.ActiveSheet;
+            return sheet is null ? null : (string)sheet.Name;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    /// <summary>Best-effort delete of any external profile sidecar, called from
+    /// <see cref="OnWorkbookAfterSave"/> once the in-workbook part is safely on
+    /// disk — never before, so a failed save can't lose state.</summary>
+    private void DeleteLegacySidecars(Excel.Workbook wb)
+    {
+        foreach (var path in LegacySidecarPaths(wb))
+        {
+            try { if (System.IO.File.Exists(path)) System.IO.File.Delete(path); }
+            catch { /* best-effort cleanup */ }
+        }
+    }
+
+    /// <summary>The external profile sidecar paths earlier builds wrote, newest
+    /// first: <c>&lt;projectDir&gt;/.pyexcel/project.xml</c> then the loose
+    /// <c>&lt;projectDir&gt;/pyexcel.project.xml</c>. Empty when the workbook has
+    /// no local project folder.</summary>
+    private System.Collections.Generic.IEnumerable<string> LegacySidecarPaths(Excel.Workbook wb)
+    {
+        var dir = ResolveProjectDir(wb);
+        if (string.IsNullOrEmpty(dir)) yield break;
+        yield return System.IO.Path.Combine(dir!, ".pyexcel", "project.xml");
+        yield return System.IO.Path.Combine(dir!, "pyexcel.project.xml");
+    }
 
     /// <summary>(Re)point the live script watcher at the active workbook's
     /// userScripts folder so the ribbon's Script dropdown tracks files appearing
@@ -366,6 +525,7 @@ internal sealed class AppEventSink : IDisposable
             _app.WorkbookOpen -= OnWorkbookOpen;
             _app.WorkbookActivate -= OnWorkbookActivate;
             _app.WorkbookBeforeSave -= OnWorkbookBeforeSave;
+            _app.WorkbookAfterSave -= OnWorkbookAfterSave;
             _app.WorkbookBeforeClose -= OnWorkbookBeforeClose;
             _app.SheetActivate -= OnSheetActivate;
         }

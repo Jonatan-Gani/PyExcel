@@ -3,16 +3,17 @@ using System;
 namespace PyExcel.State;
 
 /// <summary>
-/// The on-disk "profile of the workbook" — the single authoritative record of a
-/// PyExcel project, written as a human-readable XML file in the project folder
-/// (next to the workbook, the venv, the kernel, and userScripts). It pairs the
-/// user's <see cref="State"/> (enabled flag, actions, field bindings, selected
+/// The "profile of the workbook" — the single authoritative record of a PyExcel
+/// project, embedded in the workbook itself as a human-readable
+/// <c>CustomXMLPart</c> (see <c>WorkbookStatePersister</c>). It pairs the user's
+/// <see cref="State"/> (enabled flag, actions, field bindings, selected
 /// script/sheet) with <see cref="Metadata"/> describing the environment it was
-/// created in, so the project is self-contained: copy the folder and everything
-/// needed to load, run, debug, or update it travels with it — no per-machine
-/// app-data to also copy.
+/// created in, so the project's identity is intrinsic to the document: move,
+/// rename, email, or round-trip the workbook through the cloud and everything
+/// needed to recognise, load, run, and debug it travels inside the file — no
+/// sidecar file and no per-machine app-data to keep in step.
 /// </summary>
-public sealed record ProjectProfile(WorkbookState State, ProjectMetadata Metadata);
+public sealed record ProjectProfile(WorkbookProfileData Profile, ProjectMetadata Metadata);
 
 /// <summary>
 /// Environment / provenance metadata stored alongside the workbook state in the

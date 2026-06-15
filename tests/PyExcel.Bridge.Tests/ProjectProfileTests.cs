@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using PyExcel.State;
 using Xunit;
@@ -6,132 +7,130 @@ using Xunit;
 namespace PyExcel.Bridge.Tests;
 
 /// <summary>
-/// Covers the project-folder profile — <see cref="ProjectProfileCodec"/> and
-/// <see cref="ProjectProfileStore"/> — the single authoritative, portable record
-/// that makes an enabled workbook come back enabled on reopen.
+/// Covers the cross-platform pieces of the workbook profile — the
+/// <see cref="ProjectProfileCodec"/> round-trip (which nests the per-sheet
+/// <see cref="WorkbookProfileCodec"/>) and the <see cref="ProjectMetadataFactory"/>
+/// — that together make up the <see cref="ProjectProfile"/> embedded in a
+/// workbook's <c>CustomXMLPart</c>. The COM read/write of the part itself is
+/// Windows-only (<c>WorkbookStatePersister</c>) and exercised by the smoke test.
 /// </summary>
 public class ProjectProfileTests
 {
     [Fact]
-    public void Codec_RoundTrips_State_And_Metadata()
+    public void Codec_RoundTrips_PerSheet_Profile_And_Metadata()
     {
-        var key = "/wb/Book.xlsx";
-        var state = WorkbookState.Empty(key) with
+        var data = new WorkbookProfileData
         {
             Enabled = true,
             ProjectDir = "/wb",
-            Actions = new[] { new RibbonAction("a", "s.py", "in", "out") },
+            Sheets = new Dictionary<string, SheetProfile>
+            {
+                ["Sheet1"] = new SheetProfile
+                {
+                    SelectedScript = "s.py",
+                    PyInput = "A1:C10",
+                    Actions = new[] { new RibbonAction("a", "s.py", "A1", "B1") },
+                    SelectedActionName = "a",
+                },
+                ["Data"] = new SheetProfile { ExportOutput = "out.csv" },
+            },
         };
-        var meta = new ProjectMetadata(
-            GeneratedBy: "PyExcel 2.0.0.0",
-            PythonVersion: "3.12.1",
-            WorkbookName: "Book.xlsx");
+        var meta = new ProjectMetadata(PythonVersion: "3.12.1", WorkbookName: "Book.xlsx");
 
-        var xml = ProjectProfileCodec.SerializeToString(state, meta);
+        var xml = ProjectProfileCodec.SerializeToString(data, meta);
         Assert.Contains("pyexcel-project", xml);
 
-        Assert.True(ProjectProfileCodec.TryDeserialize(xml, key, out var s, out var m));
-        Assert.NotNull(s);
-        Assert.True(s!.Enabled);
-        Assert.Equal("/wb", s.ProjectDir);
-        Assert.Single(s.Actions);
-        Assert.Equal("a", s.Actions[0].Name);
+        Assert.True(ProjectProfileCodec.TryDeserialize(xml, "k", out var back, out var m));
+        Assert.NotNull(back);
+        Assert.True(back!.Enabled);
+        Assert.Equal("/wb", back.ProjectDir);
+        Assert.Equal("s.py", back.Sheets["Sheet1"].SelectedScript);
+        Assert.Equal("A1:C10", back.Sheets["Sheet1"].PyInput);
+        Assert.Single(back.Sheets["Sheet1"].Actions);
+        Assert.Equal("a", back.Sheets["Sheet1"].SelectedActionName);
+        Assert.Equal("out.csv", back.Sheets["Data"].ExportOutput);
         Assert.NotNull(m);
         Assert.Equal("3.12.1", m!.PythonVersion);
         Assert.Equal("Book.xlsx", m.WorkbookName);
     }
 
     [Fact]
+    public void Codec_Migrates_Legacy_Flat_State_To_Default_Sheet()
+    {
+        // A project document an earlier build wrote: metadata + a nested flat
+        // single-state <pyexcel> element (urn:pyexcel:state:1). It must migrate
+        // forward into the default-bucket sheet so the workbook keeps its config.
+        var flat = WorkbookState.Empty("k") with
+        {
+            Enabled = true,
+            PyInput = "A1:B2",
+            SelectedScript = "s.py",
+        };
+        var flatXml = WorkbookStateCodec.Serialize(flat).Root!.ToString();
+        var projectXml =
+            $"<pyexcel-project xmlns=\"{ProjectProfileCodec.XmlNamespace}\" project-version=\"1\">" +
+            flatXml +
+            "</pyexcel-project>";
+
+        Assert.True(ProjectProfileCodec.TryDeserialize(projectXml, "k", out var data, out _));
+        Assert.NotNull(data);
+        Assert.True(data!.Enabled);
+        var def = data.Sheets[WorkbookProfileData.DefaultSheetKey];
+        Assert.Equal("A1:B2", def.PyInput);
+        Assert.Equal("s.py", def.SelectedScript);
+    }
+
+    [Fact]
     public void Codec_Rejects_Foreign_Xml()
     {
-        Assert.False(ProjectProfileCodec.TryDeserialize("<other/>", "k", out var s, out var m));
-        Assert.Null(s);
-        Assert.Null(m);
+        Assert.False(ProjectProfileCodec.TryDeserialize("<other/>", "k", out var data, out var meta));
+        Assert.Null(data);
+        Assert.Null(meta);
     }
 
     [Fact]
-    public void Store_Save_Then_Load_From_Project_Folder()
+    public void MetadataFactory_Captures_Host_Info_And_Defaults_CreatedUtc()
+    {
+        var meta = ProjectMetadataFactory.Build(
+            projectDir: null, workbookName: "Book.xlsx", workbookPath: "/wb/Book.xlsx", prior: null);
+
+        Assert.False(string.IsNullOrEmpty(meta.GeneratedBy));
+        Assert.NotNull(meta.Os);
+        Assert.NotNull(meta.CreatedUtc);
+        Assert.Equal(meta.CreatedUtc, meta.UpdatedUtc);
+        Assert.Equal("Book.xlsx", meta.WorkbookName);
+    }
+
+    [Fact]
+    public void MetadataFactory_Preserves_CreatedUtc_And_NonRecomputable_From_Prior()
+    {
+        var created = DateTimeOffset.UtcNow.AddDays(-3);
+        var prior = new ProjectMetadata(CreatedUtc: created, WorkbookName: "Old.xlsx");
+
+        var meta = ProjectMetadataFactory.Build(projectDir: null, workbookName: null, workbookPath: null, prior: prior);
+
+        Assert.Equal(created, meta.CreatedUtc);
+        Assert.True(meta.UpdatedUtc >= created);
+        Assert.Equal("Old.xlsx", meta.WorkbookName);
+    }
+
+    [Fact]
+    public void MetadataFactory_Reads_Venv_Python_From_PyvenvCfg()
     {
         var dir = NewTempDir();
         try
         {
-            var key = Path.Combine(dir, "Book.xlsx");
-            var state = WorkbookState.Empty(key) with { Enabled = true, ProjectDir = dir };
+            var venv = Path.Combine(dir, ".pyexcel-venv");
+            Directory.CreateDirectory(Path.Combine(venv, "bin"));
+            File.WriteAllText(Path.Combine(venv, "pyvenv.cfg"), "home = /usr/bin\nversion = 3.12.1\n");
+            File.WriteAllText(Path.Combine(venv, "bin", "python"), "#!stub");
 
-            ProjectProfileStore.Save(dir, state, "Book.xlsx", key);
+            var meta = ProjectMetadataFactory.Build(dir, "Book.xlsx", workbookPath: null, prior: null);
 
-            // The profile lands inside the .pyexcel subfolder, not as a loose
-            // .xml next to the workbook (which Excel would try to open).
-            var file = ProjectProfileStore.PathFor(dir);
-            Assert.NotNull(file);
-            Assert.True(File.Exists(file!));
-            Assert.Equal(
-                Path.Combine(dir, ProjectProfileStore.SubDirName, ProjectProfileStore.FileName), file);
-            Assert.False(File.Exists(Path.Combine(dir, "pyexcel.project.xml")));
-
-            var loaded = ProjectProfileStore.TryLoad(dir, key);
-            Assert.NotNull(loaded);
-            Assert.True(loaded!.Enabled);
-            Assert.Equal(dir, loaded.ProjectDir);
+            Assert.Equal("3.12.1", meta.PythonVersion);
+            Assert.NotNull(meta.PythonPath);
+            Assert.EndsWith("python", meta.PythonPath!);
         }
-        finally { Directory.Delete(dir, true); }
-    }
-
-    [Fact]
-    public void Store_Captures_Host_Metadata_And_Preserves_CreatedUtc()
-    {
-        var dir = NewTempDir();
-        try
-        {
-            var key = Path.Combine(dir, "Book.xlsx");
-            var state = WorkbookState.Empty(key) with { Enabled = true, ProjectDir = dir };
-
-            ProjectProfileStore.Save(dir, state, "Book.xlsx", key);
-            var first = ProjectProfileStore.TryLoadProfile(dir, key);
-            Assert.NotNull(first);
-            Assert.False(string.IsNullOrEmpty(first!.Metadata.GeneratedBy));
-            Assert.NotNull(first.Metadata.CreatedUtc);
-            Assert.NotNull(first.Metadata.Os);
-
-            // A second save keeps the original created-utc but refreshes updated-utc.
-            ProjectProfileStore.Save(dir, state, "Book.xlsx", key);
-            var second = ProjectProfileStore.TryLoadProfile(dir, key);
-            Assert.Equal(first.Metadata.CreatedUtc, second!.Metadata.CreatedUtc);
-        }
-        finally { Directory.Delete(dir, true); }
-    }
-
-    [Fact]
-    public void Store_Reads_Legacy_Root_File_And_Migrates_On_Save()
-    {
-        var dir = NewTempDir();
-        try
-        {
-            var key = Path.Combine(dir, "Book.xlsx");
-            var state = WorkbookState.Empty(key) with { Enabled = true, ProjectDir = dir };
-
-            // An earlier build's loose profile next to the workbook.
-            var legacy = Path.Combine(dir, "pyexcel.project.xml");
-            File.WriteAllText(legacy, ProjectProfileCodec.SerializeToString(state, new ProjectMetadata()));
-
-            // Readable via the fallback so existing projects keep working...
-            var loaded = ProjectProfileStore.TryLoad(dir, key);
-            Assert.NotNull(loaded);
-            Assert.True(loaded!.Enabled);
-
-            // ...and the next save migrates it into the subfolder and deletes the loose file.
-            ProjectProfileStore.Save(dir, state, "Book.xlsx", key);
-            Assert.False(File.Exists(legacy));
-            Assert.True(File.Exists(ProjectProfileStore.PathFor(dir)!));
-        }
-        finally { Directory.Delete(dir, true); }
-    }
-
-    [Fact]
-    public void Store_TryLoad_Missing_Returns_Null()
-    {
-        var dir = NewTempDir();
-        try { Assert.Null(ProjectProfileStore.TryLoad(dir, "/x/Book.xlsx")); }
         finally { Directory.Delete(dir, true); }
     }
 
