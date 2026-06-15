@@ -549,7 +549,13 @@ public class PyExcelRibbon : ExcelRibbon
                     ErrorDisplayForm.Open(ExcelWindowOwner(), "PyExcel — Run failed", message),
                 // When the script returns a 1-D list into a single-cell Output, ask
                 // whether to spill it across a row or down a column.
-                orientationChooser: () => OrientationForm.Prompt(ExcelWindowOwner()));
+                orientationChooser: () => OrientationForm.Prompt(ExcelWindowOwner()),
+                // After a successful run, show the script's captured print() output
+                // in the same read-only viewer — but only when the selected action
+                // kept "Keep output window open" on (the default) and the run
+                // actually printed something. RangeRunner gates on those.
+                outputDisplay: text =>
+                    ErrorDisplayForm.Open(ExcelWindowOwner(), "PyExcel — Run output", text));
         }
         catch (Exception ex)
         {

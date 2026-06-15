@@ -58,6 +58,12 @@ def transform(inputs: Dict[str, Any]) -> Dict[str, Any]:
     }
 ```
 
+> **No interactive input.** Scripts run in a headless kernel with no console
+> attached, so `input()` and any read from `sys.stdin` are **disabled** — they
+> raise an error immediately rather than hanging the run. Read every value your
+> script needs from the `inputs` argument (and pass constants via the action's
+> **Keyword args**). `print()` output is captured and shown in the log window.
+
 ### Inputs
 
 The **Input** ribbon field is a semicolon-separated list of Excel ranges, each
@@ -114,6 +120,12 @@ A single **Python** tab groups the controls:
 results from **Output**. **Actions** save a configured (script + input + output)
 as a reusable per-workbook preset.
 
+Each action has a **Keep output window open after a successful run** checkbox
+(on by default). When on, a successful run leaves the script's captured
+`print()` output on screen so you can read it; turn it off to dismiss the
+output once the run succeeds. A *failed* run always keeps its error window open
+regardless of this setting.
+
 ## Repository layout
 
 See [`ARCHITECTURE.md`](ARCHITECTURE.md) for the full codebase map. In brief:
@@ -136,6 +148,9 @@ When the `.xll` is loaded it writes to `%TEMP%\PyExcel_Debug.log`, format
 - Windows-only for the Excel add-in (COM + Excel-DNA).
 - Requires a system Python available at setup time — the setup wizard
   provisions a project-local virtual environment from it; no Python is bundled.
+- Scripts run without an interactive console: `input()` and reads from
+  `sys.stdin` are disabled and raise an error. Pass data through the input
+  ranges and keyword args instead.
 
 ## Contact
 

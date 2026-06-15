@@ -24,6 +24,10 @@ public static class ScriptScaffold
         "#\n" +
         "# Define transform(inputs) and return a dict of named results.\n" +
         "# See the README for the full input/output contract.\n" +
+        "#\n" +
+        "# Note: scripts run in a kernel with no console — input() and reading\n" +
+        "# sys.stdin are disabled and raise an error. Read values from the\n" +
+        "# 'inputs' argument instead of prompting.\n" +
         "\n" +
         "from typing import Any, Dict\n" +
         "\n" +

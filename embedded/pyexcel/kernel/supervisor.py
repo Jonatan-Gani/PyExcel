@@ -278,6 +278,12 @@ def _run_with_cancellation(transport: FrameTransport, request: Frame) -> None:
 
 def run(pipe_name: str, *, connect_timeout_s: float = 5.0) -> int:
     """Connect, handshake, and run the main loop. Returns the process exit code."""
+    # Disable stdin before any user code can run: the kernel has no console, so
+    # input() / sys.stdin reads would block the worker thread forever and the
+    # host would only see a "no frame received" timeout. With the guard they
+    # fail fast with a clear, surfaced error instead.
+    worker.install_input_guard()
+
     try:
         transport = connect(pipe_name, connect_timeout_s=connect_timeout_s)
     except TransportError as exc:

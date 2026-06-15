@@ -114,6 +114,56 @@ public class WorkbookProfileCodecTests
     }
 
     [Fact]
+    public void RoundTrip_DefaultKeepOutputOpen_IsTrue()
+    {
+        // The Sample action doesn't set KeepOutputOpen, so it defaults to true
+        // and must survive a round-trip as true.
+        var xml = WorkbookProfileCodec.SerializeToString(Sample());
+        Assert.True(WorkbookProfileCodec.TryDeserialize(xml, out var back));
+        Assert.True(Assert.Single(back!.Sheets["Sheet1"].Actions).KeepOutputOpen);
+    }
+
+    [Fact]
+    public void RoundTrip_KeepOutputOpenFalse_Survives()
+    {
+        var data = new WorkbookProfileData
+        {
+            Enabled = true,
+            Sheets = new Dictionary<string, SheetProfile>
+            {
+                ["Sheet1"] = new SheetProfile
+                {
+                    Actions = new[]
+                    {
+                        new RibbonAction("a", "s.py", "A1", "B1",
+                            Kwargs: null, KeepOutputOpen: false),
+                    },
+                },
+            },
+        };
+
+        var xml = WorkbookProfileCodec.SerializeToString(data);
+        Assert.True(WorkbookProfileCodec.TryDeserialize(xml, out var back));
+        Assert.False(Assert.Single(back!.Sheets["Sheet1"].Actions).KeepOutputOpen);
+    }
+
+    [Fact]
+    public void Deserialize_ActionWithoutKeepOutputOpenAttribute_DefaultsTrue()
+    {
+        // A document written before the attribute existed has no
+        // keep-output-open on <action>; loading must default it to true.
+        const string xml =
+            "<workbook xmlns=\"urn:pyexcel:workbook:1\" version=\"1\">" +
+            "<enabled>true</enabled>" +
+            "<sheets><sheet name=\"Sheet1\"><actions>" +
+            "<action name=\"a\" script=\"s.py\" input=\"A1\" output=\"B1\" />" +
+            "</actions></sheet></sheets></workbook>";
+
+        Assert.True(WorkbookProfileCodec.TryDeserialize(xml, out var back));
+        Assert.True(Assert.Single(back!.Sheets["Sheet1"].Actions).KeepOutputOpen);
+    }
+
+    [Fact]
     public void TryDeserialize_Foreign_ReturnsFalse()
     {
         Assert.False(WorkbookProfileCodec.TryDeserialize("<nope/>", out var data));

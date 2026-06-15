@@ -73,9 +73,20 @@ public sealed record WorkbookState(
 /// configured by the user via the Add/Edit form. The form itself lands
 /// in Phase 8; Phase 3 only owns the in-memory model and persistence.
 /// </summary>
+/// <param name="Name">The action's display name (unique within the sheet).</param>
+/// <param name="Script">The userScripts file the action runs.</param>
+/// <param name="Input">The input range binding(s).</param>
+/// <param name="Output">The output range binding(s).</param>
+/// <param name="Kwargs">Optional keyword arguments passed to the transform.</param>
+/// <param name="KeepOutputOpen">When true (the default), a successful run leaves
+/// the run-output window (the script's captured <c>print()</c> output) open so
+/// the user can read it; when false the window is dismissed once the run
+/// succeeds. A <em>failed</em> run always keeps its error window open regardless
+/// of this flag.</param>
 public sealed record RibbonAction(
     string Name,
     string Script,
     string Input,
     string Output,
-    IReadOnlyDictionary<string, string>? Kwargs = null);
+    IReadOnlyDictionary<string, string>? Kwargs = null,
+    bool KeepOutputOpen = true);

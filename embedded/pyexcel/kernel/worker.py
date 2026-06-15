@@ -57,9 +57,11 @@ the cache on the next call.
 
 from __future__ import annotations
 
+import builtins
 import dataclasses
 import hashlib
 import importlib.util
+import io
 import os
 import sys
 import threading
@@ -72,6 +74,88 @@ from . import arrow_io
 
 
 _DEFAULT_FUNCTION = "transform"
+
+
+# -----------------------------------------------------------------------------
+# Standard-input guard
+#
+# The kernel is spawned by the Excel host as a subprocess with no interactive
+# console attached (the host does not redirect stdin, so the child inherits a
+# handle that never delivers a line). A user script that calls ``input()`` — or
+# otherwise reads ``sys.stdin`` — therefore blocks the worker thread forever:
+# the supervisor's run loop never sees the job finish, never writes a reply, and
+# the host eventually fails the run with an opaque "no frame received" timeout.
+#
+# :func:`install_input_guard` turns that hang into an immediate, explained error
+# by replacing ``builtins.input`` and ``sys.stdin`` before any user code runs.
+# Nothing in the kernel legitimately reads stdin (the wire is a named pipe), so
+# disabling it process-wide is safe.
+# -----------------------------------------------------------------------------
+
+_INPUT_FORBIDDEN_MESSAGE = (
+    "input() is disabled in PyExcel scripts. The kernel runs without an "
+    "interactive console, so input() (or any read from standard input) would "
+    "block the run until it times out. Remove the input() call — read your "
+    "values from the transform() 'inputs' argument instead."
+)
+
+
+class PyExcelInputError(RuntimeError):
+    """Raised when user code calls ``input()`` or reads ``sys.stdin`` inside
+    the kernel. Surfaced to the host as the ``type`` of a clean ERROR frame so
+    the user sees the explanation in :data:`_INPUT_FORBIDDEN_MESSAGE` rather
+    than a 60-second timeout. See :func:`install_input_guard`.
+    """
+
+
+class _ForbiddenStdin(io.IOBase):
+    """Stand-in for ``sys.stdin`` that fails fast instead of blocking.
+
+    Every read raises :class:`PyExcelInputError`; ``isatty()`` reports False so
+    libraries probing for an interactive terminal behave as in a non-interactive
+    environment instead of trying to read.
+    """
+
+    def readable(self) -> bool:
+        return False
+
+    def isatty(self) -> bool:
+        return False
+
+    def _blocked(self, *args: Any, **kwargs: Any) -> Any:
+        raise PyExcelInputError(_INPUT_FORBIDDEN_MESSAGE)
+
+    read = _blocked
+    readline = _blocked
+    readlines = _blocked
+
+
+_input_guard_installed = False
+
+
+def install_input_guard() -> None:
+    """Make ``input()`` and ``sys.stdin`` reads fail fast in the kernel process.
+
+    Called once by the supervisor before the run loop starts. Idempotent — safe
+    to call more than once. After this, a user ``input()`` call raises
+    :class:`PyExcelInputError` immediately, which :func:`run_job` folds into a
+    clean ERROR outcome the host can show.
+    """
+    global _input_guard_installed
+    if _input_guard_installed:
+        return
+
+    def _forbidden_input(prompt: object = "", /) -> str:  # noqa: ARG001
+        raise PyExcelInputError(_INPUT_FORBIDDEN_MESSAGE)
+
+    builtins.input = _forbidden_input  # type: ignore[assignment]
+    try:
+        sys.stdin = _ForbiddenStdin()  # type: ignore[assignment]
+    except Exception:  # pragma: no cover - extremely defensive
+        # Reassigning sys.stdin should never fail, but if it somehow does the
+        # builtins.input override above is the one that matters most.
+        pass
+    _input_guard_installed = True
 
 # abs_path -> (mtime_seen_at_load, loaded_module)
 _module_cache: dict[str, Tuple[float, ModuleType]] = {}
