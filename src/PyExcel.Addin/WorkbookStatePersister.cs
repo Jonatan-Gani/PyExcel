@@ -21,43 +21,46 @@ using Core = Microsoft.Office.Core;
 /// rename, and cloud round-trips — with no sidecar file and no per-machine
 /// app-data to keep in step. The workbook <em>is</em> the source of truth.
 ///
-/// <para>The part carries the full <see cref="ProjectProfile"/> (the user
-/// <see cref="WorkbookState"/> plus environment <see cref="ProjectMetadata"/>),
-/// serialised by the cross-platform <see cref="ProjectProfileCodec"/> and located
-/// by <see cref="ProjectProfileCodec.XmlNamespace"/>. A profile written by an
-/// earlier build as a state-only <see cref="WorkbookStateCodec"/> part is still
-/// read (and upgraded to a full profile on the next save), so already-enabled
-/// workbooks keep their state.</para>
+/// <para>The part carries the full <see cref="ProjectProfile"/> — the per-sheet
+/// <see cref="WorkbookProfileData"/> plus environment <see cref="ProjectMetadata"/>
+/// — serialised by the cross-platform <see cref="ProjectProfileCodec"/> and
+/// located by <see cref="ProjectProfileCodec.XmlNamespace"/>. A profile written by
+/// an earlier build as a state-only <see cref="WorkbookStateCodec"/> part (or a
+/// flat single-state document nested in the project part) is still read and
+/// migrated forward on the next save, so already-enabled workbooks keep their
+/// configuration.</para>
 ///
-/// <para>The XML round-trips themselves are owned by the cross-platform codecs
-/// (unit-tested on Linux); this class is the thin, Windows-only COM shell that
-/// locates / replaces / reads the part on a live <see cref="Excel.Workbook"/>.
-/// Both operations are best-effort: COM failures are logged, never thrown, so
-/// neither a save hook nor an open hook can abort the user's action or
+/// <para>Both operations are best-effort: COM failures are logged, never thrown,
+/// so neither a save hook nor an open hook can abort the user's action or
 /// destabilise Excel.</para>
 /// </summary>
 internal static class WorkbookStatePersister
 {
-    /// <summary>Serialize <paramref name="state"/> — with fresh environment
+    // Any key works for the prior-metadata read below — it only affects the
+    // WorkbookKey stamped on a migrated flat state, which we discard (we keep
+    // only the metadata). Using a fixed sentinel keeps the intent clear.
+    private const string MetadataProbeKey = "__pyexcel_prior__";
+
+    /// <summary>Serialize <paramref name="data"/> — with fresh environment
     /// metadata, preserving the prior <c>created-utc</c> — and store it on
     /// <paramref name="workbook"/>, replacing any previously-saved PyExcel part.
     /// The part is added to the workbook's in-memory collection; it lands on disk
     /// when the workbook is saved (this method is called from the save hook).</summary>
     public static void Save(
-        Excel.Workbook workbook, WorkbookState state,
+        Excel.Workbook workbook, WorkbookProfileData data,
         string? projectDir, string? workbookName, string? workbookPath)
     {
         if (workbook is null) throw new ArgumentNullException(nameof(workbook));
-        if (state is null) throw new ArgumentNullException(nameof(state));
+        if (data is null) throw new ArgumentNullException(nameof(data));
         try
         {
             // Preserve created-utc (and any non-recomputable field) from the
             // profile already on the workbook, if one is there.
-            var prior = TryLoadProfile(workbook, state.WorkbookKey)?.Metadata;
+            var prior = TryLoadProfile(workbook, MetadataProbeKey)?.Metadata;
             var meta = ProjectMetadataFactory.Build(projectDir, workbookName, workbookPath, prior);
 
             RemoveExisting(workbook);
-            string xml = ProjectProfileCodec.SerializeToString(state, meta);
+            string xml = ProjectProfileCodec.SerializeToString(data, meta);
             workbook.CustomXMLParts.Add(xml);
         }
         catch (Exception ex)
@@ -66,16 +69,16 @@ internal static class WorkbookStatePersister
         }
     }
 
-    /// <summary>Load the workbook state from the embedded PyExcel part, keyed by
-    /// <paramref name="workbookKey"/>. Returns <see langword="null"/> when the
-    /// workbook carries no readable PyExcel profile (one PyExcel has never
-    /// touched) or the part is unreadable.</summary>
-    public static WorkbookState? TryLoad(Excel.Workbook workbook, string workbookKey)
-        => TryLoadProfile(workbook, workbookKey)?.State;
+    /// <summary>Load the workbook profile from the embedded PyExcel part, or null
+    /// when the workbook carries no readable PyExcel profile (one PyExcel has
+    /// never touched) or the part is unreadable.</summary>
+    public static WorkbookProfileData? TryLoad(Excel.Workbook workbook, string workbookKey)
+        => TryLoadProfile(workbook, workbookKey)?.Profile;
 
-    /// <summary>Load the full profile (state + metadata) from the embedded part.
-    /// Reads the current full-profile part first, then falls back to a state-only
-    /// part written by an earlier build so those workbooks keep their state.</summary>
+    /// <summary>Load the full profile (per-sheet data + metadata) from the embedded
+    /// part. Reads the current full-profile part first, then falls back to a
+    /// state-only part written by an earlier build so those workbooks keep their
+    /// state. <paramref name="workbookKey"/> only keys a migrated flat document.</summary>
     public static ProjectProfile? TryLoadProfile(Excel.Workbook workbook, string workbookKey)
     {
         if (workbook is null) throw new ArgumentNullException(nameof(workbook));
@@ -85,20 +88,21 @@ internal static class WorkbookStatePersister
             // Current format: the full profile, located by the project namespace.
             var xml = FirstPartXml(workbook, ProjectProfileCodec.XmlNamespace);
             if (xml is not null
-                && ProjectProfileCodec.TryDeserialize(xml, workbookKey, out var state, out var meta)
-                && state is not null)
+                && ProjectProfileCodec.TryDeserialize(xml, workbookKey, out var data, out var meta)
+                && data is not null)
             {
-                return new ProjectProfile(state, meta ?? new ProjectMetadata());
+                return new ProjectProfile(data, meta ?? new ProjectMetadata());
             }
 
             // Legacy format: a state-only part from a build before the profile
-            // carried metadata. Read it so those workbooks keep their state.
+            // existed — migrate its flat single state forward into the per-sheet
+            // model so those workbooks keep their configuration.
             var legacy = FirstPartXml(workbook, WorkbookStateCodec.XmlNamespace);
             if (legacy is not null
                 && WorkbookStateCodec.TryDeserialize(legacy, workbookKey, out var legacyState)
                 && legacyState is not null)
             {
-                return new ProjectProfile(legacyState, new ProjectMetadata());
+                return new ProjectProfile(WorkbookProfileData.FromState(legacyState), new ProjectMetadata());
             }
 
             return null;

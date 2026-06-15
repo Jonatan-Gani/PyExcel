@@ -10,35 +10,39 @@ namespace PyExcel.State;
 /// the workbook's <c>CustomXMLPart</c> by <c>WorkbookStatePersister</c>. It is
 /// deliberately human-readable (indented, one element per field) so a user or
 /// support engineer who extracts the part can see exactly what the project is:
-/// its metadata block plus the user state.
+/// its metadata block plus the per-sheet workbook profile.
 ///
-/// <para>The user-state portion reuses the already-tested
-/// <see cref="WorkbookStateCodec"/> verbatim — the profile simply nests that
-/// document's <c>&lt;pyexcel&gt;</c> element (in its own <c>urn:pyexcel:state:1</c>
-/// namespace) inside the profile root, so there's one serializer for state and
-/// no risk of the two drifting.</para>
+/// <para>The user-profile portion nests <see cref="WorkbookProfileCodec"/>'s
+/// <c>&lt;workbook&gt;</c> element (its own <c>urn:pyexcel:workbook:1</c>
+/// namespace) inside the profile root. For backwards compatibility it also reads
+/// an earlier build's nested flat single-state document
+/// (<c>{urn:pyexcel:state:1}pyexcel</c>) and migrates it forward via
+/// <see cref="WorkbookProfileData.FromState"/>, so an already-saved workbook keeps
+/// its configuration.</para>
 /// </summary>
 public static class ProjectProfileCodec
 {
-    /// <summary>Namespace on the profile root, distinct from the state
-    /// namespace it nests.</summary>
+    /// <summary>Namespace on the profile root, distinct from the nested profile.</summary>
     public const string XmlNamespace = "urn:pyexcel:project:1";
 
     /// <summary>Profile schema version. Bump on a breaking layout change.</summary>
     public const string SchemaVersion = "1";
 
     private static readonly XNamespace Ns = XmlNamespace;
-    private static readonly XName StateRootName =
+
+    /// <summary>The earlier-build flat single-state root we still read (and migrate
+    /// forward) so already-saved workbooks don't lose their configuration.</summary>
+    private static readonly XName FlatStateRootName =
         XNamespace.Get(WorkbookStateCodec.XmlNamespace) + "pyexcel";
 
-    /// <summary>Serialize <paramref name="state"/> + <paramref name="meta"/> to
-    /// an indented, human-readable XML string.</summary>
-    public static string SerializeToString(WorkbookState state, ProjectMetadata meta)
-        => Serialize(state, meta).ToString(SaveOptions.None);
+    /// <summary>Serialize <paramref name="data"/> + <paramref name="meta"/> to an
+    /// indented, human-readable XML string.</summary>
+    public static string SerializeToString(WorkbookProfileData data, ProjectMetadata meta)
+        => Serialize(data, meta).ToString(SaveOptions.None);
 
-    public static XDocument Serialize(WorkbookState state, ProjectMetadata meta)
+    public static XDocument Serialize(WorkbookProfileData data, ProjectMetadata meta)
     {
-        if (state is null) throw new ArgumentNullException(nameof(state));
+        if (data is null) throw new ArgumentNullException(nameof(data));
         if (meta is null) throw new ArgumentNullException(nameof(meta));
 
         var metadata = new XElement(Ns + "metadata");
@@ -55,27 +59,24 @@ public static class ProjectProfileCodec
         Add(metadata, "workbook-path", meta.WorkbookPath);
         Add(metadata, "project-dir", meta.ProjectDir);
 
-        // Reuse the tested state serializer and nest a copy of its root element
-        // (copy so it's detached from its own document before re-parenting).
-        var stateRoot = new XElement(WorkbookStateCodec.Serialize(state).Root!);
-
         var root = new XElement(Ns + "pyexcel-project",
             new XAttribute("project-version", SchemaVersion),
             metadata,
-            stateRoot);
+            WorkbookProfileCodec.SerializeElement(data));
 
         return new XDocument(new XDeclaration("1.0", "utf-8", null), root);
     }
 
-    /// <summary>Best-effort parse. Returns <see langword="false"/> (nulls out)
-    /// for null/blank/non-XML input or anything that isn't a recognised profile
-    /// — so a corrupt or foreign file never throws into a COM/ribbon caller. The
-    /// caller-supplied <paramref name="key"/> always wins over the file.</summary>
+    /// <summary>Best-effort parse. Returns <see langword="false"/> (nulls out) for
+    /// null/blank/non-XML input or anything that isn't a recognised profile — so a
+    /// corrupt or foreign file never throws into a COM/ribbon caller. The
+    /// caller-supplied <paramref name="workbookKey"/> is used only when migrating
+    /// an earlier-build flat document (whose nested codec keyed by it).</summary>
     public static bool TryDeserialize(
-        string? xml, string workbookKey, out WorkbookState? state, out ProjectMetadata? meta)
+        string? xml, string workbookKey, out WorkbookProfileData? data, out ProjectMetadata? meta)
     {
         if (workbookKey is null) throw new ArgumentNullException(nameof(workbookKey));
-        state = null;
+        data = null;
         meta = null;
         if (string.IsNullOrWhiteSpace(xml)) return false;
         try
@@ -84,16 +85,33 @@ public static class ProjectProfileCodec
             var root = doc.Root;
             if (root is null || root.Name != Ns + "pyexcel-project") return false;
 
-            var stateRoot = root.Element(StateRootName);
-            if (stateRoot is null) return false;
+            // Current format: the nested per-sheet <workbook> element.
+            if (WorkbookProfileCodec.TryParseElement(
+                    root.Element(XNamespace.Get(WorkbookProfileCodec.XmlNamespace) + "workbook"),
+                    out var parsed)
+                && parsed is not null)
+            {
+                data = parsed;
+                meta = ReadMetadata(root.Element(Ns + "metadata"));
+                return true;
+            }
 
-            // Clone the nested state element into its own document for the state codec.
-            state = WorkbookStateCodec.Deserialize(new XDocument(new XElement(stateRoot)), workbookKey);
-            meta = ReadMetadata(root.Element(Ns + "metadata"));
-            return true;
+            // Earlier build: a nested flat single-state document — migrate forward.
+            var flat = root.Element(FlatStateRootName);
+            if (flat is not null)
+            {
+                var state = WorkbookStateCodec.Deserialize(new XDocument(new XElement(flat)), workbookKey);
+                data = WorkbookProfileData.FromState(state);
+                meta = ReadMetadata(root.Element(Ns + "metadata"));
+                return true;
+            }
+
+            return false;
         }
         catch (Exception ex) when (ex is FormatException or XmlException)
         {
+            data = null;
+            meta = null;
             return false;
         }
     }

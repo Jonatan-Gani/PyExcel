@@ -13,7 +13,7 @@ namespace PyExcel.State;
 /// needed to recognise, load, run, and debug it travels inside the file — no
 /// sidecar file and no per-machine app-data to keep in step.
 /// </summary>
-public sealed record ProjectProfile(WorkbookState State, ProjectMetadata Metadata);
+public sealed record ProjectProfile(WorkbookProfileData Profile, ProjectMetadata Metadata);
 
 /// <summary>
 /// Environment / provenance metadata stored alongside the workbook state in the
