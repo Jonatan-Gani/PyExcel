@@ -38,11 +38,13 @@ public static class PyExcelServices
     /// <summary>Strategy for "what workbook is active right now".</summary>
     public static IWorkbookContext WorkbookContext { get; set; } = NullWorkbookContext.Instance;
 
-    /// <summary>Per-workbook result of the open-time project-structure check. The
-    /// COM event sink fills this on workbook open for enabled workbooks; the ribbon
-    /// reads it (cheap in-memory lookup, no per-render I/O) so the Enable button can
-    /// double as a Repair affordance when an enabled workbook's environment is
-    /// missing.</summary>
+    /// <summary>Per-workbook result of the project-structure check, and the single
+    /// readiness gate every ribbon control reads. The COM event sink fills it on
+    /// workbook open and activate for enabled workbooks (and Enable/Repair and the
+    /// Run guard refresh it); the ribbon turns it — via
+    /// <see cref="HealthRegistry.ReadinessOf"/> — into the enabled-state of both the
+    /// data controls and the Enable/Repair button, a cheap in-memory lookup with no
+    /// per-render I/O.</summary>
     public static HealthRegistry Health { get; set; } = new HealthRegistry();
 
     /// <summary>
@@ -112,13 +114,14 @@ public sealed class HealthRegistry
     public ProjectStructureCheck? Get(string? workbookKey)
         => workbookKey is not null && _checks.TryGetValue(workbookKey, out var c) ? c : null;
 
-    /// <summary>True when a workbook was checked and its structure is incomplete —
-    /// the signal that the Enable button should offer a repair.</summary>
-    public bool NeedsRepair(string? workbookKey)
-    {
-        var c = Get(workbookKey);
-        return c is not null && !c.Ok;
-    }
+    /// <summary>The consolidated readiness verdict for a workbook, from its
+    /// <paramref name="enabled"/> flag and the last recorded structure check — the
+    /// single gate the ribbon reads. Data controls are live iff
+    /// <see cref="ProjectReadiness.Ready"/>; the Enable button (which doubles as
+    /// Repair) is live for every other value. See
+    /// <see cref="ProjectReadinessClassifier.Classify"/> for the rule.</summary>
+    public ProjectReadiness ReadinessOf(string? workbookKey, bool enabled)
+        => ProjectReadinessClassifier.Classify(enabled, Get(workbookKey));
 
     /// <summary>Forget a workbook's check (on close, or when it's no longer a
     /// project).</summary>

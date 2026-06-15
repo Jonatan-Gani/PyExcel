@@ -191,19 +191,44 @@ public class PyExcelRibbon : ExcelRibbon
     }
 
     // -------------------------------------------------------------------------
-    // getEnabled — single shared callback, mirroring v1 RibbonIsEnabled in
-    // modRibbon.bas. Returns false until Phase 3 lands the StateService.
+    // getEnabled — every control's enabled-state derives from one readiness
+    // verdict (ActiveReadiness), so the data controls and the Enable/Repair
+    // button are exact complements and can never drift. Mirrors v1
+    // RibbonIsEnabled in modRibbon.bas.
     // -------------------------------------------------------------------------
 
-    public bool RibbonEnabled(IRibbonControl control) => ActiveState().Enabled;
+    /// <summary>The active workbook's consolidated readiness — the single gate every
+    /// data control reads, so "is the project usable right now?" is decided in
+    /// exactly one place. Combines the persisted <see cref="WorkbookState.Enabled"/>
+    /// flag with the last on-disk structure check (recorded by the COM sink on
+    /// open/activate, by Enable/Repair, and by the Run guard): a workbook is
+    /// <see cref="ProjectReadiness.Ready"/> only when it is enabled AND its
+    /// environment validated whole. Reads the active workbook key once so the render
+    /// path's COM cost stays flat.</summary>
+    private static ProjectReadiness ActiveReadiness()
+    {
+        var key = PyExcelServices.WorkbookContext.CurrentWorkbookKey;
+        var enabled = key is not null && PyExcelServices.State.Get(key).Enabled;
+        return PyExcelServices.Health.ReadinessOf(key, enabled);
+    }
 
-    /// <summary>getEnabled for the "Enable" button. Clickable while the active
-    /// workbook is NOT yet enabled, and again when an enabled workbook's project
-    /// structure failed the open-time check — so the same button doubles as a
-    /// "Repair" affordance (re-provision the missing venv/kernel). It greys out
-    /// only once the workbook is enabled and its environment is intact.</summary>
+    /// <summary>getEnabled shared by every data control (Run, Edit, the Script /
+    /// Input / Output / Actions fields, Import / Export / Paste, Open Explorer, Read
+    /// Me), mirroring v1 <c>RibbonIsEnabled</c>. Live only when the active workbook is
+    /// <see cref="ProjectReadiness.Ready"/> — enabled for PyExcel AND its on-disk
+    /// structure validated — so the user can't drive a half-installed project into a
+    /// cryptic kernel error.</summary>
+    public bool RibbonEnabled(IRibbonControl control)
+        => ActiveReadiness() == ProjectReadiness.Ready;
+
+    /// <summary>getEnabled for the "Enable" button — the logical complement of
+    /// <see cref="RibbonEnabled"/>: clickable whenever the active workbook is not yet
+    /// fully ready, i.e. either never enabled, or enabled with a missing/incomplete
+    /// environment (in which case the same button doubles as "Repair" and
+    /// re-provisions the missing venv/kernel). It greys out only once the workbook is
+    /// enabled and its structure validated whole.</summary>
     public bool RibbonNotEnabled(IRibbonControl control)
-        => !ActiveState().Enabled || PyExcelServices.Health.NeedsRepair(ActiveKey());
+        => ActiveReadiness() != ProjectReadiness.Ready;
 
     /// <summary>getEnabled for the "Update" button. PLACEHOLDER (Note 3):
     /// always false until the update mechanism and a launch-time update check
@@ -231,9 +256,11 @@ public class PyExcelRibbon : ExcelRibbon
             if (key is null) { _log.Info("OnEnablePyExcel: no active workbook"); return; }
 
             // Repair mode: an already-enabled workbook whose environment failed the
-            // open-time structure check. Re-provision into its existing project
-            // folder — no name/folder prompt, we already know where it lives.
-            if (PyExcelServices.State.Get(key).Enabled && PyExcelServices.Health.NeedsRepair(key))
+            // structure check (readiness == NeedsRepair, which already implies
+            // enabled). Re-provision into its existing project folder — no
+            // name/folder prompt, we already know where it lives.
+            if (PyExcelServices.Health.ReadinessOf(key, PyExcelServices.State.Get(key).Enabled)
+                == ProjectReadiness.NeedsRepair)
             {
                 RepairActiveWorkbook(key);
                 return;
@@ -469,6 +496,14 @@ public class PyExcelRibbon : ExcelRibbon
             var key = PyExcelServices.WorkbookContext.CurrentWorkbookKey;
             if (key is null) { _log.Info("OnRunPython: no active workbook"); return; }
 
+            // Defensive readiness gate. getEnabled normally greys Run when the
+            // environment is incomplete, but Excel can act on a stale ribbon cache,
+            // and the venv/kernel can vanish while the workbook stays open. Re-check
+            // the on-disk structure now (cheap, file-only) and refuse with a clear,
+            // actionable message — repainting so Run greys and Enable/Repair lights —
+            // rather than booting a kernel that would fail with a cryptic error.
+            if (!EnsureStructureReady(key, "Run")) return;
+
             // RangeRunner reads the input ranges synchronously on this
             // (main) thread, then dispatches the kernel exchange to a
             // background task and writes the result back via QueueAsMacro —
@@ -492,6 +527,35 @@ public class PyExcelRibbon : ExcelRibbon
         {
             _log.Error("OnRunPython failed", ex);
         }
+    }
+
+    /// <summary>Re-validate the active workbook's on-disk project structure right
+    /// before a kernel-bound action, and record the verdict in
+    /// <see cref="PyExcelServices.Health"/> so the ribbon's readiness gate stays
+    /// current. Returns <see langword="true"/> when the structure is whole.
+    /// Otherwise it repaints the ribbon (Run greys, Enable/Repair lights), surfaces an
+    /// actionable modal naming what's missing, and returns <see langword="false"/> —
+    /// the caller must not proceed. This is the last-line defence behind the
+    /// getEnabled gate, for the cases Excel's ribbon cache can't catch (a stale paint,
+    /// or the environment deleted mid-session).</summary>
+    private bool EnsureStructureReady(string key, string action)
+    {
+        var projectDir = ResolveProjectDir();
+        var check = PyExcel.State.ProjectStructureValidator.Validate(projectDir);
+        PyExcelServices.Health.Set(key, check);
+        if (check.Ok) return true;
+
+        QueueInvalidate();
+        var body = new System.Text.StringBuilder();
+        body.Append(action).Append(" can't start — this workbook's PyExcel ");
+        body.Append("environment is missing or incomplete:\n\n");
+        foreach (var m in check.Missing) body.Append("  • ").Append(m).Append('\n');
+        body.Append("\nOpen the PyExcel tab and click Enable to reinstall it.");
+        ErrorDisplayForm.Open(
+            ExcelWindowOwner(), "PyExcel — environment incomplete", body.ToString());
+        _log.Info($"{action}: blocked — structure incomplete at '{projectDir}': " +
+                  string.Join(", ", check.Missing));
+        return false;
     }
 
     public void OnEditPython(IRibbonControl control)
