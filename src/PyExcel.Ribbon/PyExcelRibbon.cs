@@ -1189,9 +1189,10 @@ public class PyExcelRibbon : ExcelRibbon
         {
             var key = PyExcelServices.WorkbookContext.CurrentWorkbookKey;
             if (key is null) { _log.Info("OnPaste: no active workbook"); return; }
-            PyExcel.Excel.PasteService.RunActivePaste(
-                PyExcelServices.State.Get(key),
-                orientationChooser: () => OrientationForm.Prompt(ExcelWindowOwner()));
+            // Paste reads the OS clipboard into the configured Destination range —
+            // no Python, no orientation prompt (the clipboard grid carries its own
+            // shape).
+            PyExcel.Excel.PasteService.RunActivePaste(PyExcelServices.State.Get(key));
         }
         catch (Exception ex)
         {

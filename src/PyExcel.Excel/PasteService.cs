@@ -1,8 +1,7 @@
 #if NETFRAMEWORK
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
-using System.IO;
-using System.Threading.Tasks;
 using System.Windows.Forms;
 using ExcelDna.Integration;
 using ExcelDna.Logging;
@@ -11,203 +10,152 @@ using PyExcel.State;
 namespace PyExcel.Excel;
 
 /// <summary>
-/// Drives the ribbon's Paste button: finds the newest archived run that
-/// produced output, decodes <c>output.arrow</c> via
-/// <see cref="ArrowMarshal"/>, and writes the result into the
-/// user-configured target range.
+/// Drives the ribbon's Paste button: a plain paste of the OS clipboard into the
+/// user-configured Destination range. Excel copies cells to the clipboard as
+/// tab-separated text (with CSV-style quoting), so the clip is parsed with
+/// <see cref="CsvParser.ParseTsv"/> and each field typed via
+/// <see cref="CsvCellTypeInference"/> — numbers land as numbers, the rest as text
+/// — exactly as the Import path treats a file.
 ///
-/// <para><b>Threading / SAFE-1.</b> Same shape as
-/// <see cref="ImportService"/>: the planner + range-resolve happen on the
-/// main thread; the Arrow read + decode happen off it; the COM read of
-/// the target range, the overwrite-confirmation prompt, and the write-
-/// back are all queued via
-/// <see cref="ExcelAsyncUtil.QueueAsMacro(System.Action)"/>.</para>
+/// <para><b>Independent of Python.</b> No venv, no kernel, no run archive: the only
+/// inputs are the clipboard and the Destination address, so Paste works on any open
+/// workbook whether or not it's been enabled for PyExcel.</para>
 ///
-/// <para><b>Overwrite confirmation.</b> Before writing, the service
-/// reads the target range's current <c>Value2</c> and asks
-/// <see cref="PastePreflight.RangeHasContent"/> whether the paste would
-/// destroy existing data. If so, a <see cref="MessageBox"/> with default
-/// "No" is shown; the user must explicitly click "Yes" to proceed.
-/// Cancelling logs to <see cref="LogDisplay"/> and aborts the paste
-/// without touching the sheet.</para>
+/// <para><b>Threading.</b> Must be called on Excel's main (STA) thread — the ribbon
+/// callback already is. The clipboard read, the overwrite prompt, and the COM write
+/// all run inline there; the payload is small and in-memory, so (unlike Import /
+/// Export) there's no file I/O worth pushing onto a background task.</para>
+///
+/// <para><b>Overwrite confirmation.</b> Before writing, the service snapshots the
+/// target range and asks <see cref="PastePreflight.RangeHasContent"/> whether the
+/// paste would destroy data. If so, a <see cref="MessageBox"/> defaulting to "No"
+/// must be confirmed; cancelling aborts without touching the sheet.</para>
 /// </summary>
 public static class PasteService
 {
     /// <summary>
-    /// Execute the paste currently configured in <paramref name="state"/>.
-    /// Returns immediately; the file read and the write-back happen
-    /// asynchronously.
+    /// Paste the clipboard into the Destination range configured in
+    /// <paramref name="state"/> (<see cref="WorkbookState.PasteOutput"/>). Runs
+    /// synchronously on the calling (main) thread.
     /// </summary>
-    /// <param name="state">The active workbook state carrying the paste
-    /// target.</param>
-    /// <param name="orientationChooser">Optional callback (on the macro
-    /// thread) asked which way a 1-D list should spill when the target is a
-    /// single cell, where the direction is ambiguous. Returns null to
-    /// cancel the paste. When null (no UI), a 1-D list spills across a row,
-    /// preserving the pre-dialog behaviour.</param>
-    public static void RunActivePaste(
-        WorkbookState state,
-        Func<ListOrientation?>? orientationChooser = null)
+    public static void RunActivePaste(WorkbookState state)
     {
         if (state is null) throw new ArgumentNullException(nameof(state));
 
-        // --- main thread: plan -------------------------------------------
-        PastePlan plan;
+        var raw = state.PasteOutput?.Trim();
+        if (string.IsNullOrEmpty(raw))
+        {
+            Warn("Paste: no destination is set — click Edit to choose a target range " +
+                 "(e.g. A1, or Sheet1!A1).");
+            return;
+        }
+        string target = raw!;
+
+        string? clip = ReadClipboardText();
+        if (string.IsNullOrEmpty(clip))
+        {
+            Warn("Paste: the clipboard has no text to paste — copy some cells first.");
+            return;
+        }
+
+        object?[,] grid;
         try
         {
-            var archive = PyExcelServices.RunArchive;
-            if (archive is null)
-            {
-                Warn("Paste: the run archive service isn't initialised — " +
-                     "no previous outputs to paste.");
-                return;
-            }
-            var workbookKey = PyExcelServices.WorkbookContext.CurrentWorkbookKey;
-            plan = PastePlanner.Create(state.PasteOutput, workbookKey, archive.List());
-        }
-        catch (FormatException fex)
-        {
-            Warn(fex.Message);
-            return;
+            // Excel appends a trailing newline after the last row; drop it so we
+            // don't paste a spurious empty row.
+            var rows = CsvParser.ParseTsv(clip!.TrimEnd('\r', '\n'));
+            grid = ToObjectGrid(rows);
         }
         catch (Exception ex)
         {
-            Fail($"Paste: failed to plan — {ex.Message}", ex);
+            Fail($"Paste: failed to parse the clipboard — {ex.Message}", ex);
             return;
         }
 
-        // --- background thread: read + decode the archived output --------
-        Task.Run(() =>
+        int height = grid.GetLength(0);
+        int width = grid.GetLength(1);
+        if (height == 0 || width == 0)
         {
-            object? decoded;
-            try
-            {
-                var bytes = File.ReadAllBytes(plan.SourceArrowPath);
-                decoded = ArrowMarshal.Decode(bytes);
-            }
-            catch (FileNotFoundException)
-            {
-                Warn($"Paste: archived output '{plan.SourceArrowPath}' was " +
-                     "deleted between planning and read.");
-                return;
-            }
-            catch (Exception ex)
-            {
-                Fail($"Paste: failed to decode '{plan.SourceArrowPath}' — {ex.Message}", ex);
-                return;
-            }
+            Warn("Paste: the clipboard had nothing to paste.");
+            return;
+        }
 
-            if (decoded is null)
-            {
-                Warn($"Paste: run {plan.SourceRunId} produced no payload to paste.");
-                return;
-            }
+        try
+        {
+            dynamic app = ExcelDnaUtil.Application;
+            dynamic anchor = app.Range[target];
+            dynamic targetRange = anchor.Resize[height, width];
 
-            if (decoded is ChartSpec or ChartImage)
+            // Strip Excel-DNA's empty/missing sentinels so the cross-platform
+            // preflight sees a clean snapshot, then prompt only when the paste
+            // would overwrite real content.
+            object? before = StripExcelSentinels(targetRange.Value2);
+            if (PastePreflight.RangeHasContent(before)
+                && !ConfirmOverwrite(target, height, width))
             {
-                // A chart isn't cell data — pasting it would write a
-                // ToString() artefact. Charts render at run time via the
-                // Run Python button; pointing the user there is the
-                // actionable path.
-                Warn($"Paste: run {plan.SourceRunId} produced a chart, which " +
-                     "can't be pasted into cells — re-run the script with " +
-                     "the Run Python button to render it.");
+                Trace.WriteLine($"Paste: user cancelled overwrite at '{target}'.");
+                LogDisplay.WriteLine($"Paste: cancelled — '{target}' kept.");
                 return;
             }
 
-            // --- main thread: preflight + write back ---------------------
-            ExcelAsyncUtil.QueueAsMacro(() =>
-            {
-                try
-                {
-                    dynamic app = ExcelDnaUtil.Application;
-                    dynamic anchor = app.Range[plan.TargetRangeAddress];
-
-                    // A 1-D list into a single cell is ambiguous — ask which
-                    // way to spill (the v1 frmOrientation rule). A multi-cell
-                    // target dictates the direction by its shape. Vertical is
-                    // realised by reshaping the vector into an N×1 column so
-                    // the rest of the pipeline treats it as a table.
-                    object writeData = decoded;
-                    if (decoded is object?[] vector && vector.Length > 0)
-                    {
-                        int anchorRows = (int)anchor.Rows.Count;
-                        int anchorCols = (int)anchor.Columns.Count;
-                        var resolution = OrientationResolver.Resolve(anchorRows, anchorCols);
-                        ListOrientation orientation;
-                        if (resolution.Ask)
-                        {
-                            var chosen = orientationChooser?.Invoke();
-                            if (orientationChooser is not null && chosen is null)
-                            {
-                                Trace.WriteLine("Paste: cancelled at the orientation prompt.");
-                                LogDisplay.WriteLine("Paste: cancelled — no direction chosen.");
-                                return;
-                            }
-                            orientation = chosen ?? ListOrientation.Horizontal;
-                        }
-                        else
-                        {
-                            orientation = resolution.Orientation;
-                        }
-
-                        if (orientation == ListOrientation.Vertical)
-                            writeData = ToColumn(vector);
-                    }
-
-                    var (rows, cols) = PastePreflight.Footprint(writeData);
-                    if (rows == 0 || cols == 0)
-                    {
-                        Warn($"Paste: run {plan.SourceRunId} payload is empty.");
-                        return;
-                    }
-
-                    dynamic targetRange = anchor.Resize[rows, cols];
-
-                    // Read what's at the target right now. Excel-DNA's
-                    // ExcelEmpty / ExcelMissing sentinels can appear in
-                    // the COM hand-back for empty cells; strip them to
-                    // null so the cross-platform PastePreflight (which
-                    // doesn't reference those types) sees a clean
-                    // snapshot.
-                    object? before = StripExcelSentinels(targetRange.Value2);
-
-                    if (PastePreflight.RangeHasContent(before)
-                        && !ConfirmOverwrite(plan.TargetRangeAddress, rows, cols, plan.SourceRunId))
-                    {
-                        Trace.WriteLine(
-                            $"Paste: user cancelled overwrite at " +
-                            $"'{plan.TargetRangeAddress}'.");
-                        LogDisplay.WriteLine(
-                            $"Paste: cancelled — '{plan.TargetRangeAddress}' kept.");
-                        return;
-                    }
-
-                    WriteToRange(targetRange, writeData);
-                    Trace.WriteLine(
-                        $"Paste: pasted run {plan.SourceRunId} into '{plan.TargetRangeAddress}'.");
-                }
-                catch (Exception ex)
-                {
-                    Fail(
-                        $"Paste: failed to write into '{plan.TargetRangeAddress}' — {ex.Message}",
-                        ex);
-                }
-            });
-        });
+            targetRange.Value2 = grid;
+            Trace.WriteLine(
+                $"Paste: pasted {height}×{width} from the clipboard into '{target}'.");
+        }
+        catch (Exception ex)
+        {
+            Fail($"Paste: failed to write into '{target}' — {ex.Message}", ex);
+        }
     }
 
-    /// <summary>Show the destructive-paste confirmation. Defaults to
-    /// <see cref="MessageBoxDefaultButton.Button2"/> ("No") so an
-    /// accidental Enter doesn't overwrite the user's data. Returns
-    /// <see langword="true"/> iff the user clicked Yes.</summary>
-    private static bool ConfirmOverwrite(string targetAddress, int rows, int cols, string runId)
+    /// <summary>Read the clipboard's text (Excel's tab-separated cell copy, or any
+    /// plain text). Returns null when the clipboard holds no text or can't be read —
+    /// another process can briefly hold it locked, surfacing as an
+    /// <see cref="System.Runtime.InteropServices.ExternalException"/>.</summary>
+    private static string? ReadClipboardText()
+    {
+        try
+        {
+            return Clipboard.ContainsText() ? Clipboard.GetText() : null;
+        }
+        catch (Exception ex)
+        {
+            Trace.WriteLine($"Paste: clipboard read failed: {ex}");
+            return null;
+        }
+    }
+
+    /// <summary>Convert the parser's ragged record list into a rectangular
+    /// <c>object?[,]</c>, typing each field (number / boolean / text) the same way
+    /// the Import path does. Short rows are padded with nulls so every column
+    /// lands.</summary>
+    private static object?[,] ToObjectGrid(IReadOnlyList<IReadOnlyList<string>> rows)
+    {
+        int height = rows.Count;
+        int width = 0;
+        for (int i = 0; i < height; i++)
+            if (rows[i].Count > width) width = rows[i].Count;
+
+        var grid = new object?[height, width];
+        for (int r = 0; r < height; r++)
+        {
+            var row = rows[r];
+            int cols = row.Count;
+            for (int c = 0; c < width; c++)
+                grid[r, c] = c < cols ? CsvCellTypeInference.Infer(row[c]) : null;
+        }
+        return grid;
+    }
+
+    /// <summary>Show the destructive-paste confirmation, defaulting to "No" so an
+    /// accidental Enter can't overwrite data. Returns true iff the user clicked
+    /// Yes.</summary>
+    private static bool ConfirmOverwrite(string targetAddress, int rows, int cols)
     {
         var prompt =
-            $"The target range '{targetAddress}' ({rows}×{cols}) contains " +
-            $"values that will be overwritten by the paste from run {runId}." +
-            Environment.NewLine + Environment.NewLine +
-            "Continue?";
+            $"The target range '{targetAddress}' ({rows}×{cols}) already contains " +
+            "values that the paste will overwrite." +
+            Environment.NewLine + Environment.NewLine + "Continue?";
 
         var answer = MessageBox.Show(
             prompt,
@@ -218,12 +166,10 @@ public static class PasteService
         return answer == DialogResult.Yes;
     }
 
-    /// <summary>Recursively replace Excel-DNA's <see cref="ExcelEmpty"/>
-    /// and <see cref="ExcelMissing"/> sentinels with <see langword="null"/>
-    /// so the cross-platform preflight sees a clean snapshot.
-    /// <see cref="ExcelError"/> is preserved — an error cell is content
-    /// the user might still care about, and a paste over it is destructive
-    /// in the same way as a paste over a number.</summary>
+    /// <summary>Replace Excel-DNA's <see cref="ExcelEmpty"/> / <see cref="ExcelMissing"/>
+    /// sentinels with null so the cross-platform <see cref="PastePreflight"/> sees a
+    /// clean snapshot. <see cref="ExcelError"/> is preserved — an error cell is still
+    /// content a paste would destroy.</summary>
     private static object? StripExcelSentinels(object? value2)
     {
         if (value2 is null) return null;
@@ -240,51 +186,12 @@ public static class PasteService
                 for (int j = 0; j < width; j++)
                 {
                     var cell = arr[r0 + i, c0 + j];
-                    cleaned[i, j] = (cell is ExcelEmpty || cell is ExcelMissing)
-                        ? null
-                        : cell;
+                    cleaned[i, j] = (cell is ExcelEmpty || cell is ExcelMissing) ? null : cell;
                 }
             return cleaned;
         }
 
         return value2;
-    }
-
-    /// <summary>Reshape a 1-D vector into an N×1 column (a 2-D array) so a
-    /// vertical paste flows through the same table-write path as any other
-    /// 2-D payload.</summary>
-    private static object?[,] ToColumn(object?[] vector)
-    {
-        var column = new object?[vector.Length, 1];
-        for (int i = 0; i < vector.Length; i++)
-            column[i, 0] = vector[i];
-        return column;
-    }
-
-    /// <summary>Write a decoded Arrow payload into the resolved target
-    /// range. Mirrors the previous write semantics: a 2-D
-    /// <c>object?[,]</c> sets <paramref name="targetRange"/>'s
-    /// <c>Value2</c> directly (the caller has already sized the range to
-    /// the payload's footprint), a 1-D <c>object?[]</c> writes as a row,
-    /// a scalar drops into the top-left cell.</summary>
-    private static void WriteToRange(dynamic targetRange, object decoded)
-    {
-        switch (decoded)
-        {
-            case object?[,] table:
-                targetRange.Value2 = table;
-                return;
-            case object?[] vector:
-            {
-                var grid = new object?[1, vector.Length];
-                for (int i = 0; i < vector.Length; i++) grid[0, i] = vector[i];
-                targetRange.Value2 = grid;
-                return;
-            }
-            default:
-                targetRange.Value2 = decoded;
-                return;
-        }
     }
 
     private static void Warn(string message)
