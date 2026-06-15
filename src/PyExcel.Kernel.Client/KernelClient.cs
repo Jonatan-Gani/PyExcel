@@ -33,6 +33,14 @@ namespace PyExcel.Kernel.Client;
 /// </summary>
 public sealed class KernelClient
 {
+    // After a cancel is requested, how long to wait for the kernel to honour it
+    // before forcibly killing the child to unblock the run. The kernel replies
+    // to a CANCEL — cooperatively, or by abandoning a non-cooperative worker —
+    // within a fraction of a second, so this only fires for a kernel so wedged
+    // it can't reply at all (a CPU-bound loop pinning the GIL). Comfortably
+    // longer than the kernel's own cancel grace so the clean path wins first.
+    private const int HardCancelEscalationMs = 2_000;
+
     private readonly KernelSupervisor _supervisor;
 
     /// <summary>Fired for each PROGRESS frame received during a Run.</summary>
@@ -142,9 +150,26 @@ public sealed class KernelClient
 
         return Task.Run(() =>
         {
+            // Flips to 1 once Run returns, so the escalation timer below never
+            // kills a kernel that already finished.
+            var done = 0;
             using var reg = cancellationToken.Register(() =>
             {
                 try { Cancel(runId); } catch { /* best-effort */ }
+                // Hard-cancel escalation: if the kernel hasn't produced a
+                // terminal frame within the window, its worker is wedged in a
+                // way it can't reclaim (e.g. a CPU-bound loop holding the GIL,
+                // so even the supervisor can't run to reply). Kill the child so
+                // this Run unblocks (its blocked ReadFrame sees EOF) instead of
+                // waiting out the deadline; the host boots a fresh kernel next.
+                var supervisor = _supervisor;
+                Task.Delay(HardCancelEscalationMs).ContinueWith(_ =>
+                {
+                    if (Volatile.Read(ref done) == 0)
+                    {
+                        try { supervisor.KillChild(); } catch { /* best-effort */ }
+                    }
+                });
             });
             try
             {
@@ -155,6 +180,18 @@ public sealed class KernelClient
                 && string.Equals(ex.Code, "Cancelled", StringComparison.Ordinal))
             {
                 throw new OperationCanceledException(ex.Message, ex, cancellationToken);
+            }
+            catch (Exception ex) when (cancellationToken.IsCancellationRequested)
+            {
+                // The hard-cancel kill (or the kernel otherwise dying) tore the
+                // run down: the pipe broke and Run threw a transport/framing
+                // error. Surface it as a cancellation, not a failure.
+                throw new OperationCanceledException(
+                    "run cancelled; the kernel was terminated", ex, cancellationToken);
+            }
+            finally
+            {
+                Volatile.Write(ref done, 1);
             }
         }, cancellationToken);
     }

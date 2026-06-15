@@ -104,6 +104,28 @@ public class KernelSupervisorTests
             $"python child (pid {pid}) still alive after KernelSupervisor.Dispose");
     }
 
+    [Fact]
+    public void KillChild_Terminates_Process_And_Is_Idempotent()
+    {
+        var python = DiscoverPython();
+        var pythonPath = DiscoverEmbeddedPath();
+        Assert.False(string.IsNullOrEmpty(python), "python not found");
+        Assert.False(string.IsNullOrEmpty(pythonPath), "embedded path not found");
+
+        using var sup = KernelSupervisor.StartPython(python!, pythonPath!);
+        Assert.False(sup.Process.HasExited);
+
+        // The hard-cancel escalation kills the child to unblock a wedged run.
+        sup.KillChild();
+        Assert.True(sup.Process.WaitForExit(ShutdownTimeoutMs),
+            "child did not exit after KillChild");
+        Assert.True(sup.Process.HasExited);
+
+        // Idempotent: a second kill on an already-dead child is a safe no-op.
+        sup.KillChild();
+        Assert.True(sup.Process.HasExited);
+    }
+
     private static bool IsProcessAlive(int pid)
     {
         try
