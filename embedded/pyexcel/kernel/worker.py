@@ -160,17 +160,17 @@ def install_input_guard() -> None:
 # abs_path -> (mtime_seen_at_load, loaded_module)
 _module_cache: dict[str, Tuple[float, ModuleType]] = {}
 
-# Module-level per-job state. Only one job runs at a time per kernel, so a
-# single shared slot for each is sufficient — the supervisor calls
-# :func:`_begin_job` before dispatching and :func:`_end_job` afterwards.
-#
-# ``_current_cancel_event`` is set when a CANCEL frame arrives mid-run;
-# :func:`is_cancelled` reads it. ``_current_progress_sink`` is the callback
-# :func:`report_progress` forwards user progress updates to — the supervisor
-# wires it to a queue it drains onto the wire as PROGRESS frames.
-_current_cancel_event: Optional[threading.Event] = None
+# Per-job state, kept thread-local so it is scoped to the worker thread that
+# runs the job. Only one job runs at a time in the common case, but when a
+# cancelled, non-cooperative worker is abandoned (see
+# :func:`pyexcel.kernel.supervisor._run_with_cancellation`) the abandoned thread
+# keeps its own cancel-event/progress-sink — so when it eventually unblocks and
+# finishes it can't disturb the next job, which runs on a fresh worker thread
+# with its own slot. ``cancel_event`` is set when a CANCEL frame arrives mid-run
+# (:func:`is_cancelled` reads it); ``progress_sink`` is the callback
+# :func:`report_progress` forwards user progress updates to.
 ProgressSink = Callable[[Optional[float], str], None]
-_current_progress_sink: Optional[ProgressSink] = None
+_job_state = threading.local()
 
 
 class JobError(Exception):
@@ -211,7 +211,7 @@ def is_cancelled() -> bool:
     code ``"Cancelled"`` instead of ``RUN_RESULT``. Returns ``False`` when
     no job is in flight, so it's always safe to call.
     """
-    ev = _current_cancel_event
+    ev = getattr(_job_state, "cancel_event", None)
     return ev is not None and ev.is_set()
 
 
@@ -235,7 +235,7 @@ def report_progress(percent: Optional[float] = None, message: str = "") -> None:
     Calling this when no job is in flight is a safe no-op (mirrors
     :func:`is_cancelled`), so user modules can call it unconditionally.
     """
-    sink = _current_progress_sink
+    sink = getattr(_job_state, "progress_sink", None)
     if sink is None:
         return  # no job in flight — safe no-op
     pct = None if percent is None else float(percent)
@@ -251,18 +251,16 @@ def _begin_job(
     Called by :mod:`pyexcel.kernel.supervisor` immediately before dispatching
     ``run_job`` on the worker thread. Not part of the user-facing surface.
     """
-    global _current_cancel_event, _current_progress_sink
-    _current_cancel_event = event
-    _current_progress_sink = progress_sink
+    _job_state.cancel_event = event
+    _job_state.progress_sink = progress_sink
 
 
 def _end_job() -> None:
     """Clear the per-job cancellation Event + progress sink after the worker
     thread finishes, so a later out-of-band :func:`report_progress` /
     :func:`is_cancelled` call is an inert no-op."""
-    global _current_cancel_event, _current_progress_sink
-    _current_cancel_event = None
-    _current_progress_sink = None
+    _job_state.cancel_event = None
+    _job_state.progress_sink = None
 
 
 def run_job(

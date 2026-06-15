@@ -238,6 +238,13 @@ public static class RangeRunner
                 if (capturedOutput.Length > 0)
                     ShowOutput(outputDisplay, capturedOutput);
             }
+            catch (OperationCanceledException)
+            {
+                // The user cancelled from the progress dialog — expected, not a
+                // failure. The progress form closes in the finally; don't pop an
+                // error dialog, just note it in the log.
+                Warn("Run Python: run cancelled.");
+            }
             catch (KernelException kex)
             {
                 var record = new KernelErrorRecord(
