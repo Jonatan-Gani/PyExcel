@@ -546,7 +546,10 @@ public class PyExcelRibbon : ExcelRibbon
                 // the user dismisses it — a Python traceback shouldn't just scroll
                 // by in the log window where it's easy to miss.
                 errorDisplay: message =>
-                    ErrorDisplayForm.Open(ExcelWindowOwner(), "PyExcel — Run failed", message));
+                    ErrorDisplayForm.Open(ExcelWindowOwner(), "PyExcel — Run failed", message),
+                // When the script returns a 1-D list into a single-cell Output, ask
+                // whether to spill it across a row or down a column.
+                orientationChooser: () => OrientationForm.Prompt(ExcelWindowOwner()));
         }
         catch (Exception ex)
         {

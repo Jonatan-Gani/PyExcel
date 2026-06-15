@@ -67,10 +67,15 @@ public static class RangeRunner
     /// traceback, a read/write fault, …) so the failure stays on screen until
     /// the user closes it instead of scrolling past in the log window. When
     /// null, failures are only written to <see cref="LogDisplay"/> as before.</param>
+    /// <param name="orientationChooser">Optional callback (invoked on Excel's main
+    /// thread) asked which way a 1-D list result should spill when the Output range
+    /// is a single cell, where the direction is ambiguous. Returns null to cancel the
+    /// write. When null (no UI), a 1-D list into a single cell defaults to a row.</param>
     public static void RunActiveScript(
         WorkbookState state,
         Func<IRunProgressSink>? progressFactory = null,
-        Action<string>? errorDisplay = null)
+        Action<string>? errorDisplay = null,
+        Func<ListOrientation?>? orientationChooser = null)
     {
         if (state is null) throw new ArgumentNullException(nameof(state));
 
@@ -173,7 +178,7 @@ public static class RangeRunner
                 }
                 ExcelAsyncUtil.QueueAsMacro(() =>
                 {
-                    try { WriteResult(outputAddress, result); }
+                    try { WriteResult(outputAddress, result, orientationChooser); }
                     catch (Exception ex)
                     {
                         var message = $"Run Python: failed to write the output range — {ex.Message}";
@@ -323,12 +328,13 @@ public static class RangeRunner
         return value;
     }
 
-    /// <summary>Write a decoded result into the output range. A table
-    /// result resizes the anchor to its dimensions; a scalar drops into
-    /// the top-left cell. A <c>None</c> return writes nothing. A chart
-    /// spec builds a native chart anchored at the output range; a chart
-    /// image embeds as a picture there.</summary>
-    private static void WriteResult(string outputAddress, object result)
+    /// <summary>Write a decoded result into the output range. A 2-D table resizes
+    /// the anchor to its dimensions; a 1-D list spills as a row or column (see
+    /// <see cref="WriteVector"/>); a scalar drops into the top-left cell. A
+    /// <c>None</c> return writes nothing. A chart spec builds a native chart anchored
+    /// at the output range; a chart image embeds as a picture there.</summary>
+    private static void WriteResult(
+        string outputAddress, object result, Func<ListOrientation?>? orientationChooser)
     {
         if (ReferenceEquals(result, PyRun.EmptyResult)) return;
 
@@ -373,10 +379,81 @@ public static class RangeRunner
             dynamic target = anchor.Resize[rows, cols];
             target.Value2 = table;
         }
+        else if (result is object?[] vector)
+        {
+            WriteVector(anchor, vector, orientationChooser);
+        }
         else
         {
             anchor.Value2 = result;
         }
+    }
+
+    /// <summary>Spill a 1-D list result into the output range, choosing its
+    /// direction from the range's shape (<see cref="OrientationResolver"/>):
+    /// <list type="bullet">
+    ///   <item>a single row or column fixes the direction;</item>
+    ///   <item>a single cell is ambiguous, so the injected
+    ///     <paramref name="orientationChooser"/> asks the user — defaulting to a row
+    ///     when no chooser is wired, and aborting the write (leaving the sheet
+    ///     untouched) when the user dismisses the prompt;</item>
+    ///   <item>a 2-D block target is rejected — a list can't fill it unambiguously —
+    ///     by throwing, which the caller surfaces as a clean run-failure message.</item>
+    /// </list>
+    /// The list spills its own length from the anchor's top-left in the chosen
+    /// direction; the target range only disambiguates which way.</summary>
+    private static void WriteVector(
+        dynamic anchor, object?[] vector, Func<ListOrientation?>? orientationChooser)
+    {
+        if (vector.Length == 0) return;
+
+        int rows = (int)anchor.Rows.Count;
+        int cols = (int)anchor.Columns.Count;
+        var resolution = OrientationResolver.Resolve(rows, cols);
+
+        if (resolution.IsInvalid)
+            throw new InvalidOperationException(
+                "the result is a 1-D list but the Output range is a 2-D block. " +
+                "Point Output at a single cell, a single row, or a single column.");
+
+        ListOrientation orientation;
+        if (resolution.Ask)
+        {
+            var chosen = orientationChooser?.Invoke();
+            if (orientationChooser is not null && chosen is null)
+            {
+                // The user dismissed the direction prompt — leave the sheet alone.
+                Warn("Run Python: write cancelled — no list direction chosen.");
+                return;
+            }
+            orientation = chosen ?? ListOrientation.Horizontal;
+        }
+        else
+        {
+            orientation = resolution.Orientation;
+        }
+
+        object?[,] grid = orientation == ListOrientation.Vertical
+            ? ToColumn(vector)
+            : ToRow(vector);
+        dynamic target = anchor.Resize[grid.GetLength(0), grid.GetLength(1)];
+        target.Value2 = grid;
+    }
+
+    /// <summary>Reshape a 1-D vector into a 1×N row.</summary>
+    private static object?[,] ToRow(object?[] vector)
+    {
+        var grid = new object?[1, vector.Length];
+        for (int i = 0; i < vector.Length; i++) grid[0, i] = vector[i];
+        return grid;
+    }
+
+    /// <summary>Reshape a 1-D vector into an N×1 column.</summary>
+    private static object?[,] ToColumn(object?[] vector)
+    {
+        var grid = new object?[vector.Length, 1];
+        for (int i = 0; i < vector.Length; i++) grid[i, 0] = vector[i];
+        return grid;
     }
 
     // -------------------------------------------------------------------------
