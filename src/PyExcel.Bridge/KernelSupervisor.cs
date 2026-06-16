@@ -255,6 +255,19 @@ public sealed class KernelSupervisor : IDisposable
         }
     }
 
+    /// <summary>
+    /// Force-kill the kernel child process <em>without</em> tearing down this
+    /// supervisor's pipe/transport. Used by the hard-cancel escalation in
+    /// <c>PyExcel.Kernel.Client.KernelClient</c>: killing the child closes its
+    /// pipe end, so an in-flight <c>ReadFrame</c> waiting on a wedged kernel
+    /// (one whose worker can't be reclaimed cooperatively — e.g. a CPU-bound
+    /// loop pinning the GIL) sees EOF and returns promptly instead of blocking
+    /// to the deadline. The supervisor is defunct afterwards; the owning
+    /// <c>KernelHost</c> boots a fresh one on next use. Best-effort and
+    /// idempotent — safe to call on an already-dead child.
+    /// </summary>
+    public void KillChild() => TryKill(_process);
+
     public void Dispose()
     {
         if (_disposed) return;

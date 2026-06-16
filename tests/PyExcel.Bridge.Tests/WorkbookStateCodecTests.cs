@@ -83,6 +83,26 @@ public class WorkbookStateCodecTests
     }
 
     [Fact]
+    public void Roundtrip_KeepOutputOpen_DefaultsTrueAndFalseSurvives()
+    {
+        var original = WorkbookState.Empty("wb.xlsx") with
+        {
+            Actions = new[]
+            {
+                new RibbonAction("default", "s.py", "A1", "B1"),                 // → true
+                new RibbonAction("quiet", "s.py", "A1", "B1",
+                    Kwargs: null, KeepOutputOpen: false),                        // → false
+            },
+        };
+
+        var doc = WorkbookStateCodec.Serialize(original);
+        var restored = WorkbookStateCodec.Deserialize(doc, "wb.xlsx");
+
+        Assert.True(restored.Actions[0].KeepOutputOpen);
+        Assert.False(restored.Actions[1].KeepOutputOpen);
+    }
+
+    [Fact]
     public void Roundtrip_MultipleActions_PreservesOrder()
     {
         var original = WorkbookState.Empty("wb.xlsx") with

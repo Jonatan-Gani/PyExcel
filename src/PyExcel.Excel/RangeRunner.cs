@@ -5,6 +5,7 @@ using System.Diagnostics;
 using System.Threading.Tasks;
 using ExcelDna.Integration;
 using ExcelDna.Logging;
+using PyExcel.Bridge;
 using PyExcel.Kernel.Client;
 using PyExcel.State;
 
@@ -71,13 +72,26 @@ public static class RangeRunner
     /// thread) asked which way a 1-D list result should spill when the Output range
     /// is a single cell, where the direction is ambiguous. Returns null to cancel the
     /// write. When null (no UI), a 1-D list into a single cell defaults to a row.</param>
+    /// <param name="outputDisplay">Optional sink that shows the script's captured
+    /// <c>print()</c> output to the user after a <em>successful</em> run, when the
+    /// selected action's <see cref="RibbonAction.KeepOutputOpen"/> is true (the
+    /// default) and the run actually printed something. Invoked on Excel's main
+    /// thread with the captured text. A failed run is surfaced through
+    /// <paramref name="errorDisplay"/> instead and is unaffected by this. When null,
+    /// no output window is shown (output still goes to <see cref="LogDisplay"/>).</param>
     public static void RunActiveScript(
         WorkbookState state,
         Func<IRunProgressSink>? progressFactory = null,
         Action<string>? errorDisplay = null,
-        Func<ListOrientation?>? orientationChooser = null)
+        Func<ListOrientation?>? orientationChooser = null,
+        Action<string>? outputDisplay = null)
     {
         if (state is null) throw new ArgumentNullException(nameof(state));
+
+        // Whether to keep the script's console output on screen after a
+        // successful run. Carried by the selected action; defaults to true for
+        // an ad-hoc run with no action selected.
+        bool keepOutputOpen = state.SelectedAction?.KeepOutputOpen ?? true;
 
         if (string.IsNullOrWhiteSpace(state.SelectedScript))
         {
@@ -150,8 +164,34 @@ public static class RangeRunner
         // --- background thread: the kernel exchange (may block) -----------
         Task.Run(() =>
         {
+            // Declared out here so the finally can unsubscribe regardless of
+            // where the try exits.
+            EventHandler<KernelOutputEventArgs>? captureHandler = null;
+            var outputLock = new object();
+            System.Text.StringBuilder? outputBuffer =
+                keepOutputOpen && outputDisplay is not null
+                    ? new System.Text.StringBuilder()
+                    : null;
             try
             {
+                // Capture the run's console output (stdout/stderr) for the
+                // post-run output window. The supervisor drains the child's
+                // streams on background threads, so accumulate under a lock.
+                // Best-effort: a line still in flight when the run returns may
+                // miss the snapshot — it's already in the log window too.
+                if (outputBuffer is not null)
+                {
+                    // Capture a non-null local for the closure — the compiler
+                    // can't prove the captured field stays non-null inside a
+                    // lambda, and warnings are errors here.
+                    System.Text.StringBuilder buffer = outputBuffer;
+                    captureHandler = (_, ev) =>
+                    {
+                        lock (outputLock) buffer.AppendLine(ev.Text);
+                    };
+                    KernelHost.Default.Supervisor.OutputReceived += captureHandler;
+                }
+
                 var result = progress is not null
                     ? PyRun.ExecuteManyAsync(
                         script: script,
@@ -169,25 +209,41 @@ public static class RangeRunner
                         workbookDirectory: workbookDir,
                         archive: archiveContext);
 
+                // Snapshot the captured output before the finally unsubscribes.
+                string capturedOutput = "";
+                if (outputBuffer is not null)
+                    lock (outputLock) capturedOutput = outputBuffer.ToString();
+
                 // --- main thread: write the result back ------------------
-                if (outputAddress is null)
+                if (outputAddress is not null)
                 {
-                    // Nothing to write into; the script presumably has side
-                    // effects or the user only wanted to exercise it.
-                    return;
-                }
-                ExcelAsyncUtil.QueueAsMacro(() =>
-                {
-                    try { WriteResult(outputAddress, result, orientationChooser); }
-                    catch (Exception ex)
+                    ExcelAsyncUtil.QueueAsMacro(() =>
                     {
-                        var message = $"Run Python: failed to write the output range — {ex.Message}";
-                        Fail(message, ex);
-                        // Already on the main thread here (QueueAsMacro), so show
-                        // the modal inline rather than re-queuing it.
-                        try { errorDisplay?.Invoke(message); } catch { /* best-effort */ }
-                    }
-                });
+                        try { WriteResult(outputAddress, result, orientationChooser); }
+                        catch (Exception ex)
+                        {
+                            var message = $"Run Python: failed to write the output range — {ex.Message}";
+                            Fail(message, ex);
+                            // Already on the main thread here (QueueAsMacro), so show
+                            // the modal inline rather than re-queuing it.
+                            try { errorDisplay?.Invoke(message); } catch { /* best-effort */ }
+                        }
+                    });
+                }
+
+                // Keep the script's console output on screen after a successful
+                // run when the action opted in and it printed something. A failed
+                // run is surfaced by the catch blocks below, so this path is
+                // success-only by construction.
+                if (capturedOutput.Length > 0)
+                    ShowOutput(outputDisplay, capturedOutput);
+            }
+            catch (OperationCanceledException)
+            {
+                // The user cancelled from the progress dialog — expected, not a
+                // failure. The progress form closes in the finally; don't pop an
+                // error dialog, just note it in the log.
+                Warn("Run Python: run cancelled.");
             }
             catch (KernelException kex)
             {
@@ -221,6 +277,8 @@ public static class RangeRunner
             }
             finally
             {
+                if (captureHandler is not null)
+                    KernelHost.Default.Supervisor.OutputReceived -= captureHandler;
                 if (progressHandler is not null)
                     KernelHost.Default.Client.ProgressReceived -= progressHandler;
                 progress?.Complete();
@@ -245,6 +303,24 @@ public static class RangeRunner
             });
         }
         catch { /* queueing itself failed — the error is still in LogDisplay */ }
+    }
+
+    /// <summary>Show a successful run's captured console output in the injected
+    /// sink, marshalled onto Excel's main thread (the output viewer is
+    /// COM/WinForms-affine). No-op when no sink was supplied. Best-effort: the
+    /// same output is always in <see cref="LogDisplay"/> regardless.</summary>
+    private static void ShowOutput(Action<string>? outputDisplay, string text)
+    {
+        if (outputDisplay is null) return;
+        try
+        {
+            ExcelAsyncUtil.QueueAsMacro(() =>
+            {
+                try { outputDisplay(text); }
+                catch { /* best-effort surface */ }
+            });
+        }
+        catch { /* queueing itself failed — the output is still in LogDisplay */ }
     }
 
     /// <summary>Best-effort push into the per-workbook last-error slot.

@@ -90,6 +90,12 @@ public static class WorkbookProfileCodec
             new XAttribute("input", a.Input),
             new XAttribute("output", a.Output));
 
+        // Optional, written only when it differs from the default (true), so
+        // existing actions serialise byte-identically and a no-op save doesn't
+        // churn the workbook. Absent on read → true (see ParseAction).
+        if (!a.KeepOutputOpen)
+            el.Add(new XAttribute("keep-output-open", XmlConvert.ToString(false)));
+
         if (a.Kwargs is { Count: > 0 })
         {
             var kwargs = new XElement(Ns + "kwargs");
@@ -206,7 +212,8 @@ public static class WorkbookProfileCodec
                 kwargs[RequireAttribute(kv, "key")] = RequireAttribute(kv, "value");
         }
 
-        return new RibbonAction(name, script, input, output, kwargs);
+        return new RibbonAction(
+            name, script, input, output, kwargs, ParseKeepOutputOpen(el));
     }
 
     // -------------------------------------------------------------------------
@@ -232,5 +239,17 @@ public static class WorkbookProfileCodec
         if (value is null) throw new FormatException("missing <enabled> element");
         try { return XmlConvert.ToBoolean(value.Trim().ToLowerInvariant()); }
         catch (FormatException ex) { throw new FormatException($"invalid <enabled> value '{value}'", ex); }
+    }
+
+    /// <summary>Read an action's optional <c>keep-output-open</c> attribute,
+    /// defaulting to <see langword="true"/> when it's absent (a document written
+    /// before this field existed) or malformed — so the toggle is forgiving and
+    /// never breaks loading a workbook.</summary>
+    private static bool ParseKeepOutputOpen(XElement el)
+    {
+        var attr = el.Attribute("keep-output-open");
+        if (attr is null) return true;
+        try { return XmlConvert.ToBoolean(attr.Value.Trim().ToLowerInvariant()); }
+        catch (FormatException) { return true; }
     }
 }

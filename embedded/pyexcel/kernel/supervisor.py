@@ -33,6 +33,7 @@ from __future__ import annotations
 import queue
 import sys
 import threading
+import time
 from typing import NoReturn, Optional
 
 from . import worker
@@ -57,6 +58,14 @@ _CANCEL_POLL_INTERVAL_S = 0.05
 # this guard rail exists to keep an unresponsive script from wedging the
 # supervisor.
 _WORKER_JOIN_TIMEOUT_S = 5.0
+
+# After a CANCEL arrives, how long to let the worker wind down cooperatively
+# before giving up on it. A cooperative script that polls
+# :func:`pyexcel.kernel.is_cancelled` returns well within this; a
+# non-cooperative one (blocked in sleep/IO, or ignoring the flag) is abandoned
+# once it lapses so the host gets a prompt ERROR/Cancelled instead of waiting
+# out its full run deadline. Kept short so Cancel feels responsive.
+_CANCEL_GRACE_S = 0.5
 
 
 def _send(
@@ -190,6 +199,7 @@ def _run_with_cancellation(transport: FrameTransport, request: Frame) -> None:
     progress_queue: "queue.Queue[tuple[Optional[float], str]]" = queue.Queue()
     outcome_holder: list[Optional[worker.JobOutcome]] = [None]
     run_id = request.meta.get("run_id", "") or ""
+    started = time.monotonic()
 
     def progress_sink(percent: Optional[float], message: str) -> None:
         # Runs on the worker thread; only enqueues. The main loop does the
@@ -206,14 +216,23 @@ def _run_with_cancellation(transport: FrameTransport, request: Frame) -> None:
     t = threading.Thread(target=worker_main, daemon=True, name="pyexcel-worker")
     t.start()
 
-    # Pump inbound frames while the worker runs. CANCEL → flip the flag;
-    # PING → reply with PONG; anything else (including a second RUN_REQUEST,
-    # which the host shouldn't send while a run is in flight) → ignore with
-    # a log so we don't deadlock waiting for a frame we can't service yet.
-    # Each tick also flushes queued progress so updates stream during the run
-    # rather than bunching up at the end.
+    # Pump inbound frames while the worker runs. CANCEL → flip the flag and
+    # start a short grace timer; PING → reply with PONG; anything else
+    # (including a second RUN_REQUEST, which the host shouldn't send while a run
+    # is in flight) → ignore with a log so we don't deadlock waiting for a frame
+    # we can't service yet. Each tick also flushes queued progress so updates
+    # stream during the run rather than bunching up at the end.
+    #
+    # Once cancelled, we wait only until ``cancel_deadline`` for the worker to
+    # wind down. A cooperative worker returns before then (and the loop exits on
+    # ``t.is_alive()``); a non-cooperative one (blocked in sleep/IO, or ignoring
+    # the flag) would otherwise pin this loop until the host's run deadline, so
+    # we stop waiting and abandon it below.
+    cancel_deadline: Optional[float] = None
     while t.is_alive():
         _flush_progress(transport, progress_queue, run_id)
+        if cancel_deadline is not None and time.monotonic() >= cancel_deadline:
+            break
         if not transport.has_data(_CANCEL_POLL_INTERVAL_S):
             continue
         try:
@@ -228,6 +247,8 @@ def _run_with_cancellation(transport: FrameTransport, request: Frame) -> None:
 
         if f.type is FrameType.CANCEL:
             cancel_event.set()
+            if cancel_deadline is None:
+                cancel_deadline = time.monotonic() + _CANCEL_GRACE_S
         elif f.type is FrameType.PING:
             _send(transport, FrameType.PONG, {"nonce": f.meta.get("nonce", "")})
         else:
@@ -236,18 +257,40 @@ def _run_with_cancellation(transport: FrameTransport, request: Frame) -> None:
                 file=sys.stderr,
             )
 
+    # If the worker is still running, we left the pump because a cancel grace
+    # lapsed (or the peer dropped). We can't safely interrupt a Python thread,
+    # so abandon it: it's a daemon and its job state is thread-local, so a late
+    # finish can't disturb the next run. Reply now rather than blocking on a
+    # join that may never complete and leaving the host to time out.
+    if t.is_alive():
+        _flush_progress(transport, progress_queue, run_id)
+        _send(
+            transport,
+            FrameType.ERROR,
+            {
+                "run_id": run_id,
+                "code": "Cancelled",
+                "type": "CancellationRequested",
+                "message": (
+                    "run cancelled; the worker did not stop within "
+                    f"{_CANCEL_GRACE_S}s and was abandoned"
+                ),
+                "traceback": "",
+                "duration_ms": int(round((time.monotonic() - started) * 1000)),
+            },
+        )
+        return
+
     t.join(timeout=_WORKER_JOIN_TIMEOUT_S)
     # Flush progress enqueued in the worker's final stretch before the loop
     # last polled, so every PROGRESS frame precedes the terminal reply.
     _flush_progress(transport, progress_queue, run_id)
     outcome = outcome_holder[0]
 
-    # Three terminal states:
-    #   (a) worker returned normally + no cancel → forward the outcome as-is.
-    #   (b) worker returned normally + cancel flag set → override with Cancelled.
-    #   (c) worker did not return within the join timeout → return an error.
-    #       Note we don't (and can't safely) interrupt the worker thread — it
-    #       leaks until process exit. Worth surfacing rather than wedging.
+    # Three terminal states for a worker that finished:
+    #   (a) returned normally + no cancel → forward the outcome as-is.
+    #   (b) returned normally + cancel flag set → override with Cancelled.
+    #   (c) did not return within the join timeout → WorkerHung error.
     if outcome is None:
         reply_meta = {
             "run_id": run_id,
@@ -278,6 +321,12 @@ def _run_with_cancellation(transport: FrameTransport, request: Frame) -> None:
 
 def run(pipe_name: str, *, connect_timeout_s: float = 5.0) -> int:
     """Connect, handshake, and run the main loop. Returns the process exit code."""
+    # Disable stdin before any user code can run: the kernel has no console, so
+    # input() / sys.stdin reads would block the worker thread forever and the
+    # host would only see a "no frame received" timeout. With the guard they
+    # fail fast with a clear, surfaced error instead.
+    worker.install_input_guard()
+
     try:
         transport = connect(pipe_name, connect_timeout_s=connect_timeout_s)
     except TransportError as exc:

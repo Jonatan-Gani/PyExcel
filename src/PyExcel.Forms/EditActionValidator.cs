@@ -64,6 +64,9 @@ public static class EditActionValidator
     /// current name — so renaming the action onto its own name (i.e.
     /// leaving the name alone) is not flagged as a duplicate. Pass null
     /// in Add mode.</param>
+    /// <param name="keepOutputOpen">Whether a successful run leaves the
+    /// run-output window open (default true). Carried straight onto the
+    /// built <see cref="RibbonAction"/>; not otherwise validated.</param>
     public static EditActionValidationResult Validate(
         string? name,
         string? script,
@@ -71,7 +74,8 @@ public static class EditActionValidator
         string? output,
         IReadOnlyDictionary<string, string>? kwargs,
         IEnumerable<string> existingActionNames,
-        string? originalName = null)
+        string? originalName = null,
+        bool keepOutputOpen = true)
     {
         if (existingActionNames is null)
             throw new ArgumentNullException(nameof(existingActionNames));
@@ -120,7 +124,8 @@ public static class EditActionValidator
         }
 
         var action = new RibbonAction(
-            trimmedName, trimmedScript, trimmedInput, trimmedOutput, actionKwargs);
+            trimmedName, trimmedScript, trimmedInput, trimmedOutput, actionKwargs,
+            keepOutputOpen);
         return EditActionValidationResult.Ok(action);
     }
 }

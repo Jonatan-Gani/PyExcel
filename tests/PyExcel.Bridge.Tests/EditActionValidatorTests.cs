@@ -69,6 +69,27 @@ public class EditActionValidatorTests
         Assert.Null(result.Action!.Kwargs);
     }
 
+    [Fact]
+    public void Validate_KeepOutputOpen_DefaultsTrue()
+    {
+        var result = EditActionValidator.Validate(
+            "F", "m.py", "A1", "B1", NoKwargs, NoExisting);
+
+        Assert.True(result.IsValid);
+        Assert.True(result.Action!.KeepOutputOpen);
+    }
+
+    [Fact]
+    public void Validate_KeepOutputOpenFalse_CarriedOntoAction()
+    {
+        var result = EditActionValidator.Validate(
+            "F", "m.py", "A1", "B1", NoKwargs, NoExisting,
+            originalName: null, keepOutputOpen: false);
+
+        Assert.True(result.IsValid);
+        Assert.False(result.Action!.KeepOutputOpen);
+    }
+
     // -------------------------------------------------------------------------
     // Required-field validation
     // -------------------------------------------------------------------------

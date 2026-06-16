@@ -421,3 +421,72 @@ def test_end_job_clears_sink_so_later_calls_are_noops():
     worker.report_progress(90, "after")  # sink gone — must not be recorded
 
     assert seen == [(10.0, "during")]
+
+
+# -----------------------------------------------------------------------------
+# Standard-input guard
+# -----------------------------------------------------------------------------
+
+
+@pytest.fixture
+def _input_guard():
+    """Install the input guard for one test and restore process globals after,
+    so the session-wide ``builtins.input`` / ``sys.stdin`` (and pytest's own
+    capture) aren't left mutated."""
+    import builtins
+    import sys
+
+    saved_input, saved_stdin = builtins.input, sys.stdin
+    worker._input_guard_installed = False
+    worker.install_input_guard()
+    try:
+        yield
+    finally:
+        builtins.input = saved_input
+        sys.stdin = saved_stdin
+        worker._input_guard_installed = False
+
+
+def test_input_call_fails_fast_with_explanation(tmp_path, _input_guard):
+    script = _write_script(tmp_path, "asks.py", """
+        def transform(x):
+            return input()
+    """)
+    out = run_job({"run_id": "r1", "script": str(script)}, [arrow_io.encode(1)])
+
+    assert not out.success
+    assert out.meta["type"] == "PyExcelInputError"
+    assert "input() is disabled" in out.meta["message"]
+    assert out.meta["run_id"] == "r1"
+
+
+def test_stdin_read_fails_fast(tmp_path, _input_guard):
+    script = _write_script(tmp_path, "reads.py", """
+        import sys
+
+        def transform(x):
+            return sys.stdin.readline()
+    """)
+    out = run_job({"run_id": "r2", "script": str(script)}, [arrow_io.encode(1)])
+
+    assert not out.success
+    assert out.meta["type"] == "PyExcelInputError"
+
+
+def test_install_input_guard_is_idempotent(_input_guard):
+    # A second install must not raise or re-wrap; input() stays blocked.
+    worker.install_input_guard()
+    with pytest.raises(worker.PyExcelInputError):
+        input()
+
+
+def test_normal_script_unaffected_by_guard(tmp_path, _input_guard):
+    # The guard only touches stdin — ordinary transforms still run.
+    script = _write_script(tmp_path, "addone.py", """
+        def transform(x):
+            return x + 1
+    """)
+    out = run_job({"run_id": "r3", "script": str(script)}, [arrow_io.encode(41)])
+
+    assert out.success
+    assert arrow_io.decode(out.payloads[0]) == 42

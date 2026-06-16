@@ -109,6 +109,12 @@ public static class WorkbookStateCodec
             new XAttribute("input", a.Input),
             new XAttribute("output", a.Output));
 
+        // Optional, written only when it differs from the default (true), so an
+        // unchanged action serialises byte-identically and a no-op save doesn't
+        // churn the part. Absent on read → true (see DeserializeAction).
+        if (!a.KeepOutputOpen)
+            el.Add(new XAttribute("keep-output-open", XmlConvert.ToString(false)));
+
         if (a.Kwargs is { Count: > 0 })
         {
             var kwargs = new XElement(Ns + "kwargs");
@@ -238,7 +244,19 @@ public static class WorkbookStateCodec
             }
         }
 
-        return new RibbonAction(name, script, input, output, kwargs);
+        return new RibbonAction(
+            name, script, input, output, kwargs, ParseKeepOutputOpen(el));
+    }
+
+    /// <summary>Read an action's optional <c>keep-output-open</c> attribute,
+    /// defaulting to <see langword="true"/> when absent (a part written before
+    /// this field existed) or malformed — so the toggle never breaks a load.</summary>
+    private static bool ParseKeepOutputOpen(XElement el)
+    {
+        var attr = el.Attribute("keep-output-open");
+        if (attr is null) return true;
+        try { return XmlConvert.ToBoolean(attr.Value.Trim().ToLowerInvariant()); }
+        catch (FormatException) { return true; }
     }
 
     private static string RequireAttribute(XElement el, string name)

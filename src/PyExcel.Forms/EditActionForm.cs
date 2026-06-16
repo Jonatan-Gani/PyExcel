@@ -31,6 +31,7 @@ public sealed class EditActionForm : ScaledForm
     private readonly RangeListEditor _inputEditor;
     private readonly RangeListEditor _outputEditor;
     private readonly TextBox _kwargsBox;
+    private readonly CheckBox _keepOutputOpenCheck;
     private readonly Label _errorLabel;
 
     private readonly IReadOnlyList<string> _existingActionNames;
@@ -85,7 +86,7 @@ public sealed class EditActionForm : ScaledForm
         MaximizeBox = false;
         MinimizeBox = false;
         ShowInTaskbar = false;
-        ClientSize = new Size(440, 500);
+        ClientSize = new Size(440, 540);
         Font = SystemFonts.MessageBoxFont;
 
         const int labelX = 12;
@@ -149,6 +150,22 @@ public sealed class EditActionForm : ScaledForm
         AddLabel("one name=value per line", fieldX, y + 58, dim: true);
         y += 84;
 
+        // After a successful run, keep the captured print() output on screen so
+        // the user can read it. A failed run always keeps its error window open,
+        // so this only governs the success case.
+        _keepOutputOpenCheck = new CheckBox
+        {
+            Text = "Keep output window open after a successful run",
+            Left = labelX,
+            Top = y,
+            Width = fieldX + fieldWidth - labelX,
+            Height = 22,
+            Checked = true,
+            TabIndex = 6,
+        };
+        Controls.Add(_keepOutputOpenCheck);
+        y += 30;
+
         _errorLabel = new Label
         {
             Left = labelX,
@@ -167,7 +184,7 @@ public sealed class EditActionForm : ScaledForm
             Left = ClientSize.Width - 178,
             Top = ClientSize.Height - 36,
             Width = 80,
-            TabIndex = 6,
+            TabIndex = 7,
         };
         saveButton.Click += OnSaveClick;
         Controls.Add(saveButton);
@@ -179,7 +196,7 @@ public sealed class EditActionForm : ScaledForm
             Left = ClientSize.Width - 92,
             Top = ClientSize.Height - 36,
             Width = 80,
-            TabIndex = 7,
+            TabIndex = 8,
         };
         Controls.Add(cancelButton);
 
@@ -191,6 +208,7 @@ public sealed class EditActionForm : ScaledForm
             _nameBox.Text = existing.Name;
             _scriptBox.SelectedItem = existing.Script;
             _kwargsBox.Text = KwargsText.Format(existing.Kwargs);
+            _keepOutputOpenCheck.Checked = existing.KeepOutputOpen;
         }
         _inputEditor.LoadFrom(existing?.Input);
         _outputEditor.LoadFrom(existing?.Output);
@@ -242,7 +260,8 @@ public sealed class EditActionForm : ScaledForm
             _outputEditor.ToBindingText(),
             kwargs,
             _existingActionNames,
-            _originalName);
+            _originalName,
+            _keepOutputOpenCheck.Checked);
 
         if (!result.IsValid)
         {

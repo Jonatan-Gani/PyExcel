@@ -55,6 +55,9 @@ public sealed class ProjectScaffolder
         "# A PyExcel action runs transform(inputs) and writes the returned dict\n" +
         "# of named results back to the sheet. Copy or edit this file, then pick\n" +
         "# it in the Action dialog.\n" +
+        "#\n" +
+        "# Note: scripts run in a kernel with no console — input() and reading\n" +
+        "# sys.stdin are disabled and raise an error. Read values from 'inputs'.\n" +
         "\n" +
         "from typing import Any, Dict\n" +
         "\n" +

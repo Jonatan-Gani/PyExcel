@@ -361,6 +361,83 @@ def test_kernel_cancel_during_long_run_returns_cancelled_error(tmp_path):
         server.close()
 
 
+def test_kernel_cancel_abandons_noncooperative_worker_promptly(tmp_path):
+    # A script that blocks in time.sleep and never checks is_cancelled(). The
+    # CANCEL can't be honoured cooperatively, so the kernel must abandon the
+    # worker after the grace period and reply ERROR/Cancelled promptly — not
+    # pin the run loop until the host's deadline (the "Cancel doesn't stop the
+    # timeout" report).
+    blocker = tmp_path / "blocker.py"
+    blocker.write_text(textwrap.dedent("""
+        import time
+
+        def transform():
+            time.sleep(30)  # never checks is_cancelled()
+            return "should-have-been-cancelled"
+    """))
+    addone = tmp_path / "addone.py"
+    addone.write_text(textwrap.dedent("""
+        def transform(x):
+            return x + 1
+    """))
+
+    pipe_name = "pyexcel-test-" + uuid.uuid4().hex
+    server = _Server(pipe_name)
+    proc = _spawn_kernel(pipe_name)
+
+    try:
+        server.accept(timeout_s=5.0)
+        server.send(FrameType.HELLO, {"protocol": PROTOCOL_VERSION})
+        _ = server.recv()
+
+        server._conn.sendall(  # type: ignore[union-attr]
+            encode_frame(
+                FrameType.RUN_REQUEST,
+                {"run_id": "blocker", "script": str(blocker)},
+            )
+        )
+
+        time.sleep(0.2)  # let the worker enter its blocking sleep
+        server.send(FrameType.CANCEL, {"run_id": "blocker"})
+
+        t0 = time.monotonic()
+        reply = server.recv()
+        elapsed = time.monotonic() - t0
+
+        assert reply.type is FrameType.ERROR, (
+            f"expected ERROR after CANCEL, got {reply.type.name}; meta={reply.meta!r}"
+        )
+        assert reply.meta["code"] == "Cancelled"
+        assert reply.meta["run_id"] == "blocker"
+        # Back within the grace + margin, not after the 30s sleep or the 5s
+        # worker-join timeout.
+        assert elapsed < 3.0, f"cancel took {elapsed:.2f}s; expected ~grace"
+
+        # The kernel stays usable after abandoning the (still-sleeping) worker:
+        # a fresh run completes normally.
+        server._conn.sendall(  # type: ignore[union-attr]
+            encode_frame(
+                FrameType.RUN_REQUEST,
+                {"run_id": "next", "script": str(addone)},
+                (arrow_io.encode(41),),
+            )
+        )
+        result = server.recv()
+        assert result.type is FrameType.RUN_RESULT, (
+            f"got {result.type.name}; meta={result.meta!r}"
+        )
+        assert arrow_io.decode(result.payloads[0]) == 42
+
+        server.send(FrameType.SHUTDOWN, {})
+        rc, _, err = _drain(proc, timeout_s=5.0)
+        assert rc == 0, f"kernel exited with {rc}; stderr={err!r}"
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait(timeout=2)
+        server.close()
+
+
 def test_kernel_unsolicited_cancel_returns_error_keeps_running():
     # CANCEL with no run in flight is a host/kernel race — the run finished
     # before CANCEL arrived. We acknowledge with ERROR(code="Cancelled")
