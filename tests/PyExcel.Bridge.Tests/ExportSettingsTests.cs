@@ -1,3 +1,4 @@
+using System.IO;
 using PyExcel.Excel;
 using PyExcel.State;
 using Xunit;
@@ -89,16 +90,19 @@ public class ExportSettingsTests
     {
         // A workbook configured before the structured defaults existed only has
         // the single ExportOutput path — split it so nothing is lost on upgrade.
+        const string legacyPath = "/data/exports/results.tsv";
         var state = WorkbookState.Empty("wb") with
         {
             ExportInput = "A1",
-            ExportOutput = "/data/exports/results.tsv",
+            ExportOutput = legacyPath,
         };
 
         var s = ExportSettings.FromState(state);
 
         Assert.Equal("A1", s.SourceRange);
-        Assert.Equal("/data/exports", s.Folder);
+        // GetDirectoryName normalises to the platform separator (back-slashes on
+        // Windows), so assert against it rather than a hard-coded forward-slash form.
+        Assert.Equal(Path.GetDirectoryName(legacyPath), s.Folder);
         Assert.Equal("results", s.BaseName);
         Assert.Equal(ExportFileType.Tsv, s.FileType);
         Assert.Equal(ExportTimestampStyle.None, s.Timestamp);
