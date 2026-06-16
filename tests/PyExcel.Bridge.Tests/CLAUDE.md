@@ -22,8 +22,8 @@ map value is "which area is tested where":
 - **CSV/TSV**: `CsvParserTests`, `CsvWriterTests`, `CsvCellFormatterTests`,
   `CsvCellTypeInferenceTests`.
 - **Import/Export/Paste planning + validation**: `ImportPlannerTests`,
-  `ExportPlannerTests`, `ExportBatchValidatorTests`, `EditIoValidatorTests`,
-  `PastePlannerTests`, `PastePreflightTests`.
+  `ExportPlannerTests`, `ExportSettingsTests`, `ExportSettingsPlannerTests`,
+  `EditIoValidatorTests`, `PastePlannerTests`, `PastePreflightTests`.
 - **State, codecs, persistence**: `WorkbookStateCodecTests`, `WorkbookProfileCodecTests`,
   `ProjectProfileTests`, `StateServiceTests`, `PerSheetStateTests`,
   `WorkbookStatePersistenceTests`, `WorkbookKeysTests`, `LegacyStateConverterTests`,

@@ -30,6 +30,10 @@ public sealed record WorkbookState(
     string? ImportOutput = null,
     string? ExportInput = null,
     string? ExportOutput = null,
+    string? ExportFolder = null,
+    string? ExportBaseName = null,
+    string? ExportFormat = null,
+    string? ExportTimestamp = null,
     string? PasteOutput = null,
     string? ProjectDir = null)
 {
@@ -49,6 +53,10 @@ public sealed record WorkbookState(
         ImportOutput: null,
         ExportInput: null,
         ExportOutput: null,
+        ExportFolder: null,
+        ExportBaseName: null,
+        ExportFormat: null,
+        ExportTimestamp: null,
         PasteOutput: null,
         ProjectDir: null);
 

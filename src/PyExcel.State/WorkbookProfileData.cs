@@ -66,6 +66,10 @@ public sealed record WorkbookProfileData
             ImportOutput = s.ImportOutput,
             ExportInput = s.ExportInput,
             ExportOutput = s.ExportOutput,
+            ExportFolder = s.ExportFolder,
+            ExportBaseName = s.ExportBaseName,
+            ExportFormat = s.ExportFormat,
+            ExportTimestamp = s.ExportTimestamp,
             PasteOutput = s.PasteOutput,
         };
         var sheets = new Dictionary<string, SheetProfile>(StringComparer.Ordinal);

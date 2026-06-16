@@ -236,6 +236,10 @@ public sealed class StateService
             ImportOutput = p.ImportOutput,
             ExportInput = p.ExportInput,
             ExportOutput = p.ExportOutput,
+            ExportFolder = p.ExportFolder,
+            ExportBaseName = p.ExportBaseName,
+            ExportFormat = p.ExportFormat,
+            ExportTimestamp = p.ExportTimestamp,
             PasteOutput = p.PasteOutput,
         };
     }
@@ -251,6 +255,10 @@ public sealed class StateService
         ImportOutput = s.ImportOutput,
         ExportInput = s.ExportInput,
         ExportOutput = s.ExportOutput,
+        ExportFolder = s.ExportFolder,
+        ExportBaseName = s.ExportBaseName,
+        ExportFormat = s.ExportFormat,
+        ExportTimestamp = s.ExportTimestamp,
         PasteOutput = s.PasteOutput,
     };
 
@@ -269,6 +277,10 @@ public sealed class StateService
            && a.ImportOutput == b.ImportOutput
            && a.ExportInput == b.ExportInput
            && a.ExportOutput == b.ExportOutput
+           && a.ExportFolder == b.ExportFolder
+           && a.ExportBaseName == b.ExportBaseName
+           && a.ExportFormat == b.ExportFormat
+           && a.ExportTimestamp == b.ExportTimestamp
            && a.PasteOutput == b.PasteOutput;
 
     // -------------------------------------------------------------------------
@@ -357,6 +369,25 @@ public sealed class StateService
 
     public void SetExportOutput(string key, string? value)
         => Update(key, s => s with { ExportOutput = value });
+
+    /// <summary>Write the whole export-defaults recipe (source range, folder, base
+    /// name, file-type token, timestamp-style token) in one atomic update, so the
+    /// Edit-Export / Export dialogs persist all of it with a single
+    /// <see cref="StateChanged"/> (one ribbon repaint) instead of field-by-field.
+    /// The string tokens are produced by <c>PyExcel.Excel.ExportSettings</c>;
+    /// keeping them as plain strings here avoids a layering dependency on the
+    /// Excel project.</summary>
+    public void SetExportDefaults(
+        string key, string? sourceRange, string? folder, string? baseName,
+        string? format, string? timestamp)
+        => Update(key, s => s with
+        {
+            ExportInput = sourceRange,
+            ExportFolder = folder,
+            ExportBaseName = baseName,
+            ExportFormat = format,
+            ExportTimestamp = timestamp,
+        });
 
     public void SetPasteOutput(string key, string? value)
         => Update(key, s => s with { PasteOutput = value });

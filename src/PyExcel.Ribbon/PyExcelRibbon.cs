@@ -1094,7 +1094,12 @@ public class PyExcelRibbon : ExcelRibbon
     }
 
     // -------------------------------------------------------------------------
-    // Export group
+    // Export group — Export opens the configurable export dialog seeded with the
+    // workbook's saved defaults; Edit configures and persists those defaults.
+    // Both edit one ExportSettings recipe (source range, destination folder, base
+    // name, file type, and an optional unique-name date/time stamp). The inline
+    // Source box mirrors the default source range; the read-only "Saves to" box
+    // previews the file name the defaults produce.
     // -------------------------------------------------------------------------
 
     public void OnExport(IRibbonControl control)
@@ -1104,7 +1109,24 @@ public class PyExcelRibbon : ExcelRibbon
         {
             var key = PyExcelServices.WorkbookContext.CurrentWorkbookKey;
             if (key is null) { _log.Info("OnExport: no active workbook"); return; }
-            PyExcel.Excel.ExportService.RunActiveExport(PyExcelServices.State.Get(key));
+
+            // Seed the dialog from the saved defaults, let the user tweak this run,
+            // then export. The destination file name is stamped at run time inside
+            // RunExport, so a unique-name recipe lands in a fresh file each click.
+            var seed = PyExcel.Excel.ExportSettings.FromState(PyExcelServices.State.Get(key));
+            var workbookDir = PyExcelServices.WorkbookContext.CurrentWorkbookDirectory;
+            var result = ExportForm.PromptExport(ExcelWindowOwner(), seed, workbookDir, PickRangeNative);
+            if (result is null) { _log.Info("OnExport: cancelled"); return; }
+
+            // The user can opt to promote this run's tweaks to the new default.
+            if (result.SaveAsDefault)
+            {
+                PersistExportDefaults(key, result.Settings);
+                MarkWorkbookDirty();
+            }
+
+            PyExcel.Excel.ExportService.RunExport(result.Settings, workbookDir);
+            _log.Info($"OnExport: running export for workbook '{key}'");
         }
         catch (Exception ex)
         {
@@ -1120,13 +1142,15 @@ public class PyExcelRibbon : ExcelRibbon
         PyExcelServices.State.SetExportInput(key, text);
     }
 
-    public string GetExportOutput(IRibbonControl control) => ActiveState().ExportOutput ?? string.Empty;
-    public void OnExportOutputChange(IRibbonControl control, string text)
-    {
-        var key = PyExcelServices.WorkbookContext.CurrentWorkbookKey;
-        if (key is null) return;
-        PyExcelServices.State.SetExportOutput(key, text);
-    }
+    /// <summary>The read-only "Saves to" preview — the file name the saved export
+    /// defaults produce (with a <c>{timestamp}</c> placeholder when a unique-name
+    /// stamp is on). Display-only: it's driven by the Edit dialog, not typed, so
+    /// hand edits revert (like the Script / Input / Output boxes).</summary>
+    public string GetExportTarget(IRibbonControl control)
+        => PyExcel.Excel.ExportSettingsPlanner.PreviewPattern(
+            PyExcel.Excel.ExportSettings.FromState(ActiveState()));
+
+    public void OnExportTargetChange(IRibbonControl control, string text) => RevertControl(control);
 
     public void OnEditExport(IRibbonControl control)
     {
@@ -1134,17 +1158,16 @@ public class PyExcelRibbon : ExcelRibbon
         {
             var key = PyExcelServices.WorkbookContext.CurrentWorkbookKey;
             if (key is null) { _log.Info("OnEditExport: no active workbook"); return; }
-            var state = PyExcelServices.State.Get(key);
-            var result = EditIoForm.PromptExport(
-                ExcelWindowOwner(),
-                state.ExportInput,
-                state.ExportOutput,
-                PyExcelServices.WorkbookContext.CurrentWorkbookDirectory,
-                PickRangeNative);
-            if (result is null) { _log.Info("OnEditExport: cancelled"); return; }
-            PyExcelServices.State.SetExportInput(key, result.Input);
-            PyExcelServices.State.SetExportOutput(key, result.Output);
-            _log.Info($"OnEditExport: saved for workbook '{key}'");
+
+            var seed = PyExcel.Excel.ExportSettings.FromState(PyExcelServices.State.Get(key));
+            var settings = ExportForm.PromptDefaults(
+                ExcelWindowOwner(), seed,
+                PyExcelServices.WorkbookContext.CurrentWorkbookDirectory, PickRangeNative);
+            if (settings is null) { _log.Info("OnEditExport: cancelled"); return; }
+
+            PersistExportDefaults(key, settings);
+            MarkWorkbookDirty();
+            _log.Info($"OnEditExport: saved export defaults for workbook '{key}'");
         }
         catch (Exception ex)
         {
@@ -1152,40 +1175,17 @@ public class PyExcelRibbon : ExcelRibbon
         }
     }
 
-    public void OnExportWizard(IRibbonControl control)
-    {
-        try
-        {
-            var key = PyExcelServices.WorkbookContext.CurrentWorkbookKey;
-            if (key is null) { _log.Info("OnExportWizard: no active workbook"); return; }
-            var state = PyExcelServices.State.Get(key);
-
-            // Seed the wizard's first row from the single-export fields if set.
-            System.Collections.Generic.IReadOnlyList<PyExcel.Excel.ExportJob>? seed = null;
-            if (!string.IsNullOrWhiteSpace(state.ExportInput) ||
-                !string.IsNullOrWhiteSpace(state.ExportOutput))
-            {
-                seed = new[]
-                {
-                    new PyExcel.Excel.ExportJob(state.ExportInput ?? string.Empty,
-                                                state.ExportOutput ?? string.Empty),
-                };
-            }
-
-            var jobs = ExportWizardForm.Prompt(
-                ExcelWindowOwner(), seed,
-                PyExcelServices.WorkbookContext.CurrentWorkbookDirectory);
-            if (jobs is null) { _log.Info("OnExportWizard: cancelled"); return; }
-
-            PyExcel.Excel.ExportService.RunBatch(
-                jobs, PyExcelServices.WorkbookContext.CurrentWorkbookDirectory);
-            _log.Info($"OnExportWizard: running {jobs.Count} export(s)");
-        }
-        catch (Exception ex)
-        {
-            _log.Error("OnExportWizard failed", ex);
-        }
-    }
+    /// <summary>Persist an <see cref="PyExcel.Excel.ExportSettings"/> recipe as the
+    /// active sheet's export defaults in one atomic state update (one ribbon
+    /// repaint), translating the enums to their persisted string tokens.</summary>
+    private static void PersistExportDefaults(string key, PyExcel.Excel.ExportSettings s)
+        => PyExcelServices.State.SetExportDefaults(
+            key,
+            s.SourceRange,
+            s.Folder,
+            s.BaseName,
+            PyExcel.Excel.ExportSettings.ToToken(s.FileType),
+            PyExcel.Excel.ExportSettings.ToToken(s.Timestamp));
 
     // -------------------------------------------------------------------------
     // Paste group

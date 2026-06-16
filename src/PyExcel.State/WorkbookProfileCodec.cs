@@ -74,6 +74,10 @@ public static class WorkbookProfileCodec
         AddText(el, "import-output", p.ImportOutput);
         AddText(el, "export-input", p.ExportInput);
         AddText(el, "export-output", p.ExportOutput);
+        AddText(el, "export-folder", p.ExportFolder);
+        AddText(el, "export-base-name", p.ExportBaseName);
+        AddText(el, "export-format", p.ExportFormat);
+        AddText(el, "export-timestamp", p.ExportTimestamp);
         AddText(el, "paste-output", p.PasteOutput);
 
         var actions = new XElement(Ns + "actions");
@@ -183,6 +187,10 @@ public static class WorkbookProfileCodec
         ImportOutput = (string?)s.Element(Ns + "import-output"),
         ExportInput = (string?)s.Element(Ns + "export-input"),
         ExportOutput = (string?)s.Element(Ns + "export-output"),
+        ExportFolder = (string?)s.Element(Ns + "export-folder"),
+        ExportBaseName = (string?)s.Element(Ns + "export-base-name"),
+        ExportFormat = (string?)s.Element(Ns + "export-format"),
+        ExportTimestamp = (string?)s.Element(Ns + "export-timestamp"),
         PasteOutput = (string?)s.Element(Ns + "paste-output"),
         Actions = ParseActions(s.Element(Ns + "actions")),
     };

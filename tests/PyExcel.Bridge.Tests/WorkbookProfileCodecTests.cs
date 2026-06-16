@@ -58,6 +58,54 @@ public class WorkbookProfileCodecTests
     }
 
     [Fact]
+    public void RoundTrip_StructuredExportDefaults_PreservedPerSheet()
+    {
+        var data = new WorkbookProfileData
+        {
+            Sheets = new Dictionary<string, SheetProfile>
+            {
+                ["Sheet1"] = new SheetProfile
+                {
+                    ExportInput = "A1:C10",
+                    ExportFolder = @"C:\out",
+                    ExportBaseName = "report",
+                    ExportFormat = "tsv",
+                    ExportTimestamp = "compact",
+                },
+            },
+        };
+
+        var xml = WorkbookProfileCodec.SerializeToString(data);
+        Assert.True(WorkbookProfileCodec.TryDeserialize(xml, out var back));
+
+        var s = back!.Sheets["Sheet1"];
+        Assert.Equal("A1:C10", s.ExportInput);
+        Assert.Equal(@"C:\out", s.ExportFolder);
+        Assert.Equal("report", s.ExportBaseName);
+        Assert.Equal("tsv", s.ExportFormat);
+        Assert.Equal("compact", s.ExportTimestamp);
+    }
+
+    [Fact]
+    public void Serialize_SheetWithOnlyExportBaseName_IsConfiguredAndKept()
+    {
+        // A new export-default field must count toward IsConfigured so a sheet
+        // carrying only it is persisted rather than skipped as "empty".
+        var data = new WorkbookProfileData
+        {
+            Sheets = new Dictionary<string, SheetProfile>
+            {
+                ["Only"] = new SheetProfile { ExportBaseName = "weekly" },
+            },
+        };
+
+        var xml = WorkbookProfileCodec.SerializeToString(data);
+        Assert.True(WorkbookProfileCodec.TryDeserialize(xml, out var back));
+        Assert.True(back!.Sheets.ContainsKey("Only"));
+        Assert.Equal("weekly", back.Sheets["Only"].ExportBaseName);
+    }
+
+    [Fact]
     public void RoundTrip_DefaultBucketKey_Survives()
     {
         var data = new WorkbookProfileData

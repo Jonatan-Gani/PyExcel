@@ -152,16 +152,27 @@ detects format from the extension. Inputs: an export-input range, an output file
 and the workbook directory. Output: an `ExportPlan` (absolute target + delimiter); throws
 `FormatException` on blank/unsupported format.
 
-### ExportBatch.cs
-Pure validation for the Export Wizard rows: checks each via `ExportPlanner` and detects
-duplicate target files. Inputs: a list of (source range, target path) jobs and the
-workbook directory. Output: an `ExportBatchValidationResult` (valid flag, error, trimmed
-jobs).
+### ExportSettings.cs
+The user-configurable export recipe (`ExportSettings`: source range, destination folder,
+base file name, `ExportFileType`, `ExportTimestampStyle`) plus the dialog-result carrier
+(`ExportPromptResult`) and the persisted-token ↔ enum mappings. `FromState` seeds the
+recipe from a `WorkbookState`, decomposing a legacy single `ExportOutput` path when the
+structured fields are absent. Inputs: a `WorkbookState`, or enum/token values. Output: an
+`ExportSettings` / `ExportPromptResult` / token strings.
+
+### ExportSettingsPlanner.cs
+Pure composer turning an `ExportSettings` recipe into a concrete `ExportPlan`: builds the
+destination file name from base name + optional date/time stamp + file-type extension,
+sanitises the name, and resolves the folder against the workbook dir. Also `PreviewPattern`
+(stable `{timestamp}` placeholder for the ribbon) and the `ExportFormatExtensions` enum
+helpers (extension/delimiter/label/stamp). Inputs: an `ExportSettings`, a timestamp, and
+the workbook dir. Output: an `ExportPlan`; throws `FormatException` on a blank source range.
 
 ### ExportService.cs
-Drives the Export button (net48): reads the range on the main thread and writes CSV/TSV
-on a background task. Inputs: a `WorkbookState` and an optional batch of export jobs.
-Output: none — files written, or an error logged.
+Drives the Export button (net48): resolves an `ExportSettings` recipe via
+`ExportSettingsPlanner` (stamping the file name at run time), reads the range on the main
+thread, and writes CSV/TSV on a background task. Inputs: an `ExportSettings` and the
+workbook directory. Output: none — a file written, or an error logged.
 
 ### EditIoValidator.cs
 Pure validation for the Edit-Import/Export/Paste dialogs, reusing `ImportPlanner` /

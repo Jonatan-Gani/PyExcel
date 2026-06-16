@@ -26,6 +26,21 @@ public sealed record SheetProfile
     public string? ImportOutput { get; init; }
     public string? ExportInput { get; init; }
     public string? ExportOutput { get; init; }
+
+    /// <summary>Export default: the destination folder (blank → next to the
+    /// workbook).</summary>
+    public string? ExportFolder { get; init; }
+
+    /// <summary>Export default: the base file name (no extension or stamp).</summary>
+    public string? ExportBaseName { get; init; }
+
+    /// <summary>Export default: the file-type token (<c>csv</c> / <c>tsv</c>).</summary>
+    public string? ExportFormat { get; init; }
+
+    /// <summary>Export default: the unique-name stamp token (<c>none</c> /
+    /// <c>datetime</c> / <c>date</c> / <c>compact</c>).</summary>
+    public string? ExportTimestamp { get; init; }
+
     public string? PasteOutput { get; init; }
 
     /// <summary>The all-empty profile — an unconfigured sheet.</summary>
@@ -58,5 +73,9 @@ public sealed record SheetProfile
         || ImportOutput is not null
         || ExportInput is not null
         || ExportOutput is not null
+        || ExportFolder is not null
+        || ExportBaseName is not null
+        || ExportFormat is not null
+        || ExportTimestamp is not null
         || PasteOutput is not null;
 }

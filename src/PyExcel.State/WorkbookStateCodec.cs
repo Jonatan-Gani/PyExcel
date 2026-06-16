@@ -78,6 +78,17 @@ public static class WorkbookStateCodec
             root.Add(new XElement(Ns + "export-input", state.ExportInput));
         if (state.ExportOutput is not null)
             root.Add(new XElement(Ns + "export-output", state.ExportOutput));
+        // Structured export defaults (folder / base name / file type / unique-name
+        // stamp). Optional like every field above, so a document written before
+        // they existed parses with each one null.
+        if (state.ExportFolder is not null)
+            root.Add(new XElement(Ns + "export-folder", state.ExportFolder));
+        if (state.ExportBaseName is not null)
+            root.Add(new XElement(Ns + "export-base-name", state.ExportBaseName));
+        if (state.ExportFormat is not null)
+            root.Add(new XElement(Ns + "export-format", state.ExportFormat));
+        if (state.ExportTimestamp is not null)
+            root.Add(new XElement(Ns + "export-timestamp", state.ExportTimestamp));
         if (state.PasteOutput is not null)
             root.Add(new XElement(Ns + "paste-output", state.PasteOutput));
         // The user-chosen dedicated project directory (Enable). Optional, so a
@@ -169,6 +180,10 @@ public static class WorkbookStateCodec
         var importOutput = (string?)root.Element(Ns + "import-output");
         var exportInput = (string?)root.Element(Ns + "export-input");
         var exportOutput = (string?)root.Element(Ns + "export-output");
+        var exportFolder = (string?)root.Element(Ns + "export-folder");
+        var exportBaseName = (string?)root.Element(Ns + "export-base-name");
+        var exportFormat = (string?)root.Element(Ns + "export-format");
+        var exportTimestamp = (string?)root.Element(Ns + "export-timestamp");
         var pasteOutput = (string?)root.Element(Ns + "paste-output");
         var projectDir = (string?)root.Element(Ns + "project-dir");
 
@@ -192,6 +207,10 @@ public static class WorkbookStateCodec
             ImportOutput = importOutput,
             ExportInput = exportInput,
             ExportOutput = exportOutput,
+            ExportFolder = exportFolder,
+            ExportBaseName = exportBaseName,
+            ExportFormat = exportFormat,
+            ExportTimestamp = exportTimestamp,
             PasteOutput = pasteOutput,
             ProjectDir = projectDir,
         };

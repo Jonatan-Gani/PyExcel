@@ -294,6 +294,32 @@ public class StateServiceTests
     }
 
     [Fact]
+    public void SetExportDefaults_PersistsAllFieldsInOneUpdate()
+    {
+        var svc = new StateService();
+        var fires = 0;
+        svc.StateChanged += (_, _) => fires++;
+
+        svc.SetExportDefaults("wb.xlsx", "A1:C10", @"C:\out", "report", "tsv", "datetime");
+
+        var s = svc.Get("wb.xlsx");
+        Assert.Equal("A1:C10", s.ExportInput);
+        Assert.Equal(@"C:\out", s.ExportFolder);
+        Assert.Equal("report", s.ExportBaseName);
+        Assert.Equal("tsv", s.ExportFormat);
+        Assert.Equal("datetime", s.ExportTimestamp);
+        Assert.Equal(1, fires);  // one atomic update, one repaint
+    }
+
+    [Fact]
+    public void SetExportDefaults_NullKey_Throws()
+    {
+        var svc = new StateService();
+        Assert.Throws<ArgumentNullException>(
+            () => svc.SetExportDefaults(null!, "A1", null, "n", "csv", "none"));
+    }
+
+    [Fact]
     public void SetImportInput_FiresStateChanged()
     {
         var svc = new StateService();
