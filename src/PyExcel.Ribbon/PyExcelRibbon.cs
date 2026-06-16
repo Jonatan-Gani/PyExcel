@@ -313,7 +313,10 @@ public class PyExcelRibbon : ExcelRibbon
 
             // For a new workbook, save it into the chosen folder first so its
             // persisted state has a file to live in, then re-key off the saved
-            // path (Save As promotes the workbook to a path-based key).
+            // path (Save As promotes the workbook to a path-based key). For an
+            // already-saved workbook, relocate it into the project folder so the
+            // folder houses the workbook itself, not just its venv / kernel /
+            // userScripts (see MoveWorkbookIntoProjectFolder).
             if (newWorkbookName is not null)
             {
                 var savePath = Path.Combine(projectDir, EnsureXlsxExtension(newWorkbookName));
@@ -324,6 +327,10 @@ public class PyExcelRibbon : ExcelRibbon
                 }
                 key = PyExcelServices.WorkbookContext.CurrentWorkbookKey;
                 if (key is null) { _log.Info("OnEnablePyExcel: workbook key lost after save"); return; }
+            }
+            else
+            {
+                key = MoveWorkbookIntoProjectFolder(key, projectDir);
             }
 
             // Remember the choice so Setup and the runtime kernel both use it.
@@ -813,8 +820,8 @@ public class PyExcelRibbon : ExcelRibbon
             {
                 Description =
                     "Choose a dedicated folder for this workbook's PyExcel project. " +
-                    "Its Python environment (.pyexcel-venv), kernel, and userScripts " +
-                    "folder are created here.",
+                    "The workbook is moved here, alongside its Python environment " +
+                    "(.pyexcel-venv), kernel, and userScripts folder.",
                 ShowNewFolderButton = true,
             };
             if (!string.IsNullOrEmpty(defaultDir) && Directory.Exists(defaultDir))
@@ -897,6 +904,124 @@ public class PyExcelRibbon : ExcelRibbon
         {
             _log.Error($"SaveActiveWorkbookAs failed for '{path}'", ex);
             return false;
+        }
+    }
+
+    /// <summary>
+    /// Relocate the active (already-saved) workbook into <paramref name="projectDir"/>
+    /// so the chosen project folder houses the workbook itself, not just its venv /
+    /// kernel / userScripts. Excel keeps the open file locked, so it can't be moved on
+    /// disk directly — instead we <c>SaveAs</c> a copy into the project folder
+    /// (preserving the workbook's name and format, so a <c>.xlsm</c> stays a
+    /// <c>.xlsm</c>) and then delete the now-released original. The SaveAs is Excel
+    /// rewriting the file at the new path, which is what sidesteps the open-file lock.
+    /// The in-memory PyExcel state is carried across the resulting key change so any
+    /// configuration set before Enable isn't lost.
+    /// </summary>
+    /// <returns>The new workbook key, or <paramref name="oldKey"/> unchanged when no
+    /// move was needed (already in the folder) or it wasn't possible.</returns>
+    private string MoveWorkbookIntoProjectFolder(string oldKey, string projectDir)
+    {
+        try
+        {
+            dynamic app = ExcelDnaUtil.Application;
+            dynamic wb = app.ActiveWorkbook;
+            if (wb is null) return oldKey;
+
+            string currentFull = (string)wb.FullName;
+            string currentDir = (string)wb.Path;
+            string name = (string)wb.Name;
+
+            // Unsaved workbooks have no on-disk file to relocate — that case is
+            // handled by the name-prompt + SaveAs branch in OnEnablePyExcel.
+            if (string.IsNullOrEmpty(currentDir)) return oldKey;
+
+            var targetPath = Path.Combine(projectDir, name);
+
+            // Already living in the project folder — nothing to move.
+            if (PathsEqual(currentFull, targetPath))
+            {
+                _log.Info($"OnEnablePyExcel: workbook already in project folder '{projectDir}'");
+                return oldKey;
+            }
+
+            // Never clobber a different existing file at the destination; leave the
+            // workbook where it is and tell the user.
+            if (File.Exists(targetPath))
+            {
+                LogDisplay.WriteLine(
+                    $"Enable: '{name}' already exists in the project folder — " +
+                    "leaving the workbook in its current location.");
+                _log.Info($"OnEnablePyExcel: target '{targetPath}' exists; skipping move");
+                return oldKey;
+            }
+
+            // Capture the in-memory profile so it survives the key change the SaveAs
+            // causes (configuration the user set before clicking Enable).
+            var carried = PyExcelServices.State.GetProfile(oldKey);
+
+            Directory.CreateDirectory(projectDir);
+            // Preserve the workbook's own format (.xlsx / .xlsm / .xlsb): pass its
+            // current FileFormat rather than forcing .xlsx, so macros aren't stripped.
+            wb.SaveAs(targetPath, wb.FileFormat);
+
+            // SaveAs promotes the workbook to the new path, so the context now reports
+            // the new key; carry the captured state over and forget the old entry.
+            string newKey = PyExcelServices.WorkbookContext.CurrentWorkbookKey ?? oldKey;
+            if (!string.Equals(newKey, oldKey, StringComparison.Ordinal))
+            {
+                if (carried.IsMeaningful) PyExcelServices.State.LoadProfile(newKey, carried);
+                PyExcelServices.State.Forget(oldKey);
+            }
+
+            // Excel releases the original once it has SaveAs-ed onto the new file, so
+            // the orphan can be removed.
+            TryDeleteOriginal(currentFull, targetPath);
+
+            _log.Info($"OnEnablePyExcel: moved workbook '{currentFull}' -> '{targetPath}'");
+            return newKey;
+        }
+        catch (Exception ex)
+        {
+            // The move is a convenience; on any failure keep the workbook where it is
+            // and continue enabling against the chosen project folder.
+            _log.Error("MoveWorkbookIntoProjectFolder failed", ex);
+            return oldKey;
+        }
+    }
+
+    /// <summary>Whether two file paths point at the same location, compared by
+    /// normalised full path, case-insensitively (Windows file system).</summary>
+    private static bool PathsEqual(string a, string b)
+    {
+        try
+        {
+            return string.Equals(
+                Path.GetFullPath(a), Path.GetFullPath(b), StringComparison.OrdinalIgnoreCase);
+        }
+        catch
+        {
+            return string.Equals(a, b, StringComparison.OrdinalIgnoreCase);
+        }
+    }
+
+    /// <summary>Delete the workbook's pre-move original after a successful SaveAs.
+    /// Guards against deleting the relocated copy, and swallows any failure — Excel
+    /// has already released the old file, but an AV scanner or transient lock must
+    /// never turn a successful move into an error (a leftover copy is harmless).</summary>
+    private void TryDeleteOriginal(string originalPath, string targetPath)
+    {
+        try
+        {
+            if (!PathsEqual(originalPath, targetPath) && File.Exists(originalPath))
+                File.Delete(originalPath);
+        }
+        catch (Exception ex)
+        {
+            _log.Error($"OnEnablePyExcel: couldn't delete the original '{originalPath}'", ex);
+            LogDisplay.WriteLine(
+                "Enable: moved the workbook into the project folder, but couldn't " +
+                $"remove the original copy at '{originalPath}'.");
         }
     }
 
