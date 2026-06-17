@@ -330,7 +330,13 @@ public class PyExcelRibbon : ExcelRibbon
             }
             else
             {
-                key = MoveWorkbookIntoProjectFolder(key, projectDir);
+                var moved = MoveWorkbookIntoProjectFolder(key, projectDir);
+                if (moved is null)
+                {
+                    _log.Info("OnEnablePyExcel: enable cancelled at the file-name conflict");
+                    return;
+                }
+                key = moved;
             }
 
             // Remember the choice so Setup and the runtime kernel both use it.
@@ -928,9 +934,11 @@ public class PyExcelRibbon : ExcelRibbon
     /// The in-memory PyExcel state is carried across the resulting key change so any
     /// configuration set before Enable isn't lost.
     /// </summary>
-    /// <returns>The new workbook key, or <paramref name="oldKey"/> unchanged when no
-    /// move was needed (already in the folder) or it wasn't possible.</returns>
-    private string MoveWorkbookIntoProjectFolder(string oldKey, string projectDir)
+    /// <returns>The new workbook key; <paramref name="oldKey"/> unchanged when no
+    /// move was needed (already in the folder) or it wasn't possible; or
+    /// <see langword="null"/> when the user aborts at a file-name conflict — Enable
+    /// should then stop.</returns>
+    private string? MoveWorkbookIntoProjectFolder(string oldKey, string projectDir)
     {
         try
         {
@@ -955,21 +963,26 @@ public class PyExcelRibbon : ExcelRibbon
                 return oldKey;
             }
 
-            // Never clobber a different existing file at the destination; leave the
-            // workbook where it is and tell the user.
+            // A different file already occupies the destination name. Ask the user
+            // (native dialogs) to replace it, save under a new name, or abort.
+            bool overwrite = false;
             if (File.Exists(targetPath))
             {
-                LogDisplay.WriteLine(
-                    $"Enable: '{name}' already exists in the project folder — " +
-                    "leaving the workbook in its current location.");
-                _log.Info($"OnEnablePyExcel: target '{targetPath}' exists; skipping move");
-                return oldKey;
+                var resolved = ResolveTargetCollision(projectDir, name, targetPath);
+                if (resolved is null) return null; // user chose Abort — stop enabling
+                targetPath = resolved;
+                // They may have navigated the Save As dialog back to the workbook's
+                // own file — that's a no-op move.
+                if (WorkbookIdentityReconciler.PathsEqual(currentFull, targetPath))
+                    return oldKey;
+                overwrite = File.Exists(targetPath);
             }
 
             Directory.CreateDirectory(projectDir);
             // Preserve the workbook's own format (.xlsx / .xlsm / .xlsb): pass its
             // current FileFormat rather than forcing .xlsx, so macros aren't stripped.
-            wb.SaveAs(targetPath, wb.FileFormat);
+            // Any overwrite was confirmed above, so suppress Excel's own prompt.
+            SaveAsPreservingFormat(wb, targetPath, suppressOverwritePrompt: overwrite);
 
             // SaveAs promotes the workbook to the new path, so the context now reports
             // the new key; re-key the whole in-memory entry onto it atomically.
@@ -989,6 +1002,84 @@ public class PyExcelRibbon : ExcelRibbon
             // and continue enabling against the chosen project folder.
             _log.Error("MoveWorkbookIntoProjectFolder failed", ex);
             return oldKey;
+        }
+    }
+
+    /// <summary>A different file already occupies the workbook's name in the project
+    /// folder. Show a native message box offering Replace / new name / Abort, routing
+    /// the rename path through the OS <see cref="System.Windows.Forms.SaveFileDialog"/>
+    /// (which carries its own overwrite prompt). Returns the chosen absolute target
+    /// path, or <see langword="null"/> to abort.</summary>
+    private string? ResolveTargetCollision(string projectDir, string name, string targetPath)
+    {
+        var message =
+            $"A different file named \"{name}\" already exists in the project folder:\n\n" +
+            $"{projectDir}\n\n" +
+            "Yes — replace the existing file\n" +
+            "No — save the workbook under a new name\n" +
+            "Cancel — stop enabling";
+        var choice = System.Windows.Forms.MessageBox.Show(
+            ExcelWindowOwner(), message, "PyExcel — file name already in use",
+            System.Windows.Forms.MessageBoxButtons.YesNoCancel,
+            System.Windows.Forms.MessageBoxIcon.Warning);
+
+        return choice switch
+        {
+            System.Windows.Forms.DialogResult.Yes => targetPath,                  // replace
+            System.Windows.Forms.DialogResult.No => PromptForMoveTarget(projectDir, name),
+            _ => null,                                                             // abort
+        };
+    }
+
+    /// <summary>Native Save As dialog to choose where in the project folder to save the
+    /// workbook, constrained to its own extension (so the saved format stays valid) and
+    /// with the OS's own "replace?" prompt on a further collision. Returns the chosen
+    /// path, or <see langword="null"/> if the user cancelled.</summary>
+    private string? PromptForMoveTarget(string projectDir, string name)
+    {
+        try { SetForegroundWindow(ExcelDnaUtil.WindowHandle); } catch { /* best-effort */ }
+        var ext = Path.GetExtension(name);
+        using var dlg = new System.Windows.Forms.SaveFileDialog
+        {
+            Title = "Save the workbook into the project folder",
+            InitialDirectory = projectDir,
+            FileName = name,
+            Filter = string.IsNullOrEmpty(ext)
+                ? "All files (*.*)|*.*"
+                : $"Excel workbook (*{ext})|*{ext}",
+            DefaultExt = ext.TrimStart('.'),
+            AddExtension = true,
+            OverwritePrompt = true,
+        };
+        return dlg.ShowDialog(ExcelWindowOwner()) == System.Windows.Forms.DialogResult.OK
+               && !string.IsNullOrWhiteSpace(dlg.FileName)
+            ? dlg.FileName
+            : null;
+    }
+
+    /// <summary>SaveAs the workbook to <paramref name="targetPath"/> preserving its
+    /// current format. When <paramref name="suppressOverwritePrompt"/> (the user has
+    /// already confirmed a replace), Excel's own overwrite alert is suppressed and
+    /// restored around the save so they aren't asked twice.</summary>
+    private static void SaveAsPreservingFormat(dynamic wb, string targetPath, bool suppressOverwritePrompt)
+    {
+        dynamic app = ExcelDnaUtil.Application;
+        bool alerts = true;
+        if (suppressOverwritePrompt)
+        {
+            try { alerts = (bool)app.DisplayAlerts; } catch { /* assume default true */ }
+            try { app.DisplayAlerts = false; } catch { /* best-effort */ }
+        }
+        try
+        {
+            wb.SaveAs(targetPath, wb.FileFormat);
+        }
+        finally
+        {
+            if (suppressOverwritePrompt)
+            {
+                try { app.DisplayAlerts = alerts; } catch { /* best-effort */ }
+            }
         }
     }
 
