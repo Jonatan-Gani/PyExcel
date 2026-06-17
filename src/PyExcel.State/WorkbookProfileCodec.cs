@@ -45,6 +45,10 @@ public static class WorkbookProfileCodec
 
         if (data.ProjectDir is not null)
             root.Add(new XElement(Ns + "project-dir", data.ProjectDir));
+        if (data.ProjectId is not null)
+            root.Add(new XElement(Ns + "project-id", data.ProjectId));
+        if (data.OriginPath is not null)
+            root.Add(new XElement(Ns + "origin-path", data.OriginPath));
 
         var sheets = new XElement(Ns + "sheets");
         foreach (var kv in data.Sheets.Where(kv => kv.Value.IsConfigured)
@@ -135,6 +139,8 @@ public static class WorkbookProfileCodec
         {
             var enabled = ParseBool((string?)root.Element(Ns + "enabled"));
             var projectDir = (string?)root.Element(Ns + "project-dir");
+            var projectId = (string?)root.Element(Ns + "project-id");
+            var originPath = (string?)root.Element(Ns + "origin-path");
 
             var sheets = new Dictionary<string, SheetProfile>(StringComparer.Ordinal);
             var sheetsEl = root.Element(Ns + "sheets");
@@ -151,6 +157,8 @@ public static class WorkbookProfileCodec
             {
                 Enabled = enabled,
                 ProjectDir = projectDir,
+                ProjectId = projectId,
+                OriginPath = originPath,
                 Sheets = sheets,
             };
             return true;

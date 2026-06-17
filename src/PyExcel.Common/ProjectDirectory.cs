@@ -69,6 +69,39 @@ public static class ProjectDirectory
         return Path.Combine(LocalAppDataRoot(), "PyExcel", Hash(workbookDir!.Trim()));
     }
 
+    /// <summary>
+    /// Resolve the project directory honouring an explicit
+    /// <paramref name="storedProjectDir"/> the user chose on Enable — but only while
+    /// it still exists on disk. A project folder that was moved wholesale (the
+    /// workbook now lives inside it) leaves the stored absolute path stale, so this
+    /// then falls back to the workbook's own folder via <see cref="Resolve(string?)"/>
+    /// — self-healing, because the workbook moved with the folder. The global
+    /// <c>PYEXCEL_PROJECT_DIR</c> override still wins over a per-workbook choice.
+    ///
+    /// <para>The directory-existence probe is injectable so the rule is unit-testable
+    /// without touching the real file system; production passes
+    /// <see cref="Directory.Exists"/>.</para>
+    /// </summary>
+    public static string? Resolve(
+        string? storedProjectDir, string? workbookDir, Func<string, bool>? directoryExists = null)
+    {
+        var hasOverride = !string.IsNullOrWhiteSpace(
+            Environment.GetEnvironmentVariable(OverrideEnvVar));
+
+        if (!hasOverride
+            && !string.IsNullOrWhiteSpace(storedProjectDir)
+            && IsUsableLocalPath(storedProjectDir))
+        {
+            var full = Path.GetFullPath(storedProjectDir!.Trim());
+            var exists = directoryExists ?? Directory.Exists;
+            if (exists(full)) return full;
+        }
+
+        // No usable stored choice (or it's gone, or an override is pinned): fall back
+        // to the workbook-derived rule (override → local workbook folder → cloud hash).
+        return Resolve(workbookDir);
+    }
+
     /// <summary>True when <paramref name="path"/> is a usable local filesystem
     /// directory — non-blank, not a URL, rooted, and accepted by
     /// <see cref="Path.GetFullPath(string)"/>.</summary>

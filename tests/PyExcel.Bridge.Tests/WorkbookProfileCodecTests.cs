@@ -212,6 +212,31 @@ public class WorkbookProfileCodecTests
     }
 
     [Fact]
+    public void RoundTrip_Identity_ProjectIdAndOriginPathPreserved()
+    {
+        var data = new WorkbookProfileData
+        {
+            Enabled = true,
+            ProjectId = "abc123def456",
+            OriginPath = @"C:\proj\model.xlsx",
+        };
+        var xml = WorkbookProfileCodec.SerializeToString(data);
+        Assert.True(WorkbookProfileCodec.TryDeserialize(xml, out var back));
+        Assert.Equal("abc123def456", back!.ProjectId);
+        Assert.Equal(@"C:\proj\model.xlsx", back.OriginPath);
+    }
+
+    [Fact]
+    public void RoundTrip_NoIdentity_StaysNull()
+    {
+        var data = new WorkbookProfileData { Enabled = true };
+        var xml = WorkbookProfileCodec.SerializeToString(data);
+        Assert.True(WorkbookProfileCodec.TryDeserialize(xml, out var back));
+        Assert.Null(back!.ProjectId);
+        Assert.Null(back.OriginPath);
+    }
+
+    [Fact]
     public void TryDeserialize_Foreign_ReturnsFalse()
     {
         Assert.False(WorkbookProfileCodec.TryDeserialize("<nope/>", out var data));

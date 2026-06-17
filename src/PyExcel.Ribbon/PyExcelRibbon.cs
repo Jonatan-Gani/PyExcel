@@ -336,6 +336,15 @@ public class PyExcelRibbon : ExcelRibbon
             // Remember the choice so Setup and the runtime kernel both use it.
             PyExcelServices.State.SetProjectDir(key, projectDir);
 
+            // Stamp (or preserve) the stable project identity, committed against the
+            // workbook's current path (the key is its FullName now that it's saved in
+            // the project folder). This is what lets the project keep following the
+            // workbook across later moves / renames, and tells a copy apart from the
+            // original (see WorkbookIdentityReconciler). Repair keeps its existing id.
+            var existingId = PyExcelServices.State.Get(key).ProjectId;
+            PyExcelServices.State.SetIdentity(
+                key, existingId ?? Guid.NewGuid().ToString("N"), key);
+
             var success = SetupForm.Run(ExcelWindowOwner(), projectDir, _log);
             if (success == true)
             {
@@ -802,9 +811,10 @@ public class PyExcelRibbon : ExcelRibbon
         var key = PyExcelServices.WorkbookContext.CurrentWorkbookKey;
         var workbookDir = PyExcelServices.WorkbookContext.CurrentWorkbookDirectory;
         var stored = key is null ? null : PyExcelServices.State.Get(key).ProjectDir;
-        return string.IsNullOrEmpty(stored)
-            ? PyExcel.Common.ProjectDirectory.Resolve(workbookDir)
-            : stored;
+        // Self-healing: honour the stored project folder only while it still exists,
+        // else fall back to the workbook's own folder (the workbook now lives inside
+        // the project folder, so a moved folder re-resolves correctly).
+        return PyExcel.Common.ProjectDirectory.Resolve(stored, workbookDir);
     }
 
     /// <summary>Prompt for a dedicated project folder via the native folder
@@ -939,7 +949,7 @@ public class PyExcelRibbon : ExcelRibbon
             var targetPath = Path.Combine(projectDir, name);
 
             // Already living in the project folder — nothing to move.
-            if (PathsEqual(currentFull, targetPath))
+            if (WorkbookIdentityReconciler.PathsEqual(currentFull, targetPath))
             {
                 _log.Info($"OnEnablePyExcel: workbook already in project folder '{projectDir}'");
                 return oldKey;
@@ -956,23 +966,15 @@ public class PyExcelRibbon : ExcelRibbon
                 return oldKey;
             }
 
-            // Capture the in-memory profile so it survives the key change the SaveAs
-            // causes (configuration the user set before clicking Enable).
-            var carried = PyExcelServices.State.GetProfile(oldKey);
-
             Directory.CreateDirectory(projectDir);
             // Preserve the workbook's own format (.xlsx / .xlsm / .xlsb): pass its
             // current FileFormat rather than forcing .xlsx, so macros aren't stripped.
             wb.SaveAs(targetPath, wb.FileFormat);
 
             // SaveAs promotes the workbook to the new path, so the context now reports
-            // the new key; carry the captured state over and forget the old entry.
+            // the new key; re-key the whole in-memory entry onto it atomically.
             string newKey = PyExcelServices.WorkbookContext.CurrentWorkbookKey ?? oldKey;
-            if (!string.Equals(newKey, oldKey, StringComparison.Ordinal))
-            {
-                if (carried.IsMeaningful) PyExcelServices.State.LoadProfile(newKey, carried);
-                PyExcelServices.State.Forget(oldKey);
-            }
+            PyExcelServices.State.Rekey(oldKey, newKey);
 
             // Excel releases the original once it has SaveAs-ed onto the new file, so
             // the orphan can be removed.
@@ -990,21 +992,6 @@ public class PyExcelRibbon : ExcelRibbon
         }
     }
 
-    /// <summary>Whether two file paths point at the same location, compared by
-    /// normalised full path, case-insensitively (Windows file system).</summary>
-    private static bool PathsEqual(string a, string b)
-    {
-        try
-        {
-            return string.Equals(
-                Path.GetFullPath(a), Path.GetFullPath(b), StringComparison.OrdinalIgnoreCase);
-        }
-        catch
-        {
-            return string.Equals(a, b, StringComparison.OrdinalIgnoreCase);
-        }
-    }
-
     /// <summary>Delete the workbook's pre-move original after a successful SaveAs.
     /// Guards against deleting the relocated copy, and swallows any failure — Excel
     /// has already released the old file, but an AV scanner or transient lock must
@@ -1013,7 +1000,8 @@ public class PyExcelRibbon : ExcelRibbon
     {
         try
         {
-            if (!PathsEqual(originalPath, targetPath) && File.Exists(originalPath))
+            if (!WorkbookIdentityReconciler.PathsEqual(originalPath, targetPath)
+                && File.Exists(originalPath))
                 File.Delete(originalPath);
         }
         catch (Exception ex)

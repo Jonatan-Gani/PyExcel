@@ -63,6 +63,19 @@ public class PerSheetStateTests
     }
 
     [Fact]
+    public void Identity_IsWorkbookScoped_SharedAcrossSheets()
+    {
+        var svc = new StateService();
+        svc.SetCurrentSheet("wb", "Sheet1");
+        svc.SetIdentity("wb", "id-1", "/wb.xlsx");
+
+        svc.SetCurrentSheet("wb", "Sheet2");
+        var s = svc.Get("wb");
+        Assert.Equal("id-1", s.ProjectId);
+        Assert.Equal("/wb.xlsx", s.OriginPath);
+    }
+
+    [Fact]
     public void SettingAvailableScripts_DoesNotMaterialiseTheCurrentSheet()
     {
         // A workbook-scoped edit must not copy an inherited default into the

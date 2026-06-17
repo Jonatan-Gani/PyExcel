@@ -10,8 +10,10 @@ can be; the Windows-only shell launcher is isolated in `Shell/`.
 Resolves the local directory where PyExcel stores a workbook's per-project Python
 environment (`.pyexcel-venv`, `.pyexcel-kernel`). Inputs: a workbook folder path or URL
 from Excel; honours a `PYEXCEL_PROJECT_DIR` override and maps cloud/URL workbooks to a
-`%LOCALAPPDATA%\PyExcel` fallback. Output: a normalised absolute path, or null for an
-unsaved workbook.
+`%LOCALAPPDATA%\PyExcel` fallback. A two-arg overload `Resolve(storedProjectDir,
+workbookDir, directoryExists?)` adds self-healing: it honours a stored project folder only
+while it still exists, else falls back to the workbook's own folder (so a moved project
+folder re-resolves). Output: a normalised absolute path, or null for an unsaved workbook.
 
 ## Subdirectories
 - **Shell/** (own CLAUDE.md) — cross-platform child-process runner and the Windows shell

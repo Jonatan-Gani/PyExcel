@@ -205,6 +205,11 @@ internal sealed class AppEventSink : IDisposable
                 _log.Info($"OnWorkbookBeforeSave: key='{key}' not a PyExcel project; skip");
                 return;
             }
+            // Lazily give a project enabled before identity existed a stable id, so it
+            // gains move/copy resilience on its next save. Re-read so the freshly
+            // stamped id/origin land in the part written below.
+            EnsureIdentity(key, NullIfEmpty(wb.FullName));
+            profile = _state.GetProfile(key);
             var projectDir = ResolveProjectDir(wb);
             _log.Info($"OnWorkbookBeforeSave: key='{key}' dir='{projectDir}' " +
                       $"enabled={profile.Enabled} sheets={profile.Sheets.Count}");
@@ -285,9 +290,10 @@ internal sealed class AppEventSink : IDisposable
     {
         var stored = _state.Get(KeyOf(wb)).ProjectDir;
         var workbookDir = string.IsNullOrEmpty(wb.Path) ? null : wb.Path;
-        return string.IsNullOrEmpty(stored)
-            ? PyExcel.Common.ProjectDirectory.Resolve(workbookDir)
-            : stored;
+        // Self-healing: honour the stored project folder only while it still exists,
+        // else fall back to the workbook's own folder (the workbook lives inside the
+        // project folder, so a moved folder re-resolves correctly).
+        return PyExcel.Common.ProjectDirectory.Resolve(stored, workbookDir);
     }
 
     private static string? NullIfEmpty(string? s) => string.IsNullOrEmpty(s) ? null : s;
@@ -345,8 +351,67 @@ internal sealed class AppEventSink : IDisposable
     private void BringOnline(Excel.Workbook wb, bool alertOnIncomplete)
     {
         EnsureRestored(wb);
+        ReconcileIdentity(wb);
         SetCurrentSheetToLive(wb);
         RefreshReadiness(wb, alertOnIncomplete);
+    }
+
+    /// <summary>Reconcile a workbook's stable identity against the path it is open at
+    /// (see <see cref="WorkbookIdentityReconciler"/>) and apply the verdict in memory:
+    /// a moved / renamed workbook keeps its <see cref="WorkbookProfileData.ProjectId"/>
+    /// and commits its new origin (its project folder re-resolves via the self-healing
+    /// rule); a <em>copy</em> gets a fresh id and is detached from the original's
+    /// project folder so the two never share one environment. The mutation is
+    /// in-memory only — it persists on the workbook's next save — so opening a
+    /// workbook never dirties it, and this re-runs idempotently until a save commits
+    /// the result.</summary>
+    private void ReconcileIdentity(Excel.Workbook wb)
+    {
+        string key = KeyOf(wb);
+        var s = _state.Get(key);
+        if (string.IsNullOrEmpty(s.ProjectId)) return; // unstamped — nothing to reconcile
+
+        string? origin = s.OriginPath;
+        bool originExists = !string.IsNullOrEmpty(origin) && System.IO.File.Exists(origin);
+        var action = WorkbookIdentityReconciler.Reconcile(s.ProjectId, origin, key, originExists);
+        switch (action)
+        {
+            case WorkbookIdentityAction.Moved:
+                // Same project at a new path — keep the id, commit the new origin.
+                _state.SetIdentity(key, s.ProjectId, key);
+                _log.Info($"ReconcileIdentity: '{key}' moved from '{origin}'");
+                break;
+
+            case WorkbookIdentityAction.Copied:
+                // A copy — give it its own identity and clear the inherited project
+                // folder so the self-healing resolver points at the copy's own folder
+                // (which the readiness check then flags for Repair if it has no venv).
+                _state.SetIdentity(key, Guid.NewGuid().ToString("N"), key);
+                _state.SetProjectDir(key, null);
+                _log.Info($"ReconcileIdentity: '{key}' is a copy of '{origin}'; re-stamped identity");
+                break;
+
+            case WorkbookIdentityAction.Unchanged:
+            default:
+                break;
+        }
+    }
+
+    /// <summary>Give a meaningful project the stable identity it lacks (one enabled
+    /// before identity existed), committed against its current path. Only fills in
+    /// <em>missing</em> fields — it never overwrites an existing committed origin, so
+    /// the move/copy signal <see cref="ReconcileIdentity"/> reads survives until the
+    /// reconciler itself commits a new one.</summary>
+    private void EnsureIdentity(string key, string? currentPath)
+    {
+        var s = _state.Get(key);
+        var id = string.IsNullOrEmpty(s.ProjectId) ? Guid.NewGuid().ToString("N") : s.ProjectId;
+        var origin = string.IsNullOrEmpty(s.OriginPath) ? currentPath : s.OriginPath;
+        if (!string.Equals(id, s.ProjectId, StringComparison.Ordinal)
+            || !string.Equals(origin, s.OriginPath, StringComparison.Ordinal))
+        {
+            _state.SetIdentity(key, id, origin);
+        }
     }
 
     /// <summary>For an <em>enabled</em> workbook, validate that its on-disk project

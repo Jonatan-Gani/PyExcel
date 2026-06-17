@@ -23,16 +23,18 @@ bindings, `Actions`, `SelectedActionName`, plus `IsConfigured` and `SelectedActi
 
 ### StateService.cs
 In-memory registry mapping a workbook key to per-sheet profiles and workbook-scoped
-facts, serialised by one coarse lock and firing `StateChanged` on mutation. Inputs: a
-workbook key, sheet name, `RibbonAction`, and mutator functions. Output: `WorkbookState`
-projections, `WorkbookProfileData` snapshots for persistence, and the `StateChanged`
-event.
+facts (enabled, project dir, stable identity), serialised by one coarse lock and firing
+`StateChanged` on mutation. Inputs: a workbook key, sheet name, `RibbonAction`, and mutator
+functions; `SetIdentity` writes the project id + origin path, `Rekey` atomically moves an
+entry between keys (a Save As / move / rename). Output: `WorkbookState` projections,
+`WorkbookProfileData` snapshots for persistence, and the `StateChanged` event.
 
 ### WorkbookProfileData.cs
-The full persisted shape of a workbook's project (enabled flag, project dir, per-sheet
-`SheetProfile` map with default-bucket inheritance). Inputs: none (immutable record).
-Output: `Enabled`, `ProjectDir`, `Sheets`; an `IsMeaningful` check and a `FromState`
-converter from the flat `WorkbookState`.
+The full persisted shape of a workbook's project (enabled flag, project dir, stable
+identity `ProjectId` / `OriginPath`, per-sheet `SheetProfile` map with default-bucket
+inheritance). Inputs: none (immutable record). Output: `Enabled`, `ProjectDir`,
+`ProjectId`, `OriginPath`, `Sheets`; an `IsMeaningful` check and a `FromState` converter
+from the flat `WorkbookState`.
 
 ### WorkbookProfileCodec.cs
 XML round-trip for `WorkbookProfileData` (workbook flags + sheet map), self-contained so
@@ -71,6 +73,14 @@ a `ProjectStructureCheck` record (Ok flag + missing components).
 Enum (NotEnabled / NeedsRepair / Ready) and the classifier that combines the enabled flag
 with a structure check to gate ribbon controls. Inputs: an enabled bool and an optional
 `ProjectStructureCheck`. Output: a `ProjectReadiness` value.
+
+### WorkbookIdentityReconciler.cs
+Pure decision logic for a workbook's stable identity (`WorkbookProfileData.ProjectId` /
+`OriginPath`): compares the committed origin against the path the workbook is open at to
+classify Unchanged / Moved (origin gone — same project relocated) / Copied (origin still on
+disk — a Save-As copy that must become its own project). Inputs: the project id, origin
+path, current path, and an origin-exists bool. Output: a `WorkbookIdentityAction`; the COM
+sink applies the verdict.
 
 ### RibbonRangeParser.cs
 Parses ribbon Input/Output text (semicolon-separated `A1:C10` or `name=A1:C10` bindings)

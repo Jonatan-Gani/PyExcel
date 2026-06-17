@@ -18,6 +18,20 @@ public sealed record WorkbookProfileData
     public bool Enabled { get; init; }
     public string? ProjectDir { get; init; }
 
+    /// <summary>Stable project identity — a GUID stamped into the workbook on Enable
+    /// (and lazily on the next save for projects enabled before this existed). Unlike
+    /// the file-path key, it survives a move / rename / cloud round-trip, and lets a
+    /// <em>copy</em> of an enabled workbook be told apart from the moved original
+    /// (see <see cref="WorkbookIdentityReconciler"/>). Null on a workbook PyExcel has
+    /// never enabled.</summary>
+    public string? ProjectId { get; init; }
+
+    /// <summary>The workbook's full path the last time its identity was committed
+    /// (Enable, or a reconcile after a move). Compared against the workbook's current
+    /// path on open to detect a move (origin gone) versus a copy (origin still on
+    /// disk). Null when unstamped.</summary>
+    public string? OriginPath { get; init; }
+
     /// <summary>Per-sheet configuration, keyed by worksheet name. The
     /// <see cref="DefaultSheetKey"/> entry is a workbook-level default a sheet
     /// inherits when it has no entry of its own — it is how a pre-per-sheet
@@ -80,6 +94,8 @@ public sealed record WorkbookProfileData
         {
             Enabled = s.Enabled,
             ProjectDir = s.ProjectDir,
+            ProjectId = s.ProjectId,
+            OriginPath = s.OriginPath,
             Sheets = sheets,
         };
     }
