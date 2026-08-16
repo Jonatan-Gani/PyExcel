@@ -313,7 +313,10 @@ public class PyExcelRibbon : ExcelRibbon
 
             // For a new workbook, save it into the chosen folder first so its
             // persisted state has a file to live in, then re-key off the saved
-            // path (Save As promotes the workbook to a path-based key).
+            // path (Save As promotes the workbook to a path-based key). For an
+            // already-saved workbook, relocate it into the project folder so the
+            // folder houses the workbook itself, not just its venv / kernel /
+            // userScripts (see MoveWorkbookIntoProjectFolder).
             if (newWorkbookName is not null)
             {
                 var savePath = Path.Combine(projectDir, EnsureXlsxExtension(newWorkbookName));
@@ -325,9 +328,28 @@ public class PyExcelRibbon : ExcelRibbon
                 key = PyExcelServices.WorkbookContext.CurrentWorkbookKey;
                 if (key is null) { _log.Info("OnEnablePyExcel: workbook key lost after save"); return; }
             }
+            else
+            {
+                var moved = MoveWorkbookIntoProjectFolder(key, projectDir);
+                if (moved is null)
+                {
+                    _log.Info("OnEnablePyExcel: enable cancelled at the file-name conflict");
+                    return;
+                }
+                key = moved;
+            }
 
             // Remember the choice so Setup and the runtime kernel both use it.
             PyExcelServices.State.SetProjectDir(key, projectDir);
+
+            // Stamp (or preserve) the stable project identity, committed against the
+            // workbook's current path (the key is its FullName now that it's saved in
+            // the project folder). This is what lets the project keep following the
+            // workbook across later moves / renames, and tells a copy apart from the
+            // original (see WorkbookIdentityReconciler). Repair keeps its existing id.
+            var existingId = PyExcelServices.State.Get(key).ProjectId;
+            PyExcelServices.State.SetIdentity(
+                key, existingId ?? Guid.NewGuid().ToString("N"), key);
 
             var success = SetupForm.Run(ExcelWindowOwner(), projectDir, _log);
             if (success == true)
@@ -795,9 +817,10 @@ public class PyExcelRibbon : ExcelRibbon
         var key = PyExcelServices.WorkbookContext.CurrentWorkbookKey;
         var workbookDir = PyExcelServices.WorkbookContext.CurrentWorkbookDirectory;
         var stored = key is null ? null : PyExcelServices.State.Get(key).ProjectDir;
-        return string.IsNullOrEmpty(stored)
-            ? PyExcel.Common.ProjectDirectory.Resolve(workbookDir)
-            : stored;
+        // Self-healing: honour the stored project folder only while it still exists,
+        // else fall back to the workbook's own folder (the workbook now lives inside
+        // the project folder, so a moved folder re-resolves correctly).
+        return PyExcel.Common.ProjectDirectory.Resolve(stored, workbookDir);
     }
 
     /// <summary>Prompt for a dedicated project folder via the native folder
@@ -813,8 +836,8 @@ public class PyExcelRibbon : ExcelRibbon
             {
                 Description =
                     "Choose a dedicated folder for this workbook's PyExcel project. " +
-                    "Its Python environment (.pyexcel-venv), kernel, and userScripts " +
-                    "folder are created here.",
+                    "The workbook is moved here, alongside its Python environment " +
+                    "(.pyexcel-venv), kernel, and userScripts folder.",
                 ShowNewFolderButton = true,
             };
             if (!string.IsNullOrEmpty(defaultDir) && Directory.Exists(defaultDir))
@@ -897,6 +920,187 @@ public class PyExcelRibbon : ExcelRibbon
         {
             _log.Error($"SaveActiveWorkbookAs failed for '{path}'", ex);
             return false;
+        }
+    }
+
+    /// <summary>
+    /// Relocate the active (already-saved) workbook into <paramref name="projectDir"/>
+    /// so the chosen project folder houses the workbook itself, not just its venv /
+    /// kernel / userScripts. Excel keeps the open file locked, so it can't be moved on
+    /// disk directly — instead we <c>SaveAs</c> a copy into the project folder
+    /// (preserving the workbook's name and format, so a <c>.xlsm</c> stays a
+    /// <c>.xlsm</c>) and then delete the now-released original. The SaveAs is Excel
+    /// rewriting the file at the new path, which is what sidesteps the open-file lock.
+    /// The in-memory PyExcel state is carried across the resulting key change so any
+    /// configuration set before Enable isn't lost.
+    /// </summary>
+    /// <returns>The new workbook key; <paramref name="oldKey"/> unchanged when no
+    /// move was needed (already in the folder) or it wasn't possible; or
+    /// <see langword="null"/> when the user aborts at a file-name conflict — Enable
+    /// should then stop.</returns>
+    private string? MoveWorkbookIntoProjectFolder(string oldKey, string projectDir)
+    {
+        try
+        {
+            dynamic app = ExcelDnaUtil.Application;
+            dynamic wb = app.ActiveWorkbook;
+            if (wb is null) return oldKey;
+
+            string currentFull = (string)wb.FullName;
+            string currentDir = (string)wb.Path;
+            string name = (string)wb.Name;
+
+            // Unsaved workbooks have no on-disk file to relocate — that case is
+            // handled by the name-prompt + SaveAs branch in OnEnablePyExcel.
+            if (string.IsNullOrEmpty(currentDir)) return oldKey;
+
+            var targetPath = Path.Combine(projectDir, name);
+
+            // Already living in the project folder — nothing to move.
+            if (WorkbookIdentityReconciler.PathsEqual(currentFull, targetPath))
+            {
+                _log.Info($"OnEnablePyExcel: workbook already in project folder '{projectDir}'");
+                return oldKey;
+            }
+
+            // A different file already occupies the destination name. Ask the user
+            // (native dialogs) to replace it, save under a new name, or abort.
+            bool overwrite = false;
+            if (File.Exists(targetPath))
+            {
+                var resolved = ResolveTargetCollision(projectDir, name, targetPath);
+                if (resolved is null) return null; // user chose Abort — stop enabling
+                targetPath = resolved;
+                // They may have navigated the Save As dialog back to the workbook's
+                // own file — that's a no-op move.
+                if (WorkbookIdentityReconciler.PathsEqual(currentFull, targetPath))
+                    return oldKey;
+                overwrite = File.Exists(targetPath);
+            }
+
+            Directory.CreateDirectory(projectDir);
+            // Preserve the workbook's own format (.xlsx / .xlsm / .xlsb): pass its
+            // current FileFormat rather than forcing .xlsx, so macros aren't stripped.
+            // Any overwrite was confirmed above, so suppress Excel's own prompt.
+            SaveAsPreservingFormat(wb, targetPath, suppressOverwritePrompt: overwrite);
+
+            // SaveAs promotes the workbook to the new path, so the context now reports
+            // the new key; re-key the whole in-memory entry onto it atomically.
+            string newKey = PyExcelServices.WorkbookContext.CurrentWorkbookKey ?? oldKey;
+            PyExcelServices.State.Rekey(oldKey, newKey);
+
+            // Excel releases the original once it has SaveAs-ed onto the new file, so
+            // the orphan can be removed.
+            TryDeleteOriginal(currentFull, targetPath);
+
+            _log.Info($"OnEnablePyExcel: moved workbook '{currentFull}' -> '{targetPath}'");
+            return newKey;
+        }
+        catch (Exception ex)
+        {
+            // The move is a convenience; on any failure keep the workbook where it is
+            // and continue enabling against the chosen project folder.
+            _log.Error("MoveWorkbookIntoProjectFolder failed", ex);
+            return oldKey;
+        }
+    }
+
+    /// <summary>A different file already occupies the workbook's name in the project
+    /// folder. Show a native message box offering Replace / new name / Abort, routing
+    /// the rename path through the OS <see cref="System.Windows.Forms.SaveFileDialog"/>
+    /// (which carries its own overwrite prompt). Returns the chosen absolute target
+    /// path, or <see langword="null"/> to abort.</summary>
+    private string? ResolveTargetCollision(string projectDir, string name, string targetPath)
+    {
+        var message =
+            $"A different file named \"{name}\" already exists in the project folder:\n\n" +
+            $"{projectDir}\n\n" +
+            "Yes — replace the existing file\n" +
+            "No — save the workbook under a new name\n" +
+            "Cancel — stop enabling";
+        var choice = System.Windows.Forms.MessageBox.Show(
+            ExcelWindowOwner(), message, "PyExcel — file name already in use",
+            System.Windows.Forms.MessageBoxButtons.YesNoCancel,
+            System.Windows.Forms.MessageBoxIcon.Warning);
+
+        return choice switch
+        {
+            System.Windows.Forms.DialogResult.Yes => targetPath,                  // replace
+            System.Windows.Forms.DialogResult.No => PromptForMoveTarget(projectDir, name),
+            _ => null,                                                             // abort
+        };
+    }
+
+    /// <summary>Native Save As dialog to choose where in the project folder to save the
+    /// workbook, constrained to its own extension (so the saved format stays valid) and
+    /// with the OS's own "replace?" prompt on a further collision. Returns the chosen
+    /// path, or <see langword="null"/> if the user cancelled.</summary>
+    private string? PromptForMoveTarget(string projectDir, string name)
+    {
+        try { SetForegroundWindow(ExcelDnaUtil.WindowHandle); } catch { /* best-effort */ }
+        var ext = Path.GetExtension(name);
+        using var dlg = new System.Windows.Forms.SaveFileDialog
+        {
+            Title = "Save the workbook into the project folder",
+            InitialDirectory = projectDir,
+            FileName = name,
+            Filter = string.IsNullOrEmpty(ext)
+                ? "All files (*.*)|*.*"
+                : $"Excel workbook (*{ext})|*{ext}",
+            DefaultExt = ext.TrimStart('.'),
+            AddExtension = true,
+            OverwritePrompt = true,
+        };
+        return dlg.ShowDialog(ExcelWindowOwner()) == System.Windows.Forms.DialogResult.OK
+               && !string.IsNullOrWhiteSpace(dlg.FileName)
+            ? dlg.FileName
+            : null;
+    }
+
+    /// <summary>SaveAs the workbook to <paramref name="targetPath"/> preserving its
+    /// current format. When <paramref name="suppressOverwritePrompt"/> (the user has
+    /// already confirmed a replace), Excel's own overwrite alert is suppressed and
+    /// restored around the save so they aren't asked twice.</summary>
+    private static void SaveAsPreservingFormat(dynamic wb, string targetPath, bool suppressOverwritePrompt)
+    {
+        dynamic app = ExcelDnaUtil.Application;
+        bool alerts = true;
+        if (suppressOverwritePrompt)
+        {
+            try { alerts = (bool)app.DisplayAlerts; } catch { /* assume default true */ }
+            try { app.DisplayAlerts = false; } catch { /* best-effort */ }
+        }
+        try
+        {
+            wb.SaveAs(targetPath, wb.FileFormat);
+        }
+        finally
+        {
+            if (suppressOverwritePrompt)
+            {
+                try { app.DisplayAlerts = alerts; } catch { /* best-effort */ }
+            }
+        }
+    }
+
+    /// <summary>Delete the workbook's pre-move original after a successful SaveAs.
+    /// Guards against deleting the relocated copy, and swallows any failure — Excel
+    /// has already released the old file, but an AV scanner or transient lock must
+    /// never turn a successful move into an error (a leftover copy is harmless).</summary>
+    private void TryDeleteOriginal(string originalPath, string targetPath)
+    {
+        try
+        {
+            if (!WorkbookIdentityReconciler.PathsEqual(originalPath, targetPath)
+                && File.Exists(originalPath))
+                File.Delete(originalPath);
+        }
+        catch (Exception ex)
+        {
+            _log.Error($"OnEnablePyExcel: couldn't delete the original '{originalPath}'", ex);
+            LogDisplay.WriteLine(
+                "Enable: moved the workbook into the project folder, but couldn't " +
+                $"remove the original copy at '{originalPath}'.");
         }
     }
 
@@ -1094,7 +1298,12 @@ public class PyExcelRibbon : ExcelRibbon
     }
 
     // -------------------------------------------------------------------------
-    // Export group
+    // Export group — Export opens the configurable export dialog seeded with the
+    // workbook's saved defaults; Edit configures and persists those defaults.
+    // Both edit one ExportSettings recipe (source range, destination folder, base
+    // name, file type, and an optional unique-name date/time stamp). The inline
+    // Source box mirrors the default source range; the read-only "Saves to" box
+    // previews the file name the defaults produce.
     // -------------------------------------------------------------------------
 
     public void OnExport(IRibbonControl control)
@@ -1104,7 +1313,24 @@ public class PyExcelRibbon : ExcelRibbon
         {
             var key = PyExcelServices.WorkbookContext.CurrentWorkbookKey;
             if (key is null) { _log.Info("OnExport: no active workbook"); return; }
-            PyExcel.Excel.ExportService.RunActiveExport(PyExcelServices.State.Get(key));
+
+            // Seed the dialog from the saved defaults, let the user tweak this run,
+            // then export. The destination file name is stamped at run time inside
+            // RunExport, so a unique-name recipe lands in a fresh file each click.
+            var seed = PyExcel.Excel.ExportSettings.FromState(PyExcelServices.State.Get(key));
+            var workbookDir = PyExcelServices.WorkbookContext.CurrentWorkbookDirectory;
+            var result = ExportForm.PromptExport(ExcelWindowOwner(), seed, workbookDir, PickRangeNative);
+            if (result is null) { _log.Info("OnExport: cancelled"); return; }
+
+            // The user can opt to promote this run's tweaks to the new default.
+            if (result.SaveAsDefault)
+            {
+                PersistExportDefaults(key, result.Settings);
+                MarkWorkbookDirty();
+            }
+
+            PyExcel.Excel.ExportService.RunExport(result.Settings, workbookDir);
+            _log.Info($"OnExport: running export for workbook '{key}'");
         }
         catch (Exception ex)
         {
@@ -1120,13 +1346,15 @@ public class PyExcelRibbon : ExcelRibbon
         PyExcelServices.State.SetExportInput(key, text);
     }
 
-    public string GetExportOutput(IRibbonControl control) => ActiveState().ExportOutput ?? string.Empty;
-    public void OnExportOutputChange(IRibbonControl control, string text)
-    {
-        var key = PyExcelServices.WorkbookContext.CurrentWorkbookKey;
-        if (key is null) return;
-        PyExcelServices.State.SetExportOutput(key, text);
-    }
+    /// <summary>The read-only "Saves to" preview — the file name the saved export
+    /// defaults produce (with a <c>{timestamp}</c> placeholder when a unique-name
+    /// stamp is on). Display-only: it's driven by the Edit dialog, not typed, so
+    /// hand edits revert (like the Script / Input / Output boxes).</summary>
+    public string GetExportTarget(IRibbonControl control)
+        => PyExcel.Excel.ExportSettingsPlanner.PreviewPattern(
+            PyExcel.Excel.ExportSettings.FromState(ActiveState()));
+
+    public void OnExportTargetChange(IRibbonControl control, string text) => RevertControl(control);
 
     public void OnEditExport(IRibbonControl control)
     {
@@ -1134,17 +1362,16 @@ public class PyExcelRibbon : ExcelRibbon
         {
             var key = PyExcelServices.WorkbookContext.CurrentWorkbookKey;
             if (key is null) { _log.Info("OnEditExport: no active workbook"); return; }
-            var state = PyExcelServices.State.Get(key);
-            var result = EditIoForm.PromptExport(
-                ExcelWindowOwner(),
-                state.ExportInput,
-                state.ExportOutput,
-                PyExcelServices.WorkbookContext.CurrentWorkbookDirectory,
-                PickRangeNative);
-            if (result is null) { _log.Info("OnEditExport: cancelled"); return; }
-            PyExcelServices.State.SetExportInput(key, result.Input);
-            PyExcelServices.State.SetExportOutput(key, result.Output);
-            _log.Info($"OnEditExport: saved for workbook '{key}'");
+
+            var seed = PyExcel.Excel.ExportSettings.FromState(PyExcelServices.State.Get(key));
+            var settings = ExportForm.PromptDefaults(
+                ExcelWindowOwner(), seed,
+                PyExcelServices.WorkbookContext.CurrentWorkbookDirectory, PickRangeNative);
+            if (settings is null) { _log.Info("OnEditExport: cancelled"); return; }
+
+            PersistExportDefaults(key, settings);
+            MarkWorkbookDirty();
+            _log.Info($"OnEditExport: saved export defaults for workbook '{key}'");
         }
         catch (Exception ex)
         {
@@ -1152,40 +1379,17 @@ public class PyExcelRibbon : ExcelRibbon
         }
     }
 
-    public void OnExportWizard(IRibbonControl control)
-    {
-        try
-        {
-            var key = PyExcelServices.WorkbookContext.CurrentWorkbookKey;
-            if (key is null) { _log.Info("OnExportWizard: no active workbook"); return; }
-            var state = PyExcelServices.State.Get(key);
-
-            // Seed the wizard's first row from the single-export fields if set.
-            System.Collections.Generic.IReadOnlyList<PyExcel.Excel.ExportJob>? seed = null;
-            if (!string.IsNullOrWhiteSpace(state.ExportInput) ||
-                !string.IsNullOrWhiteSpace(state.ExportOutput))
-            {
-                seed = new[]
-                {
-                    new PyExcel.Excel.ExportJob(state.ExportInput ?? string.Empty,
-                                                state.ExportOutput ?? string.Empty),
-                };
-            }
-
-            var jobs = ExportWizardForm.Prompt(
-                ExcelWindowOwner(), seed,
-                PyExcelServices.WorkbookContext.CurrentWorkbookDirectory);
-            if (jobs is null) { _log.Info("OnExportWizard: cancelled"); return; }
-
-            PyExcel.Excel.ExportService.RunBatch(
-                jobs, PyExcelServices.WorkbookContext.CurrentWorkbookDirectory);
-            _log.Info($"OnExportWizard: running {jobs.Count} export(s)");
-        }
-        catch (Exception ex)
-        {
-            _log.Error("OnExportWizard failed", ex);
-        }
-    }
+    /// <summary>Persist an <see cref="PyExcel.Excel.ExportSettings"/> recipe as the
+    /// active sheet's export defaults in one atomic state update (one ribbon
+    /// repaint), translating the enums to their persisted string tokens.</summary>
+    private static void PersistExportDefaults(string key, PyExcel.Excel.ExportSettings s)
+        => PyExcelServices.State.SetExportDefaults(
+            key,
+            s.SourceRange,
+            s.Folder,
+            s.BaseName,
+            PyExcel.Excel.ExportSettings.ToToken(s.FileType),
+            PyExcel.Excel.ExportSettings.ToToken(s.Timestamp));
 
     // -------------------------------------------------------------------------
     // Paste group

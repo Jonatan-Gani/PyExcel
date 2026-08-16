@@ -26,10 +26,15 @@ vs file), validated via `EditIoValidator` on OK. Inputs: title, labels and field
 initial values, workbook dir, and an optional range picker. Output: an
 `EditIoValidationResult?` (null on cancel).
 
-### ExportWizardForm.cs
-Multi-row export editor mapping source ranges to target files, validated per-row by
-`ExportBatchValidator`. Inputs: an initial export-jobs list and the workbook dir. Output:
-an `IReadOnlyList<ExportJob>?` (null on cancel).
+### ExportForm.cs
+The unified Export dialog, run in two modes: **Edit** (`PromptDefaults`) configures and
+returns the workbook's default export recipe; **Export** (`PromptExport`) seeds from those
+defaults, lets the user tweak, and returns the recipe to run now (plus a save-as-default
+flag). Both edit an `ExportSettings` (source range, folder, base name, file type, optional
+unique-name date/time stamp) with a live file-name preview and an overwrite guard; the
+composition rules come from the cross-platform `ExportSettingsPlanner`. Inputs: an initial
+`ExportSettings`, the workbook dir, and an optional range picker. Output: an `ExportSettings?`
+(Edit) or `ExportPromptResult?` (Export), null on cancel.
 
 ### ProgressForm.cs
 Modeless, non-blocking progress dialog that renders kernel PROGRESS frames on a background

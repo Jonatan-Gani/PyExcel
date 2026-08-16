@@ -294,6 +294,32 @@ public class StateServiceTests
     }
 
     [Fact]
+    public void SetExportDefaults_PersistsAllFieldsInOneUpdate()
+    {
+        var svc = new StateService();
+        var fires = 0;
+        svc.StateChanged += (_, _) => fires++;
+
+        svc.SetExportDefaults("wb.xlsx", "A1:C10", @"C:\out", "report", "tsv", "datetime");
+
+        var s = svc.Get("wb.xlsx");
+        Assert.Equal("A1:C10", s.ExportInput);
+        Assert.Equal(@"C:\out", s.ExportFolder);
+        Assert.Equal("report", s.ExportBaseName);
+        Assert.Equal("tsv", s.ExportFormat);
+        Assert.Equal("datetime", s.ExportTimestamp);
+        Assert.Equal(1, fires);  // one atomic update, one repaint
+    }
+
+    [Fact]
+    public void SetExportDefaults_NullKey_Throws()
+    {
+        var svc = new StateService();
+        Assert.Throws<ArgumentNullException>(
+            () => svc.SetExportDefaults(null!, "A1", null, "n", "csv", "none"));
+    }
+
+    [Fact]
     public void SetImportInput_FiresStateChanged()
     {
         var svc = new StateService();
@@ -322,5 +348,92 @@ public class StateServiceTests
         Assert.Throws<ArgumentNullException>(() => svc.SetExportInput(null!, "x"));
         Assert.Throws<ArgumentNullException>(() => svc.SetExportOutput(null!, "x"));
         Assert.Throws<ArgumentNullException>(() => svc.SetPasteOutput(null!, "x"));
+    }
+
+    // -------------------------------------------------------------------------
+    // Stable identity + re-key
+    // -------------------------------------------------------------------------
+
+    [Fact]
+    public void SetIdentity_PersistsProjectIdAndOriginPath()
+    {
+        var svc = new StateService();
+        svc.SetEnabled("wb.xlsx", true);
+        svc.SetIdentity("wb.xlsx", "abc123", "/path/wb.xlsx");
+
+        var s = svc.Get("wb.xlsx");
+        Assert.Equal("abc123", s.ProjectId);
+        Assert.Equal("/path/wb.xlsx", s.OriginPath);
+        Assert.True(s.Enabled);  // unrelated fields preserved
+    }
+
+    [Fact]
+    public void Rekey_MovesEntireEntryToNewKey()
+    {
+        var svc = new StateService();
+        svc.SetEnabled("old", true);
+        svc.SetProjectDir("old", "/proj");
+        svc.SetIdentity("old", "id1", "old");
+        svc.SetExportInput("old", "A1:C10");
+
+        svc.Rekey("old", "new");
+
+        Assert.False(svc.Get("old").Enabled);   // old now resolves to Empty
+        var s = svc.Get("new");
+        Assert.True(s.Enabled);
+        Assert.Equal("/proj", s.ProjectDir);
+        Assert.Equal("id1", s.ProjectId);
+        Assert.Equal("A1:C10", s.ExportInput);
+        Assert.DoesNotContain("old", svc.KnownWorkbooks());
+        Assert.Contains("new", svc.KnownWorkbooks());
+    }
+
+    [Fact]
+    public void Rekey_FiresForBothKeys()
+    {
+        var svc = new StateService();
+        svc.SetEnabled("old", true);
+        var seen = new List<string>();
+        svc.StateChanged += (_, e) => seen.Add(e.WorkbookKey);
+
+        svc.Rekey("old", "new");
+
+        Assert.Contains("old", seen);
+        Assert.Contains("new", seen);
+    }
+
+    [Fact]
+    public void Rekey_SameKey_NoOp()
+    {
+        var svc = new StateService();
+        svc.SetEnabled("wb", true);
+        var fires = 0;
+        svc.StateChanged += (_, _) => fires++;
+
+        svc.Rekey("wb", "wb");
+
+        Assert.Equal(0, fires);
+        Assert.True(svc.Get("wb").Enabled);
+    }
+
+    [Fact]
+    public void Rekey_UnknownOldKey_NoOp()
+    {
+        var svc = new StateService();
+        var fires = 0;
+        svc.StateChanged += (_, _) => fires++;
+
+        svc.Rekey("ghost", "new");
+
+        Assert.Equal(0, fires);
+        Assert.Empty(svc.KnownWorkbooks());
+    }
+
+    [Fact]
+    public void Rekey_NullArgs_Throw()
+    {
+        var svc = new StateService();
+        Assert.Throws<ArgumentNullException>(() => svc.Rekey(null!, "new"));
+        Assert.Throws<ArgumentNullException>(() => svc.Rekey("old", null!));
     }
 }

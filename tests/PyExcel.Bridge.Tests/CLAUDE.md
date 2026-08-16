@@ -22,13 +22,13 @@ map value is "which area is tested where":
 - **CSV/TSV**: `CsvParserTests`, `CsvWriterTests`, `CsvCellFormatterTests`,
   `CsvCellTypeInferenceTests`.
 - **Import/Export/Paste planning + validation**: `ImportPlannerTests`,
-  `ExportPlannerTests`, `ExportBatchValidatorTests`, `EditIoValidatorTests`,
-  `PastePlannerTests`, `PastePreflightTests`.
+  `ExportPlannerTests`, `ExportSettingsTests`, `ExportSettingsPlannerTests`,
+  `EditIoValidatorTests`, `PastePlannerTests`, `PastePreflightTests`.
 - **State, codecs, persistence**: `WorkbookStateCodecTests`, `WorkbookProfileCodecTests`,
   `ProjectProfileTests`, `StateServiceTests`, `PerSheetStateTests`,
-  `WorkbookStatePersistenceTests`, `WorkbookKeysTests`, `LegacyStateConverterTests`,
-  `LegacyFormulaDecoderTests`, `ErrorServiceTests`, `RunArchiveTests`,
-  `PyExcelServicesTests`, `ScriptDirectoryWatcherTests`.
+  `WorkbookStatePersistenceTests`, `WorkbookKeysTests`, `WorkbookIdentityReconcilerTests`,
+  `LegacyStateConverterTests`, `LegacyFormulaDecoderTests`, `ErrorServiceTests`,
+  `RunArchiveTests`, `PyExcelServicesTests`, `ScriptDirectoryWatcherTests`.
 - **Ribbon ranges / orientation / sheet / progress**: `RibbonRangeParserTests`,
   `RibbonRangeFormatTests`, `RangeAddressValidatorTests`, `OrientationResolverTests`,
   `SheetSelectionTests`, `SheetPickerValidatorTests`, `ProgressModelTests`.

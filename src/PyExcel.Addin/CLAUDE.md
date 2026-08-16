@@ -17,7 +17,10 @@ wires `ExcelWorkbookContext` and `AppEventSink`, and restores open workbooks on 
 Subscribes to Excel Application events (WorkbookOpen/Activate/BeforeSave/BeforeClose,
 SheetActivate) and keeps state in sync. Inputs: a `StateService` and `IWorkbookContext`.
 Output: state mutations, on-disk structure validation, readiness marking, ribbon
-invalidation, and a state flush to the CustomXMLPart on save; every handler is guarded so
+invalidation, and a state flush to the CustomXMLPart on save. On bring-online it reconciles
+the workbook's stable identity against its current path (`WorkbookIdentityReconciler`) —
+following a moved/renamed project and re-stamping a copy onto its own — and lazily stamps an
+identity on save for projects enabled before identity existed; every handler is guarded so
 exceptions never escape into Excel.
 
 ### WorkbookStatePersister.cs

@@ -38,6 +38,8 @@ public sealed class StateService
     {
         public bool Enabled;
         public string? ProjectDir;
+        public string? ProjectId;
+        public string? OriginPath;
         public IReadOnlyList<string> AvailableScripts = Array.Empty<string>();
         public string CurrentSheet = WorkbookProfileData.DefaultSheetKey;
         public readonly Dictionary<string, SheetProfile> Sheets = new(StringComparer.Ordinal);
@@ -105,6 +107,8 @@ public sealed class StateService
             // sheet-scoped edit, which leaves them unchanged).
             e.Enabled = next.Enabled;
             e.ProjectDir = next.ProjectDir;
+            e.ProjectId = next.ProjectId;
+            e.OriginPath = next.OriginPath;
             e.AvailableScripts = next.AvailableScripts;
 
             // Sheet-scoped fields: write to the current sheet, but only
@@ -151,6 +155,44 @@ public sealed class StateService
         if (removed) StateChanged?.Invoke(this, new StateChangedEventArgs(workbookKey));
     }
 
+    /// <summary>Move a workbook's entire in-memory entry from <paramref name="oldKey"/>
+    /// to <paramref name="newKey"/> — preserving everything (enabled, project dir,
+    /// identity, the sheet map, the current-sheet pointer, scripts). The single,
+    /// atomic operation for "this workbook's path changed" (a Save As / move /
+    /// rename), so callers don't hand-roll <see cref="GetProfile"/> →
+    /// <see cref="LoadProfile"/> → <see cref="Forget"/> and risk dropping a field.
+    /// No-op when <paramref name="oldKey"/> has no entry or equals
+    /// <paramref name="newKey"/>; an existing entry at <paramref name="newKey"/> is
+    /// overwritten (the workbook being relocated owns its new key).</summary>
+    public void Rekey(string oldKey, string newKey)
+    {
+        if (oldKey is null) throw new ArgumentNullException(nameof(oldKey));
+        if (newKey is null) throw new ArgumentNullException(nameof(newKey));
+        if (string.Equals(oldKey, newKey, StringComparison.Ordinal)) return;
+
+        bool moved;
+        lock (_lock)
+        {
+            if (_entries.TryGetValue(oldKey, out var e))
+            {
+                _entries[newKey] = e;
+                _entries.Remove(oldKey);
+                moved = true;
+            }
+            else
+            {
+                moved = false;
+            }
+        }
+        if (moved)
+        {
+            // Both keys changed meaning — the old now resolves to Empty, the new to
+            // the moved entry — so fire for both.
+            StateChanged?.Invoke(this, new StateChangedEventArgs(oldKey));
+            StateChanged?.Invoke(this, new StateChangedEventArgs(newKey));
+        }
+    }
+
     /// <summary>Snapshot of all currently-tracked workbook keys. Test helper.</summary>
     public IReadOnlyList<string> KnownWorkbooks()
     {
@@ -177,6 +219,8 @@ public sealed class StateService
             {
                 Enabled = e.Enabled,
                 ProjectDir = e.ProjectDir,
+                ProjectId = e.ProjectId,
+                OriginPath = e.OriginPath,
                 Sheets = sheets,
             };
         }
@@ -196,6 +240,8 @@ public sealed class StateService
             var e = GetOrCreate(workbookKey);
             e.Enabled = data.Enabled;
             e.ProjectDir = data.ProjectDir;
+            e.ProjectId = data.ProjectId;
+            e.OriginPath = data.OriginPath;
             e.Sheets.Clear();
             foreach (var kv in data.Sheets)
                 e.Sheets[kv.Key] = kv.Value;
@@ -225,6 +271,8 @@ public sealed class StateService
         {
             Enabled = e.Enabled,
             ProjectDir = e.ProjectDir,
+            ProjectId = e.ProjectId,
+            OriginPath = e.OriginPath,
             CurrentSheet = sheet.Length == 0 ? null : sheet,
             AvailableScripts = e.AvailableScripts,
             SelectedScript = p.SelectedScript,
@@ -236,6 +284,10 @@ public sealed class StateService
             ImportOutput = p.ImportOutput,
             ExportInput = p.ExportInput,
             ExportOutput = p.ExportOutput,
+            ExportFolder = p.ExportFolder,
+            ExportBaseName = p.ExportBaseName,
+            ExportFormat = p.ExportFormat,
+            ExportTimestamp = p.ExportTimestamp,
             PasteOutput = p.PasteOutput,
         };
     }
@@ -251,6 +303,10 @@ public sealed class StateService
         ImportOutput = s.ImportOutput,
         ExportInput = s.ExportInput,
         ExportOutput = s.ExportOutput,
+        ExportFolder = s.ExportFolder,
+        ExportBaseName = s.ExportBaseName,
+        ExportFormat = s.ExportFormat,
+        ExportTimestamp = s.ExportTimestamp,
         PasteOutput = s.PasteOutput,
     };
 
@@ -269,6 +325,10 @@ public sealed class StateService
            && a.ImportOutput == b.ImportOutput
            && a.ExportInput == b.ExportInput
            && a.ExportOutput == b.ExportOutput
+           && a.ExportFolder == b.ExportFolder
+           && a.ExportBaseName == b.ExportBaseName
+           && a.ExportFormat == b.ExportFormat
+           && a.ExportTimestamp == b.ExportTimestamp
            && a.PasteOutput == b.PasteOutput;
 
     // -------------------------------------------------------------------------
@@ -287,6 +347,13 @@ public sealed class StateService
 
     public void SetProjectDir(string key, string? dir)
         => Update(key, s => s with { ProjectDir = dir });
+
+    /// <summary>Set the stable project identity (a GUID) together with the origin
+    /// path it is committed against, in one update — they're always written as a
+    /// pair so the reconciler never sees a half-updated identity. See
+    /// <see cref="WorkbookIdentityReconciler"/>.</summary>
+    public void SetIdentity(string key, string? projectId, string? originPath)
+        => Update(key, s => s with { ProjectId = projectId, OriginPath = originPath });
 
     public void SetSelectedScript(string key, string? script)
         => Update(key, s => s with { SelectedScript = script });
@@ -357,6 +424,25 @@ public sealed class StateService
 
     public void SetExportOutput(string key, string? value)
         => Update(key, s => s with { ExportOutput = value });
+
+    /// <summary>Write the whole export-defaults recipe (source range, folder, base
+    /// name, file-type token, timestamp-style token) in one atomic update, so the
+    /// Edit-Export / Export dialogs persist all of it with a single
+    /// <see cref="StateChanged"/> (one ribbon repaint) instead of field-by-field.
+    /// The string tokens are produced by <c>PyExcel.Excel.ExportSettings</c>;
+    /// keeping them as plain strings here avoids a layering dependency on the
+    /// Excel project.</summary>
+    public void SetExportDefaults(
+        string key, string? sourceRange, string? folder, string? baseName,
+        string? format, string? timestamp)
+        => Update(key, s => s with
+        {
+            ExportInput = sourceRange,
+            ExportFolder = folder,
+            ExportBaseName = baseName,
+            ExportFormat = format,
+            ExportTimestamp = timestamp,
+        });
 
     public void SetPasteOutput(string key, string? value)
         => Update(key, s => s with { PasteOutput = value });

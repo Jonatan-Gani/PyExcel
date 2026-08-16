@@ -1,21 +1,26 @@
 #if NETFRAMEWORK
 using System;
-using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Threading.Tasks;
 using ExcelDna.Integration;
 using ExcelDna.Logging;
-using PyExcel.State;
 
 namespace PyExcel.Excel;
 
 /// <summary>
-/// Drives the ribbon's Export button: reads the configured source range
-/// off the active sheet and writes it as CSV / TSV to the user-typed
-/// destination file. Sibling of <see cref="ImportService"/>; same
-/// SAFE-1 threading contract (COM on the main thread, file I/O off it),
-/// same diagnostic surface (LogDisplay + Trace).
+/// Drives the ribbon's Export button: resolves the user's
+/// <see cref="ExportSettings"/> recipe (source range + destination folder, base
+/// name, file type, and optional unique-name date/time stamp) into a concrete
+/// <see cref="ExportPlan"/> via <see cref="ExportSettingsPlanner"/>, reads the
+/// source range off the active sheet, and writes it as CSV / TSV to the composed
+/// destination file. Sibling of <see cref="ImportService"/>; same SAFE-1
+/// threading contract (COM on the main thread, file I/O off it), same diagnostic
+/// surface (LogDisplay + Trace).
+///
+/// <para>The file name is composed at the moment the export runs (using
+/// <see cref="DateTime.Now"/>), so a stamped recipe produces a fresh, uniquely
+/// named file each click instead of overwriting the previous one.</para>
 ///
 /// <para>Cell-value formatting (string conversion before CSV quoting) is
 /// delegated to <see cref="CsvCellFormatter"/>: numbers use the
@@ -30,21 +35,25 @@ namespace PyExcel.Excel;
 public static class ExportService
 {
     /// <summary>
-    /// Execute the export currently configured in <paramref name="state"/>.
-    /// Returns immediately; the range read happens on the calling
-    /// (main) thread, file I/O happens on a background task.
+    /// Execute an export from the configured <paramref name="settings"/>.
+    /// Returns immediately; the range read happens on the calling (main) thread,
+    /// the file write happens on a background task. The destination file name is
+    /// stamped with <see cref="DateTime.Now"/> at the moment of this call.
     /// </summary>
-    public static void RunActiveExport(WorkbookState state)
+    /// <param name="settings">The export recipe (source range, folder, base name,
+    /// file type, timestamp style).</param>
+    /// <param name="workbookDirectory">The active workbook's folder when saved,
+    /// else null; a blank/relative destination folder resolves against it.</param>
+    public static void RunExport(ExportSettings settings, string? workbookDirectory)
     {
-        if (state is null) throw new ArgumentNullException(nameof(state));
+        if (settings is null) throw new ArgumentNullException(nameof(settings));
 
         // --- main thread: plan + read the range --------------------------
         ExportPlan plan;
         string?[,] rows;
         try
         {
-            string? workbookDir = ResolveWorkbookDir();
-            plan = ExportPlanner.Create(state.ExportInput, state.ExportOutput, workbookDir);
+            plan = ExportSettingsPlanner.Resolve(settings, DateTime.Now, workbookDirectory);
             rows = ReadAsStringGrid(plan.SourceRangeAddress);
         }
         catch (FormatException fex)
@@ -85,72 +94,12 @@ public static class ExportService
                     encoding: null,
                     writeBom: false);
                 Trace.WriteLine($"Export: wrote {height}×{width} to '{plan.AbsoluteTargetPath}'.");
+                LogDisplay.WriteLine($"[PyExcel] Exported {height}×{width} to '{plan.AbsoluteTargetPath}'.");
             }
             catch (Exception ex)
             {
                 Fail($"Export: failed to write '{plan.AbsoluteTargetPath}' — {ex.Message}", ex);
             }
-        });
-    }
-
-    /// <summary>Run a batch of exports (the Export Wizard). Reads every
-    /// source range on the main thread, then writes each file on a
-    /// background thread — the same per-export pipeline as
-    /// <see cref="RunActiveExport"/>, looped. Each job's planning reuses
-    /// <see cref="ExportPlanner"/>; the wizard has already validated them,
-    /// so a plan failure here is surfaced and the row skipped.</summary>
-    public static void RunBatch(IReadOnlyList<ExportJob> jobs, string? workbookDirectory)
-    {
-        if (jobs is null) throw new ArgumentNullException(nameof(jobs));
-        if (jobs.Count == 0) { Warn("Export Wizard: no rows to export."); return; }
-
-        // --- main thread: plan + read every source range ----------------
-        var planned = new List<(ExportPlan Plan, string?[,] Rows)>(jobs.Count);
-        try
-        {
-            foreach (var job in jobs)
-            {
-                var plan = ExportPlanner.Create(job.SourceRange, job.TargetPath, workbookDirectory);
-                planned.Add((plan, ReadAsStringGrid(plan.SourceRangeAddress)));
-            }
-        }
-        catch (FormatException fex) { Warn(fex.Message); return; }
-        catch (Exception ex)
-        {
-            Fail($"Export Wizard: failed to read a source range — {ex.Message}", ex);
-            return;
-        }
-
-        // --- background thread: write each file --------------------------
-        Task.Run(() =>
-        {
-            int written = 0;
-            foreach (var (plan, rows) in planned)
-            {
-                int height = rows.GetLength(0);
-                int width = rows.GetLength(1);
-                if (height == 0 || width == 0)
-                {
-                    Warn($"Export Wizard: '{plan.SourceRangeAddress}' is empty — skipped.");
-                    continue;
-                }
-                try
-                {
-                    EnsureDirectory(plan.AbsoluteTargetPath);
-                    using var stream = new FileStream(
-                        plan.AbsoluteTargetPath, FileMode.Create, FileAccess.Write, FileShare.Read);
-                    CsvWriter.Write(
-                        stream, EnumerateRows(rows),
-                        delimiter: plan.Delimiter, lineTerminator: "\r\n",
-                        encoding: null, writeBom: false);
-                    written++;
-                }
-                catch (Exception ex)
-                {
-                    Fail($"Export Wizard: failed to write '{plan.AbsoluteTargetPath}' — {ex.Message}", ex);
-                }
-            }
-            Trace.WriteLine($"Export Wizard: wrote {written}/{planned.Count} file(s).");
         });
     }
 
@@ -224,25 +173,6 @@ public static class ExportService
         var dir = Path.GetDirectoryName(path);
         if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
             Directory.CreateDirectory(dir!);
-    }
-
-    /// <summary>Workbook directory of the active workbook, or
-    /// <see langword="null"/> for an unsaved workbook. See
-    /// <see cref="ImportService"/> for the rationale on duplication.</summary>
-    private static string? ResolveWorkbookDir()
-    {
-        try
-        {
-            dynamic app = ExcelDnaUtil.Application;
-            dynamic wb = app.ActiveWorkbook;
-            if (wb is null) return null;
-            string path = (string)wb.Path;
-            return string.IsNullOrEmpty(path) ? null : path;
-        }
-        catch
-        {
-            return null;
-        }
     }
 
     private static void Warn(string message)

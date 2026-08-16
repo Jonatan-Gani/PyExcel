@@ -59,11 +59,20 @@
                     <button id="btnEditImport" label="Edit" imageMso="EditQuery" size="large" onAction="OnEditImport" getEnabled="RibbonWorkbookOpen"/>
                 </group>
                 <group id="grpExport" label="Export">
+                    <!--
+                      Two buttons (Note: Wizard removed): Export opens the
+                      configurable export dialog seeded with the saved defaults
+                      and runs it; Edit configures and persists those defaults
+                      (folder, file name, file type, and an optional unique-name
+                      date/time stamp). The Source box mirrors the default source
+                      range; "Saves to" is a read-only preview of the file name
+                      the defaults produce (display-only — OnExportTargetChange
+                      reverts hand edits).
+                    -->
                     <button id="btnExport" label="Export" size="large" imageMso="Import" onAction="OnExport" getEnabled="RibbonWorkbookOpen"/>
                     <editBox id="txtExportInput" label="Source" getText="GetExportInput" sizeString="XXXXXXXXXXXXXXXXXXXX" onChange="OnExportInputChange" getEnabled="RibbonWorkbookOpen"/>
-                    <editBox id="txtExportOutput" label="Destination" getText="GetExportOutput" sizeString="XXXXXXXXXXXXXXXXXXXX" onChange="OnExportOutputChange" getEnabled="RibbonWorkbookOpen"/>
+                    <editBox id="txtExportTarget" label="Saves to" getText="GetExportTarget" sizeString="XXXXXXXXXXXXXXXXXXXX" onChange="OnExportTargetChange" getEnabled="RibbonWorkbookOpen"/>
                     <button id="btnEditExport" label="Edit" imageMso="EditQuery" size="large" onAction="OnEditExport" getEnabled="RibbonWorkbookOpen"/>
-                    <button id="btnExportWizard" label="Wizard" imageMso="TableExcelSpreadsheetInsertGallery" size="large" onAction="OnExportWizard" getEnabled="RibbonWorkbookOpen"/>
                 </group>
                 <group id="grpPaste" label="Paste">
                     <button id="btnPaste" label="Paste" size="large" imageMso="Paste" onAction="OnPaste" getEnabled="RibbonWorkbookOpen"/>

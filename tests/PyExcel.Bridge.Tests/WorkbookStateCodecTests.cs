@@ -374,6 +374,79 @@ public class WorkbookStateCodecTests
         Assert.Null(s.PasteOutput);
     }
 
+    // -------------------------------------------------------------------------
+    // Structured export defaults (folder / base name / file type / stamp)
+    // -------------------------------------------------------------------------
+
+    [Fact]
+    public void Roundtrip_StructuredExportDefaults_AllPreserved()
+    {
+        var original = WorkbookState.Empty("wb.xlsx") with
+        {
+            ExportInput = "A1:C10",
+            ExportFolder = @"C:\out\daily",
+            ExportBaseName = "report",
+            ExportFormat = "tsv",
+            ExportTimestamp = "datetime",
+        };
+
+        var doc = WorkbookStateCodec.Serialize(original);
+        var restored = WorkbookStateCodec.Deserialize(doc, "wb.xlsx");
+
+        Assert.Equal("A1:C10", restored.ExportInput);
+        Assert.Equal(@"C:\out\daily", restored.ExportFolder);
+        Assert.Equal("report", restored.ExportBaseName);
+        Assert.Equal("tsv", restored.ExportFormat);
+        Assert.Equal("datetime", restored.ExportTimestamp);
+    }
+
+    [Fact]
+    public void Roundtrip_EmptyState_StructuredExportDefaultsAreNull()
+    {
+        var restored = WorkbookStateCodec.Deserialize(
+            WorkbookStateCodec.Serialize(WorkbookState.Empty("wb.xlsx")), "wb.xlsx");
+
+        Assert.Null(restored.ExportFolder);
+        Assert.Null(restored.ExportBaseName);
+        Assert.Null(restored.ExportFormat);
+        Assert.Null(restored.ExportTimestamp);
+    }
+
+    [Fact]
+    public void Serialize_NullStructuredExportDefaults_NotEmittedAsElements()
+    {
+        var doc = WorkbookStateCodec.Serialize(WorkbookState.Empty("wb.xlsx"));
+        var ns = (XNamespace)WorkbookStateCodec.XmlNamespace;
+        var root = doc.Root!;
+        Assert.Null(root.Element(ns + "export-folder"));
+        Assert.Null(root.Element(ns + "export-base-name"));
+        Assert.Null(root.Element(ns + "export-format"));
+        Assert.Null(root.Element(ns + "export-timestamp"));
+    }
+
+    [Fact]
+    public void Deserialize_DocumentWithoutStructuredExportDefaults_DecodesNull()
+    {
+        // A document written before the structured export defaults existed —
+        // still schema-version 1, just missing the new elements. They must
+        // decode as null without throwing.
+        var doc = XDocument.Parse(
+            $"<pyexcel xmlns=\"{WorkbookStateCodec.XmlNamespace}\" state-version=\"1\">" +
+            "<enabled>true</enabled>" +
+            "<export-input>A1:C10</export-input>" +
+            "<export-output>out.csv</export-output>" +
+            "<actions/>" +
+            "</pyexcel>");
+        var s = WorkbookStateCodec.Deserialize(doc, "wb.xlsx");
+
+        Assert.Equal("A1:C10", s.ExportInput);
+        Assert.Equal("out.csv", s.ExportOutput);
+        Assert.Null(s.ExportFolder);
+        Assert.Null(s.ExportBaseName);
+        Assert.Null(s.ExportFormat);
+        Assert.Null(s.ExportTimestamp);
+    }
+
     [Fact]
     public void Roundtrip_EmptyStringField_RoundTripsAsEmptyString()
     {

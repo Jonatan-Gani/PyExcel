@@ -99,4 +99,77 @@ public class ProjectDirectoryTests
             Assert.NotEqual(ProjectDirectory.Resolve(a), ProjectDirectory.Resolve(b));
         });
     }
+
+    // -------------------------------------------------------------------------
+    // Stored-project-dir overload (self-healing location)
+    // -------------------------------------------------------------------------
+
+    [Fact]
+    public void ResolveStored_Existing_ReturnsStored()
+    {
+        WithOverride(null, () =>
+        {
+            var stored = Path.Combine(Path.GetTempPath(), "proj");
+            var wb = Path.Combine(Path.GetTempPath(), "wbfolder");
+            Assert.Equal(
+                Path.GetFullPath(stored),
+                ProjectDirectory.Resolve(stored, wb, directoryExists: _ => true));
+        });
+    }
+
+    [Fact]
+    public void ResolveStored_Stale_FallsBackToWorkbookFolder()
+    {
+        // The stored project folder no longer exists (moved wholesale) — resolve to
+        // the workbook's own folder, which moved with it.
+        WithOverride(null, () =>
+        {
+            var stored = Path.Combine(Path.GetTempPath(), "moved-away");
+            var wb = Path.GetTempPath();
+            Assert.Equal(
+                Path.GetFullPath(wb),
+                ProjectDirectory.Resolve(stored, wb, directoryExists: _ => false));
+        });
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    public void ResolveStored_None_UsesWorkbookFolder(string? stored)
+    {
+        WithOverride(null, () =>
+        {
+            var wb = Path.GetTempPath();
+            Assert.Equal(
+                Path.GetFullPath(wb),
+                ProjectDirectory.Resolve(stored, wb, directoryExists: _ => true));
+        });
+    }
+
+    [Fact]
+    public void ResolveStored_Url_FallsBackToWorkbookFolder()
+    {
+        WithOverride(null, () =>
+        {
+            var wb = Path.GetTempPath();
+            Assert.Equal(
+                Path.GetFullPath(wb),
+                ProjectDirectory.Resolve(
+                    "https://contoso.sharepoint.com/x", wb, directoryExists: _ => true));
+        });
+    }
+
+    [Fact]
+    public void ResolveStored_OverrideWins_OverStored()
+    {
+        var pin = Path.GetTempPath();
+        WithOverride(pin, () =>
+        {
+            // Even though stored 'exists', the global override pins the location.
+            var stored = Path.Combine(Path.GetTempPath(), "proj");
+            Assert.Equal(
+                Path.GetFullPath(pin),
+                ProjectDirectory.Resolve(stored, "/some/wb", directoryExists: _ => true));
+        });
+    }
 }
