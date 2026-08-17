@@ -17,6 +17,8 @@ internal sealed class RangeNameForm : ScaledForm
 {
     private readonly TextBox _rangeBox;
     private readonly TextBox _nameBox;
+    private readonly ComboBox _typeBox;
+    private readonly Label _typeHint;
     private readonly Label _errorLabel;
     private readonly Func<string?, string?>? _rangePicker;
 
@@ -41,7 +43,7 @@ internal sealed class RangeNameForm : ScaledForm
         MinimizeBox = false;
         ShowInTaskbar = false;
         Font = SystemFonts.MessageBoxFont;
-        ClientSize = new Size(380, 152);
+        ClientSize = new Size(380, 212);
 
         Controls.Add(new Label { Text = "Range:", Left = 12, Top = 17, AutoSize = true });
         bool canPick = _rangePicker is not null;
@@ -73,17 +75,44 @@ internal sealed class RangeNameForm : ScaledForm
         Controls.Add(_nameBox);
         Controls.Add(new Label
         {
-            Text = "optional — leave blank for a positional range",
+            Text = "optional — leave blank to be auto-named by type",
             Left = 80,
             Top = 70,
             AutoSize = true,
             ForeColor = SystemColors.GrayText,
         });
 
+        Controls.Add(new Label { Text = "Type:", Left = 12, Top = 97, AutoSize = true });
+        _typeBox = new ComboBox
+        {
+            Left = 80,
+            Top = 94,
+            Width = 288,
+            DropDownStyle = ComboBoxStyle.DropDownList,
+            TabIndex = 3,
+        };
+        foreach (var t in PyExcelTypes.All)
+            _typeBox.Items.Add(PyExcelTypes.DisplayName(t));
+        _typeBox.SelectedIndex = IndexOf(initial?.DeclaredType ?? PyExcelType.Auto);
+        Controls.Add(_typeBox);
+
+        _typeHint = new Label
+        {
+            Left = 80,
+            Top = 118,
+            Width = 288,
+            AutoSize = false,
+            Height = 16,
+            ForeColor = SystemColors.GrayText,
+        };
+        Controls.Add(_typeHint);
+        _typeBox.SelectedIndexChanged += (_, _) => UpdateTypeHint();
+        UpdateTypeHint();
+
         _errorLabel = new Label
         {
             Left = 12,
-            Top = 94,
+            Top = 140,
             Width = 356,
             Height = 28,
             ForeColor = Color.Firebrick,
@@ -98,7 +127,7 @@ internal sealed class RangeNameForm : ScaledForm
             Left = ClientSize.Width - 178,
             Top = ClientSize.Height - 36,
             Width = 80,
-            TabIndex = 3,
+            TabIndex = 4,
         };
         ok.Click += OnOkClick;
         Controls.Add(ok);
@@ -110,7 +139,7 @@ internal sealed class RangeNameForm : ScaledForm
             Left = ClientSize.Width - 92,
             Top = ClientSize.Height - 36,
             Width = 80,
-            TabIndex = 4,
+            TabIndex = 5,
         };
         Controls.Add(cancel);
 
@@ -137,9 +166,47 @@ internal sealed class RangeNameForm : ScaledForm
         }
 
         var name = _nameBox.Text.Trim();
-        Result = new RangeBinding(name.Length == 0 ? null : name, result.Address!);
+        Result = new RangeBinding(
+            name.Length == 0 ? null : name, result.Address!, SelectedType());
         DialogResult = DialogResult.OK;
         Close();
     }
+
+    /// <summary>The type currently chosen in the box.</summary>
+    private PyExcelType SelectedType()
+    {
+        var index = _typeBox.SelectedIndex;
+        return index >= 0 && index < PyExcelTypes.All.Count
+            ? PyExcelTypes.All[index]
+            : PyExcelType.Auto;
+    }
+
+    /// <summary>Position of a type in the dropdown, defaulting to Auto.</summary>
+    private static int IndexOf(PyExcelType type)
+    {
+        for (var i = 0; i < PyExcelTypes.All.Count; i++)
+            if (PyExcelTypes.All[i] == type) return i;
+        return 0;
+    }
+
+    /// <summary>
+    /// One line under the box saying what the chosen type will actually do
+    /// with the selected cells. The dialog only ever holds an address
+    /// string — it has not measured the range — so this describes the rule
+    /// rather than predicting the result for this particular selection.
+    /// </summary>
+    private void UpdateTypeHint() => _typeHint.Text = SelectedType() switch
+    {
+        PyExcelType.Auto => "by size: a block → DataFrame, one row/column → List, one cell → Scalar",
+        PyExcelType.DataFrame => "first row becomes the column headers",
+        PyExcelType.Series => "one row or column only; the first cell names it",
+        PyExcelType.List => "every cell; a block becomes a list of rows",
+        PyExcelType.Tuple => "every cell; a block becomes a tuple of rows",
+        PyExcelType.Set => "the distinct cell values",
+        PyExcelType.Dict => "2 columns → key/value; 3+ → lists keyed by the header row",
+        PyExcelType.NDArray => "a numpy array shaped like the range",
+        PyExcelType.Scalar => "a single cell only",
+        _ => string.Empty,
+    };
 }
 #endif

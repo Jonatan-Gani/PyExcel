@@ -136,7 +136,15 @@ internal sealed class RangeListEditor : UserControl
     }
 
     private static string Describe(RangeBinding b)
-        => string.IsNullOrEmpty(b.Name) ? b.RangeText : b.Name + " = " + b.RangeText;
+    {
+        var head = string.IsNullOrEmpty(b.Name) ? b.RangeText : b.Name + " = " + b.RangeText;
+
+        // Only a declared type is worth showing: Auto is the default on every
+        // row, so labelling it would be noise on the common case.
+        return b.DeclaredType == PyExcelType.Auto
+            ? head
+            : head + "   [" + PyExcelTypes.DisplayName(b.DeclaredType) + "]";
+    }
 
     private void UpdateButtons()
     {

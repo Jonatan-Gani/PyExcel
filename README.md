@@ -67,20 +67,45 @@ def transform(inputs: Dict[str, Any]) -> Dict[str, Any]:
 ### Inputs
 
 The **Input** ribbon field is a semicolon-separated list of Excel ranges, each
-optionally name-bound with `{name}=Range`. Unnamed ranges are auto-named `df1`,
-`df2`, …, `list1`, …, `value1`, …
+optionally name-bound with `name=Range`. The name is the key the range appears
+under in `inputs`. Unnamed ranges are auto-named by their resolved type —
+`df1`, `df2`, …, `list1`, …, `value1`, …
 
 ```
-{Sales}=Sheet1!A1:C10; {TaxRate}=Sheet1!E1; {Months}=Sheet1!A1:A12
+Sales=Sheet1!A1:C10; TaxRate=Sheet1!E1; Months=Sheet1!A1:A12
 ```
 
-Each range is marshalled to your transform by shape:
+Each binding also carries a **Type**, chosen in the action dialog. Left on
+`Auto` it resolves from the range's dimensions:
 
-| Range shape              | Python value in `inputs`                       |
-| ------------------------ | ---------------------------------------------- |
-| Multi-row × multi-column | `pandas.DataFrame` with inferred column types  |
-| Single row or column     | `list[...]` with a single inferred datatype    |
-| Single cell              | `int` / `float` / `bool` / `str` / `Timestamp` |
+| Range shape              | `Auto` resolves to | Python value in `inputs`                       |
+| ------------------------ | ------------------ | ---------------------------------------------- |
+| Multi-row × multi-column | DataFrame          | `pandas.DataFrame`; **the first row is the header** |
+| Single row or column     | List               | `list[...]`                                    |
+| Single cell              | Scalar             | `int` / `float` / `bool` / `str` / `Timestamp` |
+
+Override it to get something else: `DataFrame`, `Series`, `List`, `Tuple`,
+`Set`, `Dict`, `NDArray` or `Scalar`. A declared type is also written into the
+binding text as `name:type=Range`, so `Prices:ndarray=Sheet1!A1:C10` and the
+dialog's Type box are the same setting.
+
+`DataFrame` and `Series` take their names from the first row; `List`, `Tuple`,
+`Set`, `NDArray` and `Scalar` treat every cell as data. A `Dict` reads two
+columns as key → value pairs, and three or more as column-oriented lists keyed
+by the header row.
+
+A range that cannot satisfy its declared type fails the run with a message
+naming the binding, the range and its dimensions — rather than surfacing as an
+`AttributeError` inside your script:
+
+```
+input 'Sales' (Sheet1!A1:B3, 3x2): declared type Series needs a single row or
+column, but the range is 3x2. Use DataFrame, or narrow the selection to one
+row or column.
+```
+
+The full matrix of every declared type against every range shape is in
+[`docs/typed-io-contract.md`](docs/typed-io-contract.md).
 
 ### Outputs
 
@@ -96,12 +121,22 @@ type decides how it is written. A non-dict return is wrapped automatically.
 | `matplotlib.Figure` / `Axes`     | Embedded image (SVG, PNG fallback)       |
 
 By default outputs spill from the cell in the **Output** field. To route
-specific keys to specific ranges, use the same `{name}=Range` syntax in
-**Output**:
+specific keys to specific ranges, use the same `name=Range` syntax in
+**Output** — each returned key is written to the binding of the same name:
 
 ```
-{ProcessedSales}=Sheet2!A1; {TotalRevenue}=Summary!B2; {Clients}=Lists!A1
+ProcessedSales=Sheet2!A1; TotalRevenue=Summary!B2; Clients=Lists!A1
 ```
+
+An Output binding may declare a type too, which the kernel then *enforces*
+rather than constructs: if the returned value for that key isn't that type,
+the run fails with `output 'ProcessedSales': declared type DataFrame, but
+transform() returned list.` Left on `Auto`, nothing is enforced and whatever
+comes back is rendered by its shape — the loose behaviour that keeps
+iterating on a script comfortable.
+
+If your script returns a key the Output field doesn't mention, the run
+reports it instead of discarding the result.
 
 ## Ribbon
 
