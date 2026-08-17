@@ -2,6 +2,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Linq;
 using System.Threading.Tasks;
 using ExcelDna.Integration;
 using ExcelDna.Logging;
@@ -111,7 +112,23 @@ public static class RangeRunner
         }
 
         string script = state.SelectedScript!;
-        string? outputAddress = string.IsNullOrWhiteSpace(state.PyOutput) ? null : state.PyOutput;
+
+        // The Output field uses the same binding grammar as Input, so a
+        // dict return can be routed key-by-key to its own range. Parsing it
+        // also means a malformed Output is reported here rather than as a
+        // raw COM error deep in the write-back.
+        IReadOnlyList<RangeBinding> outputBindings;
+        try
+        {
+            outputBindings = RibbonRangeParser.Parse(state.PyOutput);
+        }
+        catch (FormatException fex)
+        {
+            Warn($"Run Python: the Output field is malformed — {fex.Message}");
+            return;
+        }
+
+        string? outputAddress = outputBindings.Count > 0 ? outputBindings[0].RangeText : null;
 
         // --- main thread: read inputs + capture workbook dir --------------
         List<object?> inputs;
@@ -200,14 +217,18 @@ public static class RangeRunner
                         client: KernelHost.Default.Client,
                         workbookDirectory: workbookDir,
                         cancellationToken: runToken,
-                        archive: archiveContext).GetAwaiter().GetResult()
+                        archive: archiveContext,
+                        inputBindings: ToRunBindings(inputBindings),
+                        outputBindings: ToRunBindings(outputBindings)).GetAwaiter().GetResult()
                     : PyRun.ExecuteMany(
                         script: script,
                         inputs: inputs,
                         kwargs: null,
                         client: KernelHost.Default.Client,
                         workbookDirectory: workbookDir,
-                        archive: archiveContext);
+                        archive: archiveContext,
+                        inputBindings: ToRunBindings(inputBindings),
+                        outputBindings: ToRunBindings(outputBindings));
 
                 // Snapshot the captured output before the finally unsubscribes.
                 string capturedOutput = "";
@@ -219,7 +240,13 @@ public static class RangeRunner
                 {
                     ExcelAsyncUtil.QueueAsMacro(() =>
                     {
-                        try { WriteResult(outputAddress, result, orientationChooser); }
+                        try
+                        {
+                            if (result is PyRunOutputs named)
+                                WriteNamedResults(named, outputBindings, outputAddress, orientationChooser);
+                            else
+                                WriteResult(outputAddress, result, orientationChooser);
+                        }
                         catch (Exception ex)
                         {
                             var message = $"Run Python: failed to write the output range — {ex.Message}";
@@ -402,6 +429,97 @@ public static class RangeRunner
         // Single cell: Value2 is already a scalar (double / string / bool /
         // null), which ArrowMarshal.EncodeScalar handles directly.
         return value;
+    }
+
+    /// <summary>
+    /// Project parsed ribbon bindings into the kernel's wire bindings.
+    /// Returns <see langword="null"/> for an empty list so the request omits
+    /// the meta key entirely — its absence is what keeps the legacy
+    /// positional dispatch available to callers that never declared
+    /// anything.
+    /// </summary>
+    private static IReadOnlyList<RunBinding>? ToRunBindings(
+        IReadOnlyList<RangeBinding> bindings)
+    {
+        if (bindings.Count == 0) return null;
+
+        var wire = new List<RunBinding>(bindings.Count);
+        foreach (var b in bindings)
+        {
+            wire.Add(new RunBinding(
+                b.Name, PyExcelTypes.WireName(b.DeclaredType), b.RangeText));
+        }
+        return wire;
+    }
+
+    /// <summary>
+    /// Write each named result from a dict return to its own range.
+    ///
+    /// <para>A result whose key matches an Output binding goes to that
+    /// binding's range. Anything left over — the script returned a key the
+    /// Output field doesn't mention — is reported rather than dropped,
+    /// naming both the unrouted keys and the ranges that were available,
+    /// because silently discarding a computed result is precisely the
+    /// failure this contract exists to remove.</para>
+    /// </summary>
+    private static void WriteNamedResults(
+        PyRunOutputs named,
+        IReadOnlyList<RangeBinding> outputBindings,
+        string fallbackAddress,
+        Func<ListOrientation?>? orientationChooser)
+    {
+        var unrouted = new List<string>();
+
+        for (var i = 0; i < named.Outputs.Count; i++)
+        {
+            var output = named.Outputs[i];
+            var address = ResolveOutputAddress(output.Name, i, outputBindings);
+
+            if (address is null)
+            {
+                unrouted.Add(output.Name ?? $"#{i + 1}");
+                continue;
+            }
+            WriteResult(address, output.Value, orientationChooser);
+        }
+
+        if (unrouted.Count == 0) return;
+
+        var available = outputBindings.Count == 0
+            ? fallbackAddress
+            : string.Join("; ", outputBindings.Select(b => b.Name is null
+                ? b.RangeText
+                : $"{b.Name}={b.RangeText}"));
+
+        Warn(
+            "Run Python: the script returned "
+            + string.Join(", ", unrouted.Select(n => $"'{n}'"))
+            + " but the Output field has nowhere to put "
+            + (unrouted.Count == 1 ? "it" : "them")
+            + $". Output currently reads: {available}. Add a binding named for each "
+            + "returned key, e.g. 'total=Sheet1!A1; table=Sheet1!C1'.");
+    }
+
+    /// <summary>
+    /// Pick the range for one named result: an Output binding of the same
+    /// name wins; failing that, an unnamed binding in the same ordinal
+    /// position is used, which is what makes a single-output script work
+    /// without the user naming anything.
+    /// </summary>
+    private static string? ResolveOutputAddress(
+        string? name, int index, IReadOnlyList<RangeBinding> outputBindings)
+    {
+        if (name is not null)
+        {
+            foreach (var b in outputBindings)
+                if (string.Equals(b.Name, name, StringComparison.Ordinal))
+                    return b.RangeText;
+        }
+
+        if (index < outputBindings.Count && outputBindings[index].Name is null)
+            return outputBindings[index].RangeText;
+
+        return null;
     }
 
     /// <summary>Write a decoded result into the output range. A 2-D table resizes

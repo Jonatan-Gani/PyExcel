@@ -408,7 +408,19 @@ public static class PyRun
     {
         if (result.IsEmpty) return EmptyResult;
 
-        var buffer = result.Payload;
+        // A dict return arrives as one payload per key plus the parallel
+        // name list, so the caller can route each result to the output
+        // range of the same name. Everything else is a single value and
+        // keeps the original shape-driven path.
+        if (result.OutputNames is { Count: > 0 })
+            return DecodeNamed(result);
+
+        return DecodeOne(result.Payload);
+    }
+
+    /// <summary>Decode one Arrow payload into its spill-ready CLR shape.</summary>
+    private static object DecodeOne(byte[] buffer)
+    {
         var (shape, orientation) = ArrowMarshal.PeekShape(buffer);
         var decoded = ArrowMarshal.Decode(buffer);
 
@@ -417,6 +429,26 @@ public static class PyRun
             return SpillVector(vector, orientation ?? ArrowOrientation.Column);
         }
         return decoded ?? EmptyResult;
+    }
+
+    /// <summary>
+    /// Decode a multi-payload result into named outputs, pairing each
+    /// payload with its key. A name list shorter than the payload list
+    /// leaves the surplus anonymous rather than dropping it — losing a
+    /// result silently is the failure mode this whole contract exists to
+    /// remove.
+    /// </summary>
+    private static PyRunOutputs DecodeNamed(RunResult result)
+    {
+        var names = result.OutputNames!;
+        var outputs = new List<PyRunOutput>(result.Payloads.Count);
+
+        for (var i = 0; i < result.Payloads.Count; i++)
+        {
+            var name = i < names.Count ? names[i] : null;
+            outputs.Add(new PyRunOutput(name, DecodeOne(result.Payloads[i])));
+        }
+        return new PyRunOutputs(outputs);
     }
 
     /// <summary>

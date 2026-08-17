@@ -56,26 +56,41 @@ public sealed class ProjectScaffolder
         "# of named results back to the sheet. Copy or edit this file, then pick\n" +
         "# it in the Action dialog.\n" +
         "#\n" +
+        "# 'inputs' maps each Input binding's name to its value. The Type box on\n" +
+        "# the binding decides what you get; left on Auto you get:\n" +
+        "#   a block of cells  -> pandas.DataFrame (the first row is the header)\n" +
+        "#   one row or column -> list\n" +
+        "#   one cell          -> scalar (int/float/bool/str/Timestamp)\n" +
+        "#\n" +
+        "# Every key you return is written to the Output binding of the same\n" +
+        "# name, so an Output of 'total=Sheet1!D1; doubled=Sheet1!F1' routes two\n" +
+        "# results to two places. With a single unnamed Output binding, a single\n" +
+        "# returned key lands there.\n" +
+        "#\n" +
         "# Note: scripts run in a kernel with no console — input() and reading\n" +
         "# sys.stdin are disabled and raise an error. Read values from 'inputs'.\n" +
         "\n" +
-        "from typing import Any, Dict\n" +
+        "from typing import Any, Dict, List\n" +
         "\n" +
         "\n" +
         "def transform(inputs: Dict[str, Any]) -> Dict[str, Any]:\n" +
-        "    # inputs maps each named input range to a value:\n" +
-        "    #   multi-row/column range -> pandas.DataFrame\n" +
-        "    #   single row or column   -> list\n" +
-        "    #   single cell            -> scalar (int/float/bool/str/Timestamp)\n" +
-        "    #\n" +
-        "    # This example sums every numeric input cell and returns the total.\n" +
-        "    total = 0.0\n" +
+        "    # Collect every numeric cell across all the input ranges, whatever\n" +
+        "    # shape they came in as.\n" +
+        "    numbers: List[float] = []\n" +
         "    for value in inputs.values():\n" +
-        "        try:\n" +
-        "            total += float(value)\n" +
-        "        except (TypeError, ValueError):\n" +
-        "            pass\n" +
-        "    return {\"total\": total}\n";
+        "        cells = value if isinstance(value, (list, tuple)) else [value]\n" +
+        "        for cell in cells:\n" +
+        "            if isinstance(cell, bool):\n" +
+        "                continue  # bool is an int subclass; not a measurement\n" +
+        "            if isinstance(cell, (int, float)):\n" +
+        "                numbers.append(float(cell))\n" +
+        "\n" +
+        "    print(f\"summed {len(numbers)} numeric cell(s)\")\n" +
+        "\n" +
+        "    # Return more keys (and add matching named Output bindings) to write\n" +
+        "    # several results at once, e.g.:\n" +
+        "    #   return {\"total\": sum(numbers), \"doubled\": [n * 2 for n in numbers]}\n" +
+        "    return {\"total\": float(sum(numbers))}\n";
 
     private readonly ILog _log;
 

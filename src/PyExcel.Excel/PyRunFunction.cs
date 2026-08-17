@@ -1,6 +1,7 @@
 #if NETFRAMEWORK
 using System;
 using System.Diagnostics;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using ExcelDna.Integration;
@@ -297,6 +298,20 @@ public static class PyRunFunction
         // ToString() artefact.
         if (result is ChartSpec or ChartImage)
             return "[PyExcel chart — use the ribbon's Run Python button to render it]";
+
+        // A dict return comes back as named results. One key can still spill
+        // into the calling cell; several cannot, and a UDF has no second
+        // range to send them to. Say so rather than surfacing the first key
+        // and silently dropping the rest.
+        if (result is PyRunOutputs named)
+        {
+            if (named.Outputs.Count == 1) return ToExcelOutput(named.Outputs[0].Value);
+
+            var keys = string.Join(", ", named.Outputs.Select(o => o.Name ?? "?"));
+            return $"[PyExcel — transform() returned {named.Outputs.Count} results ({keys}); "
+                + "a cell formula can only spill one. Use the ribbon's Run Python button "
+                + "with a named Output binding per key.]";
+        }
 
         return result;
     }
