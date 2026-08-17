@@ -68,9 +68,10 @@ import threading
 import time
 import traceback
 from types import ModuleType
-from typing import Any, Callable, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from . import arrow_io
+from . import declared_types
 
 
 _DEFAULT_FUNCTION = "transform"
@@ -292,19 +293,27 @@ def run_job(
 
         module = _load_module(script)
         fn = _resolve_function(module, function_name)
-        args = _decode_args(req_payloads)
 
-        value = fn(*args, **kwargs)
-        payloads = _encode_result(value)
+        # The presence of an 'inputs' array is the switch between the typed
+        # dict contract and the legacy positional one. The UDF path and
+        # direct kernel-client callers send no 'inputs' and keep working.
+        input_specs = _input_specs(req_meta)
+        if input_specs is None:
+            args = _decode_args(req_payloads)
+            value = fn(*args, **kwargs)
+        else:
+            value = fn(_build_inputs(input_specs, req_payloads), **kwargs)
 
-        return JobOutcome(
-            success=True,
-            meta={
-                "run_id": run_id,
-                "duration_ms": _elapsed_ms(started, _now),
-            },
-            payloads=payloads,
-        )
+        payloads, output_names = _encode_outputs(value, _output_specs(req_meta))
+
+        meta = {
+            "run_id": run_id,
+            "duration_ms": _elapsed_ms(started, _now),
+        }
+        if output_names is not None:
+            meta["outputs"] = output_names
+
+        return JobOutcome(success=True, meta=meta, payloads=payloads)
     except JobError as exc:
         return JobOutcome(
             success=False,
@@ -412,6 +421,189 @@ def _encode_result(value: Any) -> List[bytes]:
             f"could not encode return value of type {type(value).__name__}: {exc}",
             cause=exc,
         ) from exc
+
+
+# -----------------------------------------------------------------------------
+# Typed I/O contract — see docs/typed-io-contract.md
+# -----------------------------------------------------------------------------
+
+#: Prefix used to auto-name an anonymous binding, keyed by resolved type.
+#: Matches what README.md advertises (df1, list1, value1, ...).
+_AUTO_NAME_PREFIX = {
+    declared_types.DATAFRAME: "df",
+    declared_types.SERIES: "series",
+    declared_types.LIST: "list",
+    declared_types.TUPLE: "list",
+    declared_types.SET: "list",
+    declared_types.NDARRAY: "list",
+    declared_types.DICT: "dict",
+    declared_types.SCALAR: "value",
+}
+
+
+def _binding_specs(req_meta: dict, key: str) -> Optional[List[dict]]:
+    """Read an 'inputs'/'outputs' binding array off the request meta.
+
+    Returns ``None`` when the key is absent — the signal that this caller
+    predates the typed contract and wants the legacy behaviour.
+    """
+    raw = req_meta.get(key)
+    if raw is None:
+        return None
+    if not isinstance(raw, list):
+        raise JobError("BadRequest", f"'{key}' must be a JSON array")
+
+    specs: List[dict] = []
+    for i, entry in enumerate(raw):
+        if not isinstance(entry, dict):
+            raise JobError("BadRequest", f"'{key}[{i}]' must be a JSON object")
+        specs.append(entry)
+    return specs
+
+
+def _input_specs(req_meta: dict) -> Optional[List[dict]]:
+    return _binding_specs(req_meta, "inputs")
+
+
+def _output_specs(req_meta: dict) -> Optional[List[dict]]:
+    return _binding_specs(req_meta, "outputs")
+
+
+def _resolved_name(spec: dict, declared: str, counters: dict) -> str:
+    """The binding's name, auto-generated from its type when unnamed."""
+    name = spec.get("name")
+    if isinstance(name, str) and name.strip():
+        return name.strip()
+
+    prefix = _AUTO_NAME_PREFIX.get(declared, "value")
+    counters[prefix] = counters.get(prefix, 0) + 1
+    return f"{prefix}{counters[prefix]}"
+
+
+def _build_inputs(specs: List[dict], payloads: List[bytes]) -> Dict[str, Any]:
+    """Decode each payload to a grid and construct its declared type.
+
+    The result is the ``inputs`` dict the documented ``transform(inputs)``
+    signature receives.
+    """
+    if len(specs) != len(payloads):
+        raise JobError(
+            "BadRequest",
+            f"request declares {len(specs)} input binding(s) but carries "
+            f"{len(payloads)} payload(s)",
+        )
+
+    inputs: Dict[str, Any] = {}
+    counters: dict = {}
+
+    for i, (spec, payload) in enumerate(zip(specs, payloads)):
+        declared = spec.get("type") or declared_types.AUTO
+        address = spec.get("range") or ""
+
+        try:
+            grid = arrow_io.decode_grid(payload)
+        except BaseException as exc:  # noqa: BLE001 — pyarrow errors aren't a fixed type
+            raise JobError(
+                "BadInput",
+                f"could not decode input {i} ('{spec.get('name') or address}'): {exc}",
+                cause=exc,
+            ) from exc
+
+        # Resolve auto against the real grid before naming, so an anonymous
+        # single-cell binding is named value1 rather than df1.
+        rows = len(grid)
+        columns = len(grid[0]) if rows else 0
+        if declared == declared_types.AUTO:
+            declared = declared_types.resolve_auto(rows, columns)
+
+        name = _resolved_name(spec, declared, counters)
+
+        try:
+            inputs[name] = declared_types.build(
+                declared, grid, name=name, address=address
+            )
+        except declared_types.TypeContractError as exc:
+            raise JobError("BadInput", str(exc), cause=exc) from exc
+
+    return inputs
+
+
+def _encode_outputs(
+    value: Any, specs: Optional[List[dict]]
+) -> Tuple[List[bytes], Optional[List[str]]]:
+    """Encode a return value into payloads, honouring declared output types.
+
+    Returns ``(payloads, names)``. ``names`` is ``None`` for the single
+    anonymous result the legacy path produces, and a list parallel to
+    ``payloads`` when the return is a dict of named results — which is what
+    lets the host route each one to its own output range.
+    """
+    if value is None:
+        return [], None
+
+    if isinstance(value, dict):
+        return _encode_dict_outputs(value, specs)
+
+    # A single value. Enforce the first declared output type, if any.
+    if specs:
+        declared = specs[0].get("type")
+        name = specs[0].get("name") or "result"
+        try:
+            declared_types.check_output(declared, value, name=name)
+        except declared_types.TypeContractError as exc:
+            raise JobError("BadReturnType", str(exc), cause=exc) from exc
+
+    return _encode_result(value), None
+
+
+def _encode_dict_outputs(
+    value: dict, specs: Optional[List[dict]]
+) -> Tuple[List[bytes], List[str]]:
+    """Encode a dict return as one named payload per key.
+
+    Before this contract a returned dict fell through arrow_io's catch-all
+    and reached Excel as the literal string "StructArray" — while both
+    scaffolded templates and README told users to return exactly that.
+    """
+    declared_by_name = {}
+    if specs:
+        for spec in specs:
+            spec_name = spec.get("name")
+            if isinstance(spec_name, str) and spec_name.strip():
+                declared_by_name[spec_name.strip()] = spec.get("type")
+
+        missing = [n for n in declared_by_name if n not in value]
+        if missing:
+            raise JobError(
+                "BadReturnType",
+                "transform() returned no value for declared output "
+                + ", ".join(f"'{n}'" for n in missing)
+                + ". Returned keys: "
+                + (", ".join(f"'{k}'" for k in value) or "(none)"),
+            )
+
+    payloads: List[bytes] = []
+    names: List[str] = []
+
+    for key, item in value.items():
+        name = str(key)
+        try:
+            declared_types.check_output(declared_by_name.get(name), item, name=name)
+        except declared_types.TypeContractError as exc:
+            raise JobError("BadReturnType", str(exc), cause=exc) from exc
+
+        try:
+            payloads.append(arrow_io.encode(item))
+        except TypeError as exc:
+            raise JobError(
+                "BadReturnType",
+                f"could not encode output '{name}' of type "
+                f"{type(item).__name__}: {exc}",
+                cause=exc,
+            ) from exc
+        names.append(name)
+
+    return payloads, names
 
 
 # -----------------------------------------------------------------------------

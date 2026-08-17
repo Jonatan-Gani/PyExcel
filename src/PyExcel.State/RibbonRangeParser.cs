@@ -9,14 +9,23 @@ namespace PyExcel.State;
 ///
 /// <para>Syntax — semicolon-separated bindings, each one of:</para>
 /// <list type="bullet">
-///   <item><c>A1:C10</c> — anonymous range, picked up as the next
-///     positional argument to the user's transform function.</item>
-///   <item><c>prices=A1:C10</c> — named range. The dispatcher passes it
-///     as a positional argument in declaration order; the name is the
-///     hint the user assigned to their <c>transform(prices, …)</c>
-///     parameter and is preserved on the binding for future Phase-8 UI
-///     work.</item>
+///   <item><c>A1:C10</c> — anonymous, untyped range. The kernel names it
+///     by its resolved type and ordinal (<c>df1</c>, <c>list1</c>, …) and
+///     builds whatever the range's dimensions imply.</item>
+///   <item><c>prices=A1:C10</c> — named range. The name is the key the
+///     range appears under in the <c>inputs</c> dict handed to
+///     <c>transform</c>.</item>
+///   <item><c>prices:dataframe=A1:C10</c> — named range with a declared
+///     type. The kernel constructs exactly that type or fails with a
+///     message naming the binding.</item>
+///   <item><c>:list=A1:A10</c> — anonymous range with a declared type.</item>
 /// </list>
+///
+/// <para>The type token is recognised only when the text after the final
+/// <c>:</c> of the name segment parses as a known <see cref="PyExcelType"/>.
+/// A name that merely happens to contain a colon keeps its colon and is
+/// read as a name, so existing saved bindings cannot be silently
+/// reinterpreted as typed ones.</para>
 ///
 /// <para>Whitespace around the separator, the <c>=</c>, and the range
 /// text itself is trimmed. Empty entries (a stray <c>;;</c> or trailing
@@ -52,6 +61,7 @@ public static class RibbonRangeParser
 
             string? name;
             string rangeText;
+            var declaredType = PyExcelType.Auto;
 
             var eq = entry.IndexOf('=');
             if (eq < 0)
@@ -61,11 +71,23 @@ public static class RibbonRangeParser
             }
             else
             {
-                name = entry.Substring(0, eq).Trim();
+                // Only the segment left of the FIRST '=' is name-and-type;
+                // everything right of it is range text handed verbatim to
+                // Excel, so a declared type must never live there.
+                var head = entry.Substring(0, eq).Trim();
                 rangeText = entry.Substring(eq + 1).Trim();
+
+                name = SplitDeclaredType(head, out declaredType);
+
                 if (name.Length == 0)
-                    throw new FormatException(
-                        $"empty name before '=' in '{rawEntry}'");
+                {
+                    // ':list=A1:A10' is a legitimate anonymous typed
+                    // binding; a bare '=A1:A10' is still a typo.
+                    if (declaredType == PyExcelType.Auto)
+                        throw new FormatException(
+                            $"empty name before '=' in '{rawEntry}'");
+                    name = null;
+                }
             }
 
             if (rangeText.Length == 0)
@@ -80,10 +102,35 @@ public static class RibbonRangeParser
                         $"duplicate name '{name}' in input");
             }
 
-            result.Add(new RangeBinding(name, rangeText));
+            result.Add(new RangeBinding(name, rangeText, declaredType));
         }
 
         return result;
+    }
+
+    /// <summary>
+    /// Split a binding's name-and-type segment (everything left of the
+    /// <c>=</c>) into its name and declared type.
+    ///
+    /// <para>The split happens at the LAST <c>:</c>, and only when the text
+    /// after it parses as a known type. That rule is what keeps the
+    /// extension backward compatible: a previously saved name containing a
+    /// colon does not parse as a type, so it survives intact as a name.</para>
+    /// </summary>
+    /// <returns>The name segment, trimmed; empty when the binding is
+    /// anonymous.</returns>
+    private static string SplitDeclaredType(string head, out PyExcelType declaredType)
+    {
+        declaredType = PyExcelType.Auto;
+
+        var colon = head.LastIndexOf(':');
+        if (colon < 0) return head;
+
+        var suffix = head.Substring(colon + 1);
+        if (!PyExcelTypes.TryParse(suffix, out var parsed)) return head;
+
+        declaredType = parsed;
+        return head.Substring(0, colon).Trim();
     }
 
     /// <summary>
@@ -107,11 +154,16 @@ public static class RibbonRangeParser
             if (sb.Length > 0) sb.Append("; ");
 
             var name = b.Name?.Trim();
-            if (name is not null && name.Length > 0)
+            var named = name is not null && name.Length > 0;
+            var typed = b.DeclaredType != PyExcelType.Auto;
+
+            if (named) sb.Append(name);
+            if (typed)
             {
-                sb.Append(name);
-                sb.Append('=');
+                sb.Append(':');
+                sb.Append(PyExcelTypes.WireName(b.DeclaredType));
             }
+            if (named || typed) sb.Append('=');
             sb.Append(range);
         }
         return sb.ToString();
@@ -123,5 +175,11 @@ public static class RibbonRangeParser
 /// <see cref="Name"/> is <see langword="null"/> for an anonymous entry;
 /// <see cref="RangeText"/> is the unresolved range text (e.g.
 /// <c>"Sheet1!A1:C10"</c>) — the dispatcher resolves it via Excel COM.
+/// <see cref="DeclaredType"/> is the type the user picked in the action
+/// dialog's type box; <see cref="PyExcelType.Auto"/> (the default) defers
+/// to the range's measured dimensions at run time.
 /// </summary>
-public sealed record RangeBinding(string? Name, string RangeText);
+public sealed record RangeBinding(
+    string? Name,
+    string RangeText,
+    PyExcelType DeclaredType = PyExcelType.Auto);

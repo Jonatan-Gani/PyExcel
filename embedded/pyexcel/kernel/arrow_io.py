@@ -276,6 +276,41 @@ def decode(buf: bytes) -> Any:
     return _table_to_python(table)
 
 
+def decode_grid(buf: bytes) -> List[List[Any]]:
+    """Deserialise a buffer to a raw row-major grid of cell values.
+
+    This is the input path for the typed contract. Where :func:`decode`
+    recovers whatever shape the *producer* intended, ``decode_grid``
+    deliberately recovers nothing: it hands back the cells exactly as they
+    sit in the sheet so :mod:`pyexcel.kernel.declared_types` can build the
+    type the *user declared*. Shape metadata is ignored on purpose.
+
+    A scalar buffer yields ``[[value]]`` and a vector yields a single row or
+    column, so every range shape arrives as a rectangle and the coercion
+    matrix has one uniform input format.
+
+    Raises:
+        pyarrow.ArrowInvalid: ``buf`` is not a valid Arrow IPC stream.
+    """
+    reader = ipc.open_stream(pa.BufferReader(buf))
+    table = reader.read_all()
+    if table.num_columns == 0:
+        return []
+
+    columns = [table.column(c).to_pylist() for c in range(table.num_columns)]
+
+    # A vector encoded as a row still arrives as one Arrow column, because
+    # Arrow has no notion of orientation; the orientation metadata is what
+    # tells us to lay it back out across rather than down.
+    metadata = table.schema.metadata or {}
+    if metadata.get(_META_SHAPE) == Shape.VECTOR.value:
+        if metadata.get(_META_ORIENT) == Orientation.ROW.value:
+            return [list(columns[0])]
+
+    rows = len(columns[0])
+    return [[column[r] for column in columns] for r in range(rows)]
+
+
 def _is_formula_field(field: pa.Field) -> bool:
     """Whether an Arrow field carries the formula cell-type marker."""
     md = field.metadata or {}
