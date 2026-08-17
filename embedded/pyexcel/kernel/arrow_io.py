@@ -188,6 +188,19 @@ def _value_to_table(value: Any) -> Tuple[pa.Table, Shape]:
         arr = pa.array([value.text], type=pa.string())
         return pa.Table.from_arrays([arr], schema=pa.schema([field])), Shape.SCALAR
 
+    if isinstance(value, (set, frozenset)):
+        # Sets reach the sheet as a vector like any other 1-D sequence.
+        # Without this arm they fell through to the catch-all scalar case
+        # and landed in a single cell as an opaque Python object.
+        #
+        # A set has no order, so sort for a layout that doesn't shuffle
+        # between runs; mutually incomparable members (a mixed-type set)
+        # fall back to iteration order rather than failing the run.
+        try:
+            value = sorted(value)
+        except TypeError:
+            value = list(value)
+
     if isinstance(value, (list, tuple)):
         # All-Formula list → formula-marked string vector. A mixed list
         # (some Formula, some not) is rejected as ambiguous: today's wire
