@@ -52,6 +52,9 @@ public class RibbonRangeFormatTests
     [InlineData("A1:C10")]
     [InlineData("prices=A1:C10")]
     [InlineData("prices=Sheet1!A1:C10; E1; tax=Sheet2!B2")]
+    [InlineData("prices:dataframe=Sheet1!A1:C10")]
+    [InlineData(":list=A1:A10")]
+    [InlineData("a:dict=A1:B9; B1; c:scalar=Sheet2!C3; d=D1:D4")]
     public void Parse_Then_Format_RoundTrips(string input)
     {
         var bindings = RibbonRangeParser.Parse(input);
@@ -59,8 +62,10 @@ public class RibbonRangeFormatTests
         Assert.Equal(bindings.Count, reparsed.Count);
         for (int i = 0; i < bindings.Count; i++)
         {
-            Assert.Equal(bindings[i].Name, reparsed[i].Name);
-            Assert.Equal(bindings[i].RangeText, reparsed[i].RangeText);
+            // Compare the records whole. Field-by-field assertions let a new
+            // member (the declared type was exactly this case) be dropped by
+            // Format while the round-trip test stayed green.
+            Assert.Equal(bindings[i], reparsed[i]);
         }
     }
 
