@@ -240,14 +240,61 @@ public sealed class KernelClient
             foreach (var kv in req.Kwargs) copy[kv.Key] = kv.Value;
             meta["kwargs"] = copy;
         }
+
+        // Typed I/O contract. Both keys are additive: their absence is what
+        // tells the kernel to keep the legacy positional dispatch, so an
+        // older caller (and the UDF path) is unaffected.
+        if (req.Inputs is { Count: > 0 }) meta["inputs"] = EncodeBindings(req.Inputs);
+        if (req.Outputs is { Count: > 0 }) meta["outputs"] = EncodeBindings(req.Outputs);
+
         return meta;
+    }
+
+    /// <summary>
+    /// Project bindings into the plain <c>List</c>/<c>Dictionary</c> shapes
+    /// <c>CanonicalJson</c> walks — it dispatches on the non-generic
+    /// <c>IDictionary</c> and <c>IList</c>, so the concrete types matter.
+    /// </summary>
+    private static List<object?> EncodeBindings(IReadOnlyList<RunBinding> bindings)
+    {
+        var list = new List<object?>(bindings.Count);
+        foreach (var b in bindings)
+        {
+            var entry = new Dictionary<string, object?> { ["type"] = b.Type };
+            if (!string.IsNullOrWhiteSpace(b.Name)) entry["name"] = b.Name;
+            if (!string.IsNullOrWhiteSpace(b.Range)) entry["range"] = b.Range;
+            list.Add(entry);
+        }
+        return list;
     }
 
     private static RunResult BuildRunResult(Frame frame, string runId)
     {
         var echoedRunId = AsString(frame.Meta, "run_id") ?? runId;
         var durationMs = AsInt(frame.Meta, "duration_ms") ?? 0;
-        return new RunResult(echoedRunId, durationMs, frame.Payloads);
+        return new RunResult(
+            echoedRunId, durationMs, frame.Payloads, AsStringList(frame.Meta, "outputs"));
+    }
+
+    /// <summary>
+    /// Read a meta value that should be an array of strings, tolerating its
+    /// absence. Returns <see langword="null"/> unless every element really
+    /// is a string, so a malformed reply degrades to the anonymous
+    /// single-result path rather than throwing mid-run.
+    /// </summary>
+    private static IReadOnlyList<string>? AsStringList(
+        IReadOnlyDictionary<string, object?> meta, string key)
+    {
+        if (!meta.TryGetValue(key, out var v) || v is not System.Collections.IList list)
+            return null;
+
+        var names = new List<string>(list.Count);
+        foreach (var item in list)
+        {
+            if (item is not string s) return null;
+            names.Add(s);
+        }
+        return names;
     }
 
     private static KernelException BuildException(Frame frame, string runId)

@@ -47,4 +47,24 @@ public sealed class RunRequest
     /// and writes it back to <see cref="RunResult.RunId"/>.
     /// </summary>
     public string? RunId { get; set; }
+
+    /// <summary>
+    /// Declared input bindings, one per entry in <see cref="Arguments"/>
+    /// and in the same order.
+    ///
+    /// <para>Supplying this switches the kernel from positional dispatch
+    /// (<c>fn(*args, **kwargs)</c>) to the documented dict contract
+    /// (<c>fn(inputs, **kwargs)</c>), and each argument is constructed as
+    /// its declared type rather than inferred from its Arrow shape.
+    /// Leaving it null keeps the legacy positional behaviour, which is
+    /// what the <c>=PYRUN(…)</c> UDF path relies on.</para>
+    /// </summary>
+    public IReadOnlyList<RunBinding>? Inputs { get; set; }
+
+    /// <summary>
+    /// Declared output bindings. The kernel asserts each returned value
+    /// against its declared type and fails the run on a mismatch; an entry
+    /// typed <c>auto</c> is not enforced.
+    /// </summary>
+    public IReadOnlyList<RunBinding>? Outputs { get; set; }
 }

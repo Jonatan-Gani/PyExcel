@@ -118,7 +118,9 @@ public static class PyRun
         string? workbookDirectory = null,
         string function = "transform",
         int timeoutMs = 60_000,
-        RunArchiveContext? archive = null)
+        RunArchiveContext? archive = null,
+        IReadOnlyList<RunBinding>? inputBindings = null,
+        IReadOnlyList<RunBinding>? outputBindings = null)
     {
         if (script is null) throw new ArgumentNullException(nameof(script));
         if (script.Length == 0) throw new ArgumentException("script path must be non-empty", nameof(script));
@@ -142,6 +144,8 @@ public static class PyRun
                     Function = function,
                     Arguments = arguments,
                     Kwargs = kwargs,
+                    Inputs = inputBindings,
+                    Outputs = outputBindings,
                 },
                 timeoutMs: timeoutMs);
         }
@@ -214,7 +218,9 @@ public static class PyRun
         string function = "transform",
         int timeoutMs = 60_000,
         CancellationToken cancellationToken = default,
-        RunArchiveContext? archive = null)
+        RunArchiveContext? archive = null,
+        IReadOnlyList<RunBinding>? inputBindings = null,
+        IReadOnlyList<RunBinding>? outputBindings = null)
     {
         if (script is null) throw new ArgumentNullException(nameof(script));
         if (script.Length == 0) throw new ArgumentException("script path must be non-empty", nameof(script));
@@ -238,6 +244,8 @@ public static class PyRun
                     Function = function,
                     Arguments = arguments,
                     Kwargs = kwargs,
+                    Inputs = inputBindings,
+                    Outputs = outputBindings,
                 },
                 cancellationToken: cancellationToken,
                 timeoutMs: timeoutMs).ConfigureAwait(false);

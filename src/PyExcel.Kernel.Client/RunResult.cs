@@ -25,10 +25,21 @@ public sealed class RunResult
     public int DurationMs { get; }
 
     /// <summary>
-    /// Arrow IPC payloads in wire order. The current protocol uses zero or
-    /// one payload: zero for a <c>None</c> return, one for any other value.
+    /// Arrow IPC payloads in wire order. Zero for a <c>None</c> return, one
+    /// for a single value, and one per key when the function returned a
+    /// dict of named results — in which case <see cref="OutputNames"/> is
+    /// the parallel list of keys.
     /// </summary>
     public IReadOnlyList<byte[]> Payloads { get; }
+
+    /// <summary>
+    /// Names for each entry of <see cref="Payloads"/>, or
+    /// <see langword="null"/> when the function returned a single
+    /// anonymous value. Present exactly when the kernel encoded a dict
+    /// return, and it is what lets the host route each result to the
+    /// output binding of the same name.
+    /// </summary>
+    public IReadOnlyList<string>? OutputNames { get; }
 
     /// <summary>True iff the user function returned <c>None</c>.</summary>
     public bool IsEmpty => Payloads.Count == 0;
@@ -42,10 +53,15 @@ public sealed class RunResult
             : throw new InvalidOperationException(
                 "RunResult is empty (user function returned None); check IsEmpty first.");
 
-    public RunResult(string runId, int durationMs, IReadOnlyList<byte[]> payloads)
+    public RunResult(
+        string runId,
+        int durationMs,
+        IReadOnlyList<byte[]> payloads,
+        IReadOnlyList<string>? outputNames = null)
     {
         RunId = runId ?? throw new ArgumentNullException(nameof(runId));
         DurationMs = durationMs;
         Payloads = payloads ?? throw new ArgumentNullException(nameof(payloads));
+        OutputNames = outputNames;
     }
 }
