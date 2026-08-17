@@ -44,6 +44,8 @@
                       LogicalName="pyexcel/kernel/arrow_io.py" />
     <EmbeddedResource Include="..\..\embedded\pyexcel\kernel\chart.py"
                       LogicalName="pyexcel/kernel/chart.py" />
+    <EmbeddedResource Include="..\..\embedded\pyexcel\kernel\declared_types.py"
+                      LogicalName="pyexcel/kernel/declared_types.py" />
     <EmbeddedResource Include="..\..\embedded\pyexcel\kernel\framing.py"
                       LogicalName="pyexcel/kernel/framing.py" />
     <EmbeddedResource Include="..\..\embedded\pyexcel\kernel\supervisor.py"
