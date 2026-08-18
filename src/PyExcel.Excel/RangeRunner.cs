@@ -317,9 +317,15 @@ public static class RangeRunner
             }
             catch (KernelException kex)
             {
+                // Test emptiness, not null. KernelException.PythonType is a
+                // non-nullable string (its constructor coerces null to ""), and
+                // null-testing it would set the compiler's null-state for the
+                // expression to "maybe null" for every use after this one —
+                // which is what made the KernelErrorRecord below fail CS8604.
+                var pythonType = kex.PythonType.Length == 0 ? "(none)" : kex.PythonType;
                 Step(runId,
                     $"kernel error after {runClock.ElapsedMilliseconds} ms — "
-                    + $"code={kex.Code} type={kex.PythonType ?? "(none)"}");
+                    + $"code={kex.Code} type={pythonType}");
                 var record = new KernelErrorRecord(
                     Timestamp: DateTimeOffset.UtcNow,
                     Source: "Run Python button",
