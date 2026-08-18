@@ -38,6 +38,14 @@
                     -->
                     <button id="btnShowLastError" label="Show Last Error" imageMso="ShowAllItems" onAction="OnShowLastError" getEnabled="RibbonHasError"/>
                     <button id="btnCopyLastError" label="Copy Last Error" imageMso="Copy" onAction="OnCopyLastError" getEnabled="RibbonHasError"/>
+                    <!--
+                      No getEnabled at all: the log is the one thing that must
+                      be reachable when everything else has failed — no
+                      workbook enabled, no project, no kernel, no last error
+                      recorded. Gating it on any of those would hide it
+                      exactly when it is needed.
+                    -->
+                    <button id="btnOpenLogs" label="Open Logs" imageMso="FileOpen" onAction="OnOpenLogs"/>
                 </group>
                 <group id="grpPython" label="Python">
                     <button id="btnRun" label="Run" size="large" image="customLogo" onAction="OnRunPython" getEnabled="RibbonEnabled"/>

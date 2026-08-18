@@ -507,6 +507,79 @@ public class PyExcelRibbon : ExcelRibbon
         }
     }
 
+    /// <summary>
+    /// Open the debug log in whatever the machine has registered for the file,
+    /// falling back to Notepad.
+    ///
+    /// <para>Deliberately ungated in the ribbon XML. The log is the diagnostic
+    /// of last resort — it matters most when the workbook is not enabled, the
+    /// project is missing, or the kernel never started, which is precisely when
+    /// every other Errors-group button is greyed out.</para>
+    /// </summary>
+    public void OnOpenLogs(IRibbonControl control)
+    {
+        _log.Info("OnOpenLogs clicked");
+        try
+        {
+            var path = FileLog.DefaultPath();
+
+            // A brand-new install that has not written a line yet would give
+            // the shell a non-existent path and an unhelpful error. Seed the
+            // file instead so the button always opens something, and so the
+            // header tells the reader what they are looking at.
+            if (!File.Exists(path))
+            {
+                try
+                {
+                    var version = typeof(PyExcelRibbon).Assembly.GetName().Version;
+                    File.WriteAllText(
+                        path,
+                        $"PyExcel v{version} debug log — no entries yet.{Environment.NewLine}");
+                }
+                catch (Exception ex)
+                {
+                    _log.Error($"OnOpenLogs: couldn't create '{path}'", ex);
+                    XlCall.Excel(
+                        XlCall.xlcAlert,
+                        $"PyExcel\n\nCouldn't open the log at:\n{path}\n\n{ex.Message}",
+                        2 /* xlAlertWarning */);
+                    return;
+                }
+            }
+
+            OpenWithDefaultEditor(path);
+        }
+        catch (Exception ex)
+        {
+            _log.Error("OnOpenLogs failed", ex);
+            XlCall.Excel(
+                XlCall.xlcAlert,
+                $"PyExcel\n\nCouldn't open the log.\n\n{ex.Message}",
+                2 /* xlAlertWarning */);
+        }
+    }
+
+    /// <summary>
+    /// Open a file with its registered handler, falling back to Notepad.
+    ///
+    /// <para><c>.log</c> frequently has no association at all on a clean
+    /// Windows install, in which case the shell raises "no application is
+    /// associated" rather than opening anything. Notepad is always present, so
+    /// the fallback turns a dead button into a working one.</para>
+    /// </summary>
+    private void OpenWithDefaultEditor(string path)
+    {
+        try
+        {
+            ShellLauncher.Open(path);
+        }
+        catch (Exception ex)
+        {
+            _log.Warn($"OnOpenLogs: no registered handler for '{path}' ({ex.Message}); using Notepad");
+            ShellLauncher.OpenWith("notepad.exe", path);
+        }
+    }
+
     /// <summary>The first <c>README.md</c> that exists at the project folder or
     /// the workbook folder, or null if neither has one.</summary>
     private static string? FirstExistingReadme(string? projectDir, string? workbookDir)

@@ -80,6 +80,36 @@ public static class ShellLauncher
         });
     }
 
+    /// <summary>Open <paramref name="path"/> with a named program instead of
+    /// the registered handler.
+    ///
+    /// <para>The fallback for file types the machine has no association for.
+    /// <c>.log</c> is the motivating case: a clean Windows install often has
+    /// nothing registered for it, so <see cref="Open"/> raises "no application
+    /// is associated" rather than opening anything. Callers pair the two —
+    /// try the user's own choice first, land on a program that is always
+    /// present.</para>
+    ///
+    /// <para><see cref="ProcessStartInfo.UseShellExecute"/> is left
+    /// <see langword="false"/> here: we are naming an executable outright, so
+    /// there is no verb to resolve, and it keeps the child from inheriting a
+    /// shell context Excel does not expect.</para>
+    /// </summary>
+    /// <exception cref="ArgumentException"><paramref name="program"/> or
+    /// <paramref name="path"/> is null, empty, or whitespace.</exception>
+    public static void OpenWith(string program, string path)
+    {
+        RequirePath(program, nameof(program));
+        RequirePath(path, nameof(path));
+
+        Process.Start(new ProcessStartInfo
+        {
+            FileName = program,
+            Arguments = QuoteArg(path),
+            UseShellExecute = false,
+        });
+    }
+
     /// <summary>Quote an argument for the legacy <c>explorer.exe</c>
     /// command line. Explorer doesn't understand the standard
     /// CommandLineToArgvW escape rules — passing a path with spaces
