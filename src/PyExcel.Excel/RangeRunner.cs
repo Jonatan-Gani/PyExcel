@@ -7,6 +7,7 @@ using System.Threading.Tasks;
 using ExcelDna.Integration;
 using ExcelDna.Logging;
 using PyExcel.Bridge;
+using PyExcel.Common.Logging;
 using PyExcel.Kernel.Client;
 using PyExcel.State;
 
@@ -113,6 +114,16 @@ public static class RangeRunner
 
         string script = state.SelectedScript!;
 
+        // Short correlation id stamped on every line of this run. Runs are
+        // serialised through one kernel exchange, but a log read after the
+        // fact interleaves them with workbook events and Setup output, so the
+        // id is what lets a reader pick one run out of the file.
+        var runId = Guid.NewGuid().ToString("N").Substring(0, 6);
+        var runClock = Stopwatch.StartNew();
+        Step(runId, $"start — script '{script}', action '{state.SelectedAction?.Name ?? "(none)"}'");
+        Step(runId, $"input field: {(string.IsNullOrWhiteSpace(state.PyInput) ? "(empty)" : state.PyInput)}");
+        Step(runId, $"output field: {(string.IsNullOrWhiteSpace(state.PyOutput) ? "(empty)" : state.PyOutput)}");
+
         // The Output field uses the same binding grammar as Input, so a
         // dict return can be routed key-by-key to its own range. Parsing it
         // also means a malformed Output is reported here rather than as a
@@ -139,8 +150,16 @@ public static class RangeRunner
             workbookDir = ResolveWorkbookDir(app);
 
             inputs = new List<object?>(inputBindings.Count);
-            foreach (var binding in inputBindings)
-                inputs.Add(ReadRange(app, binding.RangeText));
+            for (var i = 0; i < inputBindings.Count; i++)
+            {
+                var binding = inputBindings[i];
+                var value = ReadRange(app, binding.RangeText);
+                inputs.Add(value);
+                Step(runId,
+                    $"input[{i}] '{binding.Name ?? "(auto-named)"}' "
+                    + $"type={PyExcelTypes.WireName(binding.DeclaredType)} "
+                    + $"range={binding.RangeText} -> {DescribeCells(value)}");
+            }
         }
         catch (Exception ex)
         {
@@ -209,6 +228,18 @@ public static class RangeRunner
                     KernelHost.Default.Supervisor.OutputReceived += captureHandler;
                 }
 
+                for (var i = 0; i < outputBindings.Count; i++)
+                {
+                    var b = outputBindings[i];
+                    Step(runId,
+                        $"output[{i}] '{b.Name ?? "(positional)"}' "
+                        + $"type={PyExcelTypes.WireName(b.DeclaredType)} range={b.RangeText}");
+                }
+                Step(runId,
+                    $"dispatching to kernel — {inputs.Count} input(s), "
+                    + $"{(progress is not null ? "async/cancellable" : "synchronous")}");
+                var kernelClock = Stopwatch.StartNew();
+
                 var result = progress is not null
                     ? PyRun.ExecuteManyAsync(
                         script: script,
@@ -230,6 +261,10 @@ public static class RangeRunner
                         inputBindings: ToRunBindings(inputBindings),
                         outputBindings: ToRunBindings(outputBindings));
 
+                kernelClock.Stop();
+                Step(runId,
+                    $"kernel returned in {kernelClock.ElapsedMilliseconds} ms — {DescribeResult(result)}");
+
                 // Snapshot the captured output before the finally unsubscribes.
                 string capturedOutput = "";
                 if (outputBuffer is not null)
@@ -243,9 +278,16 @@ public static class RangeRunner
                         try
                         {
                             if (result is PyRunOutputs named)
-                                WriteNamedResults(named, outputBindings, outputAddress, orientationChooser);
+                            {
+                                WriteNamedResults(
+                                    named, outputBindings, outputAddress, orientationChooser, runId);
+                            }
                             else
+                            {
+                                Step(runId, $"writing {DescribeResult(result)} -> {outputAddress}");
                                 WriteResult(outputAddress, result, orientationChooser);
+                            }
+                            Step(runId, $"done in {runClock.ElapsedMilliseconds} ms");
                         }
                         catch (Exception ex)
                         {
@@ -270,10 +312,14 @@ public static class RangeRunner
                 // The user cancelled from the progress dialog — expected, not a
                 // failure. The progress form closes in the finally; don't pop an
                 // error dialog, just note it in the log.
+                Step(runId, $"cancelled by the user after {runClock.ElapsedMilliseconds} ms");
                 Warn("Run Python: run cancelled.");
             }
             catch (KernelException kex)
             {
+                Step(runId,
+                    $"kernel error after {runClock.ElapsedMilliseconds} ms — "
+                    + $"code={kex.Code} type={kex.PythonType ?? "(none)"}");
                 var record = new KernelErrorRecord(
                     Timestamp: DateTimeOffset.UtcNow,
                     Source: "Run Python button",
@@ -466,7 +512,8 @@ public static class RangeRunner
         PyRunOutputs named,
         IReadOnlyList<RangeBinding> outputBindings,
         string fallbackAddress,
-        Func<ListOrientation?>? orientationChooser)
+        Func<ListOrientation?>? orientationChooser,
+        string runId)
     {
         var unrouted = new List<string>();
 
@@ -478,8 +525,11 @@ public static class RangeRunner
             if (address is null)
             {
                 unrouted.Add(output.Name ?? $"#{i + 1}");
+                Step(runId, $"result '{output.Name ?? $"#{i + 1}"}' has no output binding — not written");
                 continue;
             }
+            Step(runId,
+                $"writing '{output.Name ?? $"#{i + 1}"}' ({DescribeResult(output.Value)}) -> {address}");
             WriteResult(address, output.Value, orientationChooser);
         }
 
@@ -654,9 +704,29 @@ public static class RangeRunner
     // Diagnostics
     // -------------------------------------------------------------------------
 
+    /// <summary>
+    /// The persistent log. Until this existed the run path wrote only to
+    /// <see cref="Trace"/> and Excel-DNA's <c>LogDisplay</c> — neither of which
+    /// reaches <c>%TEMP%\PyExcel_Debug.log</c> — so a completed run left no
+    /// record on disk at all and a failed one left only whatever the user
+    /// happened to still have on screen.
+    /// </summary>
+    private static readonly ILog Log = new FileLog();
+
+    /// <summary>
+    /// One step of a run, correlated by <paramref name="runId"/>.
+    ///
+    /// <para>File-log only, deliberately: this is the play-by-play a
+    /// post-mortem needs, and pushing it to <c>LogDisplay</c> too would bury
+    /// the warnings the user is meant to read in a wall of detail.</para>
+    /// </summary>
+    private static void Step(string runId, string message)
+        => Log.Info($"run {runId}: {message}");
+
     private static void Warn(string message)
     {
         Trace.WriteLine(message);
+        Log.Warn(message);
         LogDisplay.WriteLine(message);
     }
 
@@ -664,7 +734,31 @@ public static class RangeRunner
     {
         Trace.WriteLine(message);
         Trace.WriteLine(ex.ToString());
+        Log.Error(message, ex);
         LogDisplay.WriteLine(message);
+    }
+
+    /// <summary>Row x column description of a value read off a range, for the
+    /// trace. Mirrors how the kernel will see it once decoded to a grid.</summary>
+    private static string DescribeCells(object? value) => value switch
+    {
+        null => "empty",
+        object[,] grid => $"{grid.GetLength(0)}x{grid.GetLength(1)} cells",
+        _ => "1x1 cell",
+    };
+
+    /// <summary>Shape description of a decoded result, for the trace.</summary>
+    private static string DescribeResult(object result)
+    {
+        if (ReferenceEquals(result, PyRun.EmptyResult)) return "None";
+        return result switch
+        {
+            PyRunOutputs named => $"{named.Outputs.Count} named result(s)",
+            object[,] table => $"table {table.GetLength(0)}x{table.GetLength(1)}",
+            ChartSpec => "chart spec",
+            ChartImage => "chart image",
+            _ => $"scalar ({result.GetType().Name})",
+        };
     }
 }
 #endif
