@@ -26,6 +26,11 @@
       dependency closure — fine for the production .xll, which is net48.
     -->
     <ProjectReference Include="..\PyExcel.Excel\PyExcel.Excel.csproj" />
+    <!-- KernelFreshness drives the Update button's getEnabled: it compares the
+         kernel extracted into the project against the one embedded in this
+         build. Referenced explicitly rather than leaning on the transitive
+         reference through PyExcel.Forms, so the dependency is visible here. -->
+    <ProjectReference Include="..\PyExcel.Setup\PyExcel.Setup.csproj" />
     <!--
       OnAddAction / OnEditAction show the WinForms EditActionForm (Phase 8)
       and hand its RibbonAction result to StateService.AddAction. The forms

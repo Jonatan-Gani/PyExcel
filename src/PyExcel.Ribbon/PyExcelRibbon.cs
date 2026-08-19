@@ -8,6 +8,7 @@ using ExcelDna.Logging;
 using PyExcel.Common.Logging;
 using PyExcel.Common.Shell;
 using PyExcel.Forms;
+using PyExcel.Setup.Kernel;
 using PyExcel.State;
 
 namespace PyExcel.Ribbon;
@@ -258,7 +259,22 @@ public class PyExcelRibbon : ExcelRibbon
     /// <summary>getEnabled for the "Update" button. PLACEHOLDER (Note 3):
     /// always false until the update mechanism and a launch-time update check
     /// land — see OnUpdate and ROADMAP.md (Phase 9).</summary>
-    public bool RibbonUpdateAvailable(IRibbonControl control) => false;
+    public bool RibbonUpdateAvailable(IRibbonControl control)
+    {
+        try
+        {
+            var projectDir = ResolveProjectDir();
+            if (string.IsNullOrEmpty(projectDir)) return false;
+            return !KernelFreshness.IsUpToDate(projectDir!, _log);
+        }
+        catch (Exception ex)
+        {
+            // A getEnabled callback must never throw into Excel's ribbon
+            // renderer; a failed probe just means "nothing to offer".
+            _log.Error("RibbonUpdateAvailable failed", ex);
+            return false;
+        }
+    }
 
     // -------------------------------------------------------------------------
     // Main group
@@ -352,6 +368,7 @@ public class PyExcelRibbon : ExcelRibbon
                 key, existingId ?? Guid.NewGuid().ToString("N"), key);
 
             var success = SetupForm.Run(ExcelWindowOwner(), projectDir, _log);
+            KernelFreshness.Invalidate(projectDir);
             if (success == true)
             {
                 PyExcelServices.State.SetEnabled(key, true);
@@ -422,16 +439,56 @@ public class PyExcelRibbon : ExcelRibbon
         }
     }
 
+    /// <summary>
+    /// Refresh a project whose extracted kernel no longer matches this build.
+    ///
+    /// <para>Re-runs the same idempotent <c>SetupService</c> that Enable does:
+    /// it re-extracts changed kernel files and re-syncs dependencies, leaving
+    /// the venv and the user's scripts alone. Enabled only when
+    /// <see cref="RibbonUpdateAvailable"/> finds a real difference, so clicking
+    /// it always has something to do.</para>
+    ///
+    /// <para>This closes a gap that stranded users: Enable greys out once a
+    /// project is Ready, so a workbook set up by an older build had no way to
+    /// pick up a newer kernel — the add-in updated, the kernel on disk did
+    /// not, and the mismatch was silent.</para>
+    /// </summary>
     public void OnUpdate(IRibbonControl control)
     {
-        // PLACEHOLDER (Note 3). The update path — refresh the extracted kernel
-        // and re-sync dependencies, plus a launch-time "is a newer build
-        // available?" check that would drive RibbonUpdateAvailable — isn't built
-        // yet. The button is greyed (RibbonUpdateAvailable returns false), so
-        // this is normally unreachable; it logs if invoked. Tracked as an open
-        // item in ROADMAP.md (Phase 9).
-        _log.Info("OnUpdate clicked (placeholder — update not yet implemented)");
-        LogDisplay.WriteLine("[PyExcel] Update isn't available yet.");
+        _log.Info("OnUpdate clicked");
+        try
+        {
+            var projectDir = ResolveProjectDir();
+            if (string.IsNullOrEmpty(projectDir))
+            {
+                LogDisplay.WriteLine(
+                    "[PyExcel] Update: the active workbook has no project folder yet — " +
+                    "click Enable first.");
+                return;
+            }
+
+            _log.Info($"OnUpdate: refreshing the environment at '{projectDir}'");
+            var success = SetupForm.Run(ExcelWindowOwner(), projectDir!, _log);
+
+            // The memoised verdict predates the run either way; drop it so the
+            // button reflects what is now on disk rather than what was.
+            KernelFreshness.Invalidate(projectDir);
+            QueueInvalidate();
+
+            if (success == true)
+            {
+                _log.Info($"OnUpdate: '{projectDir}' refreshed");
+                LogDisplay.WriteLine("[PyExcel] Update complete — the kernel now matches this build.");
+            }
+            else
+            {
+                _log.Info($"OnUpdate: refresh did not complete for '{projectDir}'");
+            }
+        }
+        catch (Exception ex)
+        {
+            _log.Error("OnUpdate failed", ex);
+        }
     }
 
     public void OnOpenExplorer(IRibbonControl control)

@@ -136,6 +136,59 @@ public sealed class KernelResourceExtractor
     }
 
     /// <summary>
+    /// Report whether the kernel already on disk at
+    /// <paramref name="targetDir"/> matches the one embedded in this build,
+    /// without writing anything.
+    ///
+    /// <para>This is the read-only half of <see cref="Extract(string)"/> and
+    /// uses the same byte comparison, so the two can never disagree about what
+    /// "up to date" means.</para>
+    ///
+    /// <para><b>Content, not version.</b> Comparing <c>__version__</c> would be
+    /// cheaper but is unsound: the kernel's version string only changes when
+    /// someone remembers to change it, so a build that altered kernel code
+    /// without bumping it reads as identical. That exact case shipped — a
+    /// rewritten worker.py under an unchanged <c>2.0.0a0</c> — and left users
+    /// running an old kernel against a new host with no signal at all. Bytes
+    /// cannot be forgotten.</para>
+    /// </summary>
+    /// <returns>A check naming every resource that is missing or differs.</returns>
+    /// <exception cref="ArgumentException">target dir is null/whitespace.</exception>
+    public KernelExtractionCheck Check(string targetDir)
+    {
+        if (string.IsNullOrWhiteSpace(targetDir))
+            throw new ArgumentException("target directory required", nameof(targetDir));
+
+        var stale = new List<string>();
+
+        foreach (var name in EnumerateKernelResources())
+        {
+            var relative = name.Replace('/', Path.DirectorySeparatorChar);
+            var path = Path.Combine(targetDir, relative);
+
+            if (!File.Exists(path))
+            {
+                stale.Add(relative);
+                continue;
+            }
+
+            try
+            {
+                if (!BytesEqual(File.ReadAllBytes(path), ReadResource(name)))
+                    stale.Add(relative);
+            }
+            catch (IOException)
+            {
+                // Unreadable is not the same as absent, but for the caller's
+                // purposes — "should this be re-extracted?" — it is.
+                stale.Add(relative);
+            }
+        }
+
+        return new KernelExtractionCheck(targetDir, stale);
+    }
+
+    /// <summary>
     /// Enumerate the logical names of every kernel resource embedded in
     /// the source assembly, in deterministic order. Public so tests can
     /// assert the expected shipping set without running an extraction.
@@ -165,6 +218,43 @@ public sealed class KernelResourceExtractor
         for (var i = 0; i < a.Length; i++)
             if (a[i] != b[i]) return false;
         return true;
+    }
+}
+
+/// <summary>
+/// Result of a <see cref="KernelResourceExtractor.Check(string)"/> — whether
+/// the kernel on disk still matches the one this build ships.
+///
+/// <para><see cref="Stale"/> lists the relative paths that are missing or
+/// differ; it is empty exactly when <see cref="UpToDate"/> is true.</para>
+/// </summary>
+public sealed class KernelExtractionCheck
+{
+    /// <summary>The directory that was inspected.</summary>
+    public string TargetDir { get; }
+
+    /// <summary>Relative paths that are missing from disk or differ from the
+    /// embedded copy.</summary>
+    public IReadOnlyList<string> Stale { get; }
+
+    /// <summary>True when every embedded kernel file is present on disk with
+    /// identical bytes.</summary>
+    public bool UpToDate => Stale.Count == 0;
+
+    public KernelExtractionCheck(string targetDir, IReadOnlyList<string> stale)
+    {
+        TargetDir = targetDir ?? throw new ArgumentNullException(nameof(targetDir));
+        Stale = stale ?? throw new ArgumentNullException(nameof(stale));
+    }
+
+    /// <summary>A one-line summary for the log, naming a few offenders so a
+    /// reader can tell a wholly-missing kernel from a single changed file.</summary>
+    public string Describe()
+    {
+        if (UpToDate) return $"kernel at '{TargetDir}' matches this build";
+        var sample = string.Join(", ", Stale.Count > 3 ? Stale.Take(3) : Stale);
+        var more = Stale.Count > 3 ? $" (+{Stale.Count - 3} more)" : "";
+        return $"kernel at '{TargetDir}' is out of date: {Stale.Count} file(s) differ — {sample}{more}";
     }
 }
 
